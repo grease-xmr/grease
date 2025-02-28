@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "libgrease",
+    "client",
+    "server",
+    "p2p",
+]
