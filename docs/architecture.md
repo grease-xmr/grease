@@ -5,7 +5,9 @@ _This document is currently still in planning / conceptual phase and is subject 
 ## Systems
 
 * [ ] Monero Blockchain
-  * Intention to use existing monero RPC client interacting with `monerod`.
+  * Intention to use existing monero RPC client interacting with `monerod`. 
+  * https://github.com/monero-rs/monero-rpc-rs
+  * https://github.com/Cuprate/cuprate/blob/main/rpc/interface/README.md
 * [ ] Z-K Blockchain
   * Likely Aztec / Noir for PoC, but there can be support for multiple implementations.  
 * [ ] Key Escrow Service (KES)
