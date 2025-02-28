@@ -10,10 +10,7 @@ pub struct ChannelIdentity {
     id: String,
     #[serde(serialize_with = "serialize_key", deserialize_with = "deserialize_key")]
     keypair: Keypair,
-    #[serde(
-        serialize_with = "serialize_peer",
-        deserialize_with = "deserialize_peer"
-    )]
+    #[serde(serialize_with = "serialize_peer", deserialize_with = "deserialize_peer")]
     peer_id: PeerId,
 }
 
@@ -23,16 +20,28 @@ impl ChannelIdentity {
     pub fn random_with_id<S: Into<String>>(id: S) -> Self {
         let keypair = Keypair::generate_ed25519();
         let peer_id = keypair.public().to_peer_id();
-        ChannelIdentity {
-            id: id.into(),
-            keypair,
-            peer_id,
-        }
+        ChannelIdentity { id: id.into(), keypair, peer_id }
     }
 
     /// Create a new identity with a random id and keypair.
     pub fn random() -> Self {
         Self::random_with_id(random_name())
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn keypair(&self) -> &Keypair {
+        &self.keypair
+    }
+
+    pub fn peer_id(&self) -> &PeerId {
+        &self.peer_id
+    }
+
+    pub fn take_keypair(self) -> Keypair {
+        self.keypair
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), IdentityError> {
@@ -177,10 +186,7 @@ fn serialize_key<S>(key: &Keypair, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    let ed25519pair = key
-        .clone()
-        .try_into_ed25519()
-        .map_err(serde::ser::Error::custom)?;
+    let ed25519pair = key.clone().try_into_ed25519().map_err(serde::ser::Error::custom)?;
     let encoded = hex::encode(ed25519pair.to_bytes());
     serializer.serialize_str(&encoded)
 }
@@ -191,13 +197,8 @@ where
 {
     let encoded = String::deserialize(deserializer)?;
     let mut bytes = hex::decode(encoded).map_err(serde::de::Error::custom)?;
-    let result =
-        Keypair::ed25519_from_bytes(&mut bytes[0..32]).map_err(serde::de::Error::custom)?;
-    let derived_pubkey = result
-        .public()
-        .try_into_ed25519()
-        .map_err(serde::de::Error::custom)?
-        .to_bytes();
+    let result = Keypair::ed25519_from_bytes(&mut bytes[0..32]).map_err(serde::de::Error::custom)?;
+    let derived_pubkey = result.public().try_into_ed25519().map_err(serde::de::Error::custom)?.to_bytes();
     if derived_pubkey[..] != bytes[32..] {
         return Err(serde::de::Error::custom("public key mismatch"));
     }
