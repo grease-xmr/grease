@@ -103,4 +103,6 @@ Not covered:
    9. Grease Server uses Private's `Tab` key to reconstruct the entire channel, resulting in ability to perform close
    10. Grease Server uses all information to close tab
    11. Grease Server notifies Public that tab is closed
-   12. Grease Server unlocks 0.5 XMR to Public
+   12. Grease Server unlocks 0.5 XMR to Public and 0.5 XMR to Private
+   13. Eventually, Grease Client notifies Private that tab is closed
+   14. Or, Private eventually realizes that 0.5 XMR are now available on Private's original Monero wallet
