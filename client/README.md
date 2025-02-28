@@ -1,1 +1,0 @@
-# Grease CLI client
