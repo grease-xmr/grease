@@ -55,7 +55,7 @@ It aims to tackle the use cases that are exemplified by the following scenarios:
 Alice is a customer of Bob's bar.
 Alice will be making multiple purposes throughout an evening.
 She opens a channel at the beginning of the evening with a certain amount of Monero, and can make instant purchases
-against it until she or Bob closes it at the end of the evening and the final settlement is recorded on-chain.
+against it until she and Bob mutually closes it at the end of the evening and the final settlement is recorded on-chain.
 
 #### Micro-transactions
 Bob owns a Monero-enabled arcade. Dave can open a channel and play dozens, or hundreds of games until his balance
@@ -112,6 +112,7 @@ Grease embraces this use case and optimises the design and UX based on the follo
   chain and proving that the channel was closed with outdated state.
 * In the vast majority of cases, the client opens a channel with _m_ XMR and the public peer starts with a zero XMR
   balance.
-* The client **may** force close the channel, but usually, the merchant will take care of closing the channel, since
-  they have the greater incentive to do so. The merchant is able to amicably close the channel without the client
-  having to submit a transaction to ZK chain nor the Monero network.
+* Usually, both parties mutually close the channel. Either party **may** force close the channel, and are able to 
+  claim their funds after a predetermined time-out. In this case, the 
+  forcing party is usually the merchant since they have the greater incentive to do so in the case where a channel 
+  has been abandoned by the client. 
