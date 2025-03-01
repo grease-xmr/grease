@@ -1,17 +1,18 @@
 # Grease Architecture
-      
+
 _This document is currently still in planning / conceptual phase and is subject to extreme revision._
+
 ## Systems
 
 * [ ] Monero Blockchain
-  * Intention to use existing monero RPC client interacting with `monerod`. 
+  * Intention to use existing monero RPC client interacting with `monerod`.
 * [ ] Z-K Blockchain
   * Likely Aztec / Noir for PoC, but there can be support for multiple implementations.  
 * [ ] Key Escrow Service (KES)
 * [ ] Grease Client
-  * Rust-based CLI application 
+  * Rust-based CLI application
 * [ ] Grease Server
-  * Rust-based CLI application 
+  * Rust-based CLI application
 * [ ] Grease Middleware
   * [ ] Payment channel state machine
   * [ ] Z-K proofs. Noir?
@@ -19,27 +20,32 @@ _This document is currently still in planning / conceptual phase and is subject 
   * Rust. Built on `libp2p` and `tokio`.
 
 ## Users
+
 Public peer, sometimes referred to as the merchant.
 Private peer, sometimes referred to as the client.
 
 ## Apriori Assets
 
 ### Public peer
+
 * 0 XMR (None needed, so no running balance)
 * ~X~ ZKL2 gas
 * ~Y~ KES gas
 * Grease Server
 
 ### Private peer
+
 * 1 XMR
 * Grease Client
 
 ## Synthetic Assets
 
 ### Public peer
+
 `Tab` key
 
 ### Private peer
+
 `Tab` key
 
 ## UX Steps
@@ -52,7 +58,8 @@ Private peer, sometimes referred to as the client.
 Not covered:
 5. Re-open/re-allocate amount
 
-# Walkthrough:
+# Walkthrough
+
 1. Negotiate
    1. Private walk's into Public's store and asks for service
    2. Public uses Grease Server and presses `New Customer Tab` button, with `Tab amount: 1 XMR` default
