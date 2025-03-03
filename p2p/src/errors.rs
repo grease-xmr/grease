@@ -13,10 +13,12 @@ pub enum PeerConnectionError {
     TransportError(#[from] TransportError<std::io::Error>),
     #[error("Cannot dial server peer, because the peer id is missing in the multiaddr")]
     MissingPeerId,
-    #[error("Could not dial server due to an error in the internal mpsc channel. {0}")]
+    #[error("Error in an internal mpsc channel. {0}")]
     SendError(#[from] mpsc::SendError),
-    #[error("Could not dial server due to an error in the internal mpsc channel. {0}")]
+    #[error("Could not give network client the result of a command because the return channel is canceled. {0}")]
     OneshotError(#[from] oneshot::Canceled),
+    #[error("The event loop is shutting down, so the command cannot be executed.")]
+    EventLoopShuttingDown,
     #[error("Will never happen, but required for the error trait")]
     Infallible(#[from] Infallible),
 }

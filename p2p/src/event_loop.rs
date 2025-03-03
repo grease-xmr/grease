@@ -1,8 +1,11 @@
-//! Messages and Event definitions for Grease p2p network communications
+//! The Grease P2P network event loop.
+//!
+//! See [`EventLoop`] for more information.
 
 use crate::behaviour::ConnectionBehaviorEvent as Event;
 use crate::errors::PeerConnectionError;
-use crate::PeerConnection;
+use crate::message_types::{OpenChannelFailure, OpenChannelSuccess};
+use crate::{GreaseRequest, GreaseResponse, PeerConnection, PeerConnectionCommand, PeerConnectionEvent};
 use futures::channel::{
     mpsc::{Receiver, Sender},
     oneshot,
@@ -13,35 +16,22 @@ use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
 use libp2p::multiaddr::Protocol;
 use libp2p::request_response::Event as BehaviourEvent;
-use libp2p::request_response::{
-    InboundFailure, InboundRequestId, Message, OutboundFailure, OutboundRequestId, ResponseChannel,
-};
+use libp2p::request_response::{InboundFailure, InboundRequestId, Message, OutboundFailure, OutboundRequestId};
 use libp2p::swarm::{ConnectionError, ConnectionId, DialError, ListenError, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, TransportError};
 use log::*;
-use serde::{Deserialize, Serialize};
-use std::collections::{hash_map, HashMap};
+use std::collections::{hash_map, HashMap, HashSet};
 use std::io;
 use std::num::NonZeroU32;
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 pub type ReqResEvent = BehaviourEvent<GreaseRequest, GreaseResponse>;
 pub type EventMessage = Message<GreaseRequest, GreaseResponse>;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum GreaseRequest {
-    OpenChannel,
-    SendMoney,
-    CloseChannel,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum GreaseResponse {
-    ChannelOpened(String),
-    MoneySent(String),
-    ChannelClosed(String),
-    Error(String),
-}
+const RUNNING: usize = 0;
+const SHUTTING_DOWN: usize = 1;
+const SHUTDOWN: usize = 2;
 
 /// The main event loop handler for Grease p2p connections
 ///
@@ -80,6 +70,11 @@ pub struct EventLoop {
     command_receiver: Receiver<PeerConnectionCommand>,
     event_sender: Sender<PeerConnectionEvent>,
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
+    pending_open_channel_requests:
+        HashMap<OutboundRequestId, oneshot::Sender<Result<OpenChannelSuccess, OpenChannelFailure>>>,
+    pending_shutdown: Option<oneshot::Sender<bool>>,
+    status: AtomicUsize,
+    connections: HashSet<ConnectionId>,
 }
 
 impl EventLoop {
@@ -88,7 +83,16 @@ impl EventLoop {
         command_receiver: Receiver<PeerConnectionCommand>,
         event_sender: Sender<PeerConnectionEvent>,
     ) -> Self {
-        Self { swarm, command_receiver, event_sender, pending_dial: Default::default() }
+        Self {
+            swarm,
+            command_receiver,
+            event_sender,
+            pending_dial: Default::default(),
+            pending_open_channel_requests: Default::default(),
+            pending_shutdown: None,
+            status: AtomicUsize::new(RUNNING),
+            connections: Default::default(),
+        }
     }
 
     pub async fn run(mut self) {
@@ -101,7 +105,18 @@ impl EventLoop {
                     None=>  return,
                 },
             }
+            if self.status.load(std::sync::atomic::Ordering::SeqCst) == SHUTDOWN {
+                info!("Event loop has shutdown gracefully.");
+                if let Some(sender) = self.pending_shutdown.take() {
+                    let _ = sender.send(true);
+                }
+                break;
+            }
         }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.status.load(std::sync::atomic::Ordering::SeqCst) == RUNNING
     }
 
     /// Main event handler.
@@ -203,7 +218,7 @@ impl EventLoop {
                 info!("Sent identify info to {peer_id:?}");
             }
             IdentifyEvent::Received { peer_id, info, .. } => {
-                info!("Received {info:?} from {peer_id:?}");
+                info!("Received identify info from {peer_id:?}: {info:?}");
             }
             IdentifyEvent::Error { peer_id, error, connection_id } => {
                 error!("Identify error with {peer_id:?} #{connection_id}: {error}");
@@ -232,6 +247,20 @@ impl EventLoop {
             }
             EventMessage::Response { request_id, response } => {
                 debug!("EVENT: Response received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}, {response:?}");
+                match response {
+                    GreaseResponse::ChannelOpened(open_channel_result) => {
+                        let pending = self.pending_open_channel_requests.remove(&request_id);
+                        let Some(sender) = pending else {
+                            error!("Received response for unknown open channel request. Request id: {request_id}");
+                            return;
+                        };
+                        let _ = sender.send(open_channel_result);
+                    }
+                    GreaseResponse::MoneySent => {}
+                    GreaseResponse::MoneyRequested => {}
+                    GreaseResponse::ChannelClosed => {}
+                    GreaseResponse::Error(_) => {}
+                }
             }
         }
     }
@@ -350,13 +379,17 @@ impl EventLoop {
             ConnectedPoint::Listener { .. } => "listener",
         };
         info!("Connection to {peer_id} established as {ep_type} in {:0.3}s. Connection id: {connection_id}. {num_established} connections are active.", established_in.as_secs_f64());
+        self.connections.insert(connection_id);
         if let Some(errs) = concurrent_dial_errors {
-            warn!("{} concurrent dial errors were reported for {peer_id}.", errs.len());
-            errs.into_iter().for_each(|(addr, err)| {
-                debug!("Concurrent dial error for {peer_id}. Address: {addr}. Error: {err}");
-            });
+            if !errs.is_empty() {
+                warn!("{} concurrent dial errors were reported for {peer_id}.", errs.len());
+                errs.into_iter().for_each(|(addr, err)| {
+                    debug!("Concurrent dial error for {peer_id}. Address: {addr}. Error: {err}");
+                });
+            }
         }
         if endpoint.is_dialer() {
+            trace!("Letting client know dial was successful.");
             if let Some(sender) = self.pending_dial.remove(&peer_id) {
                 let _ = sender.send(Ok(()));
             }
@@ -398,19 +431,23 @@ impl EventLoop {
         num_established: u32,
         cause: Option<ConnectionError>,
     ) {
-        let reason = match cause {
-            Some(e) => format!("Connection closed with error: {e}"),
-            None => "Connection closed gracefully".to_string(),
-        };
+        self.connections.remove(&connection_id);
         let endpoint_str = match endpoint {
             ConnectedPoint::Dialer { address, .. } => {
-                format!("We were dialer to {address}.")
+                let reason = match cause {
+                    Some(e) => format!("Connection closed with error: {e}"),
+                    None => "Connection closed gracefully".to_string(),
+                };
+                format!("We were dialer to {address}. Reason: {reason}")
             }
             ConnectedPoint::Listener { local_addr, send_back_addr } => {
                 format!("We were listening on {local_addr}, and the remote peer connected from {send_back_addr}.")
             }
         };
-        info!("Connection to {peer_id}/{endpoint_str} closed. {endpoint_str} {num_established} connections remain. Connection id: {connection_id} Reason: {reason}");
+        info!("Connection to {peer_id}/{connection_id} closed. {endpoint_str}. {num_established} connections remain.");
+        if num_established == 0 && self.status.load(std::sync::atomic::Ordering::SeqCst) == SHUTTING_DOWN {
+            self.status.store(SHUTDOWN, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     /// This gets called when one of our listeners has reported a new local listening address.
@@ -487,12 +524,22 @@ impl EventLoop {
     async fn handle_command(&mut self, command: PeerConnectionCommand) {
         match command {
             PeerConnectionCommand::StartListening { addr, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not going to start listening now.");
+                    let _ = sender.send(Err(PeerConnectionError::EventLoopShuttingDown));
+                    return;
+                }
                 let _ = match self.swarm.listen_on(addr) {
                     Ok(_) => sender.send(Ok(())),
                     Err(e) => sender.send(Err(PeerConnectionError::TransportError(e))),
                 };
             }
             PeerConnectionCommand::Dial { peer_id, peer_addr, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not going to dial anyone now.");
+                    let _ = sender.send(Err(PeerConnectionError::EventLoopShuttingDown));
+                    return;
+                }
                 if let hash_map::Entry::Vacant(e) = self.pending_dial.entry(peer_id) {
                     match self.swarm.dial(peer_addr.with(Protocol::P2p(peer_id))) {
                         Ok(()) => {
@@ -506,37 +553,37 @@ impl EventLoop {
                     debug!("Dialing already in progress for peer {peer_id}. Ignoring additional dial attempt.");
                 }
             }
-            PeerConnectionCommand::SendChannelRequest { peer_id, req: cmd } => {
-                // `send_request` will trigger a `request_response::Message::Request` event, which can be handled in the event handler.
-                let request_id = self.swarm.behaviour_mut().json.send_request(&peer_id, cmd);
-                debug!("Sent channel request to {peer_id}. Request id: {request_id}");
+            PeerConnectionCommand::OpenChannelRequest { peer_id, data, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not going to start opening channels.");
+                    let _ = sender.send(Err(OpenChannelFailure::Other("Event loop is shutting down".to_string())));
+                    return;
+                }
+                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::OpenChannel(data));
+                self.pending_open_channel_requests.insert(id, sender);
+                info!("Open channel request sent to {peer_id}");
             }
-            PeerConnectionCommand::SendChannelResponse { res, channel } => {
-                // This will trigger a ResponseSent event
-                if let Err(response) = self.swarm.behaviour_mut().json.send_response(channel, res) {
-                    warn!("Failed to send response: {response:?}");
-                    // todo: handle failed responses
+            PeerConnectionCommand::OpenChannelResponse { res, channel } => {
+                let response = GreaseResponse::ChannelOpened(res);
+                if let Err(_err) = self.swarm.behaviour_mut().json.send_response(channel, response) {
+                    error!("Failed to send channel open response to peer.");
+                    // todo: retry logic
+                }
+            }
+            PeerConnectionCommand::ConnectedPeers { sender } => {
+                debug!("Connected peers requested.");
+                let peers = self.swarm.connected_peers().cloned().collect();
+                let _ = sender.send(peers);
+            }
+            PeerConnectionCommand::Shutdown(sender) => {
+                info!("Shutting down event loop.");
+                self.status.store(SHUTTING_DOWN, std::sync::atomic::Ordering::SeqCst);
+                self.pending_shutdown = Some(sender);
+                let connections = self.connections.clone();
+                for id in connections {
+                    self.swarm.close_connection(id);
                 }
             }
         }
     }
-}
-
-#[derive(Debug)]
-pub enum PeerConnectionCommand {
-    StartListening { addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
-    Dial { peer_id: PeerId, peer_addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
-    SendChannelRequest { peer_id: PeerId, req: GreaseRequest },
-    SendChannelResponse { res: GreaseResponse, channel: ResponseChannel<GreaseResponse> },
-}
-
-impl PeerConnectionCommand {
-    pub fn channel_request(peer_id: PeerId, req: GreaseRequest) -> Self {
-        Self::SendChannelRequest { peer_id, req }
-    }
-}
-
-#[derive(Debug)]
-pub enum PeerConnectionEvent {
-    InboundRequest { request: GreaseRequest, channel: ResponseChannel<GreaseResponse> },
 }

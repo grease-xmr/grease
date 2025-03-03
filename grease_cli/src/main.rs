@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use clap::Parser;
 use futures::StreamExt;
+use grease_cli::channel_management::handle_incoming_grease_request;
 use grease_cli::config::{ChannelAction, ChannelCommand, CliCommand, Config, GlobalOptions, IdCommand, ServerCommand};
 use grease_cli::error::ServerError;
 use grease_cli::id_management::{default_id_path, LocalIdentitySet};
@@ -103,9 +104,11 @@ async fn start_server(cmd: ServerCommand, config: GlobalOptions) -> Result<(), a
         trace!("Event received.");
         match ev {
             PeerConnectionEvent::InboundRequest { request, channel } => {
-                debug!("Inbound request received: {request:?}")
-                // handle the application logic for the request
-                // call the client with the relevant command, passing the result and channel
+                debug!("Inbound request received: {request:?}");
+                let client = network_client.clone();
+                tokio::spawn(async move {
+                    handle_incoming_grease_request(request, client, channel).await;
+                });
             }
         }
     }
@@ -135,15 +138,41 @@ async fn exec_channel_command(cmd: ChannelCommand, options: GlobalOptions) -> Re
     // Spawn the network task for it to run in the background.
     tokio::spawn(network_event_loop.run());
     let server_addr = cmd.server_address;
+    info!("Dialing remote server");
     network_client.dial(server_addr).await?;
+    info!("Remote server connected");
+    let mut peers = network_client.connected_peers().await?;
+    if peers.is_empty() {
+        return Err(anyhow!("Remote peer list is empty after a successful dial. Data race?"));
+    }
+    let peer_id = peers.remove(0);
     match cmd.action {
         ChannelAction::List => {}
-        ChannelAction::Open => {}
+        ChannelAction::Open { .. } => {
+            let channel_data = cmd.action.extract_new_channel_data().expect("action to be Open");
+            println!(
+                "Creating new channel with initial balance {} : {}",
+                channel_data.our_amount, channel_data.their_amount
+            );
+            let result = network_client.open_channel_request(peer_id, channel_data).await?;
+            match result {
+                Ok(success) => {
+                    println!(
+                        "New channel open: {}. My balance: {}, Their balance: {}",
+                        success.channel_id, success.data.our_amount, success.data.their_amount
+                    )
+                }
+                Err(err) => {
+                    println!("Could not open channel. {err}")
+                }
+            }
+        }
         ChannelAction::Send => {}
         ChannelAction::Close => {}
         ChannelAction::Dispute => {}
     }
 
     info!("Command completed.");
+    network_client.shutdown().await?;
     Ok(())
 }

@@ -1,15 +1,17 @@
 use crate::behaviour::ConnectionBehavior;
 use crate::errors::PeerConnectionError;
-use crate::messages::{EventLoop, PeerConnectionCommand, PeerConnectionEvent};
+use crate::message_types::{NewChannelData, OpenChannelFailure, OpenChannelSuccess};
+use crate::{EventLoop, GreaseResponse, PeerConnectionCommand, PeerConnectionEvent};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
+use libp2p::request_response::ResponseChannel;
 use libp2p::{
     identify, noise,
     request_response::{json, Config as RequestResponseConfig, ProtocolSupport},
-    tcp, yamux, Multiaddr, StreamProtocol,
+    tcp, yamux, Multiaddr, PeerId, StreamProtocol,
 };
 use std::time::Duration;
 
@@ -89,5 +91,39 @@ impl Client {
         self.sender.send(PeerConnectionCommand::Dial { peer_id, peer_addr, sender }).await?;
         let dial_result = receiver.await?;
         dial_result
+    }
+
+    pub async fn connected_peers(&mut self) -> Result<Vec<PeerId>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender.send(PeerConnectionCommand::ConnectedPeers { sender }).await?;
+        let peers = receiver.await?;
+        Ok(peers)
+    }
+
+    pub async fn open_channel_request(
+        &mut self,
+        peer_id: PeerId,
+        data: NewChannelData,
+    ) -> Result<Result<OpenChannelSuccess, OpenChannelFailure>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender.send(PeerConnectionCommand::OpenChannelRequest { peer_id, data, sender }).await?;
+        let open_result = receiver.await?;
+        Ok(open_result)
+    }
+
+    pub async fn open_channel_response(
+        &mut self,
+        res: Result<OpenChannelSuccess, OpenChannelFailure>,
+        channel: ResponseChannel<GreaseResponse>,
+    ) -> Result<(), PeerConnectionError> {
+        self.sender.send(PeerConnectionCommand::OpenChannelResponse { res, channel }).await?;
+        Ok(())
+    }
+
+    pub async fn shutdown(mut self) -> Result<bool, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender.send(PeerConnectionCommand::Shutdown(sender)).await?;
+        let result = receiver.await?;
+        Ok(result)
     }
 }
