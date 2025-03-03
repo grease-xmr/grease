@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use clap::{Args, Parser, Subcommand};
+use grease_p2p::message_types::NewChannelData;
 use libp2p::Multiaddr;
 use std::path::PathBuf;
 
@@ -77,13 +78,29 @@ pub enum ChannelAction {
     /// List all open channels and their status.
     List,
     /// Open a new channel.
-    Open,
+    Open {
+        /// The amount to deposit in the channel.
+        our_amount: u64,
+        /// The amount the peer must deposit in the channel.
+        their_amount: Option<u64>,
+    },
     /// Send a payment over an existing channel.
     Send,
     /// Initiate closure of an existing channel.
     Close,
     /// Dispute the forced closure of a channel by the counterparty.
     Dispute,
+}
+
+impl ChannelAction {
+    pub fn extract_new_channel_data(&self) -> Option<NewChannelData> {
+        match self {
+            ChannelAction::Open { our_amount, their_amount } => {
+                Some(NewChannelData { our_amount: *our_amount, their_amount: their_amount.unwrap_or(0) })
+            }
+            _ => None,
+        }
+    }
 }
 
 pub struct GlobalOptions {
