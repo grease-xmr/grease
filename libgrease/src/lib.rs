@@ -1,6 +1,10 @@
 pub mod cas;
-pub mod clars;
+pub mod clras;
+pub mod hashes;
 pub mod keys;
+pub mod monero_impl;
+pub mod ring_ct;
 pub mod amount;
 pub mod channel_id;
 pub mod state_machine;
+pub mod vcof_25519;

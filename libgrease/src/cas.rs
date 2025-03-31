@@ -47,17 +47,16 @@
 
 use crate::keys::{PublicKey, SecretKey};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::{EdwardsPoint, Scalar};
-use rand::{CryptoRng, RngCore};
+use curve25519_dalek::Scalar;
 use thiserror::Error;
 
 pub trait Statement {
     fn as_public_key(&self) -> &PublicKey;
+    fn from_public_key(key: PublicKey) -> Self;
 }
 
 pub trait Witness {
     type S: Statement;
-    fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self;
     fn generate_statement(&self) -> Self::S;
     fn as_scalar(&self) -> &Scalar;
     fn from_scalar(scalar: Scalar) -> Self;
@@ -71,6 +70,7 @@ pub struct Signature {
 pub struct PreSignature {
     pub s: Scalar,
     pub challenge: Scalar,
+    pub public_key: PublicKey,
 }
 
 pub struct StatementWitnessPair<SW: VCOF + ?Sized> {
@@ -80,7 +80,7 @@ pub struct StatementWitnessPair<SW: VCOF + ?Sized> {
 
 pub struct StatementWitnessProof<SW: VCOF + ?Sized> {
     pub pair: StatementWitnessPair<SW>,
-    pub proof: <SW as VCOF>::P,
+    pub proof: <SW as VCOF>::Proof,
 }
 
 /// # Verifiable Consecutive One-Way Function (VCOF)
@@ -106,17 +106,25 @@ pub struct StatementWitnessProof<SW: VCOF + ?Sized> {
 ///    - Suitable for schemes demanding ordered interactions and updates.
 pub trait VCOF {
     type W: Witness;
-    type P;
+    type Proof;
 
     /// Generate a new random statement and witness pair.
-    fn generate<R: CryptoRng + RngCore>() -> (Self::W, <Self::W as Witness>::S);
+    fn generate(&self) -> (Self::W, <Self::W as Witness>::S);
 
-    /// Generate a new statement and witness pair from the given witness.
-    fn next_statement_witness(witness: &Self::W, statement: <Self::W as Witness>::S) -> StatementWitnessProof<Self>;
+    /// Generate a new statement-witness pair and proof from the preceding statement-witness pair.
+    fn next_statement_witness(
+        &self,
+        witness: &Self::W,
+        statement: &<Self::W as Witness>::S,
+    ) -> Result<StatementWitnessProof<Self>, CasError>;
 
-    /// Verify that the statement and witness `pair` follows consecutively from the `prev_pair` using the supplied
-    /// proof.
-    fn verify_consecutive(&self, prev_pair: &StatementWitnessPair<Self>, pair: &StatementWitnessProof<Self>) -> bool;
+    /// Verify that the `current` statement follows consecutively from the `prev` statement using the supplied proof.
+    fn verify_consecutive(
+        &self,
+        prev: &<Self::W as Witness>::S,
+        current: &<Self::W as Witness>::S,
+        proof: &Self::Proof,
+    ) -> bool;
 }
 
 /// Consecutive Adaptor Signature (CAS) implementation
@@ -128,7 +136,7 @@ pub trait ConsecutiveAdaptorSignature {
     /// Generates a new random key pair
     fn generate_keypair(&mut self) -> (SecretKey, PublicKey);
 
-    fn hash_to_scalar<B: AsRef<[u8]>>(&self, message: B, nonce: &EdwardsPoint, public_key: &PublicKey) -> Scalar;
+    fn hash_to_scalar<B: AsRef<[u8]>>(&self, message: B, nonce: &PublicKey, public_key: &PublicKey) -> Scalar;
 
     /// Create pre-signature (adapter signature) for message using a secret key and statement
     ///
@@ -145,16 +153,12 @@ pub trait ConsecutiveAdaptorSignature {
     ) -> Result<(SecretKey, PreSignature), CasError> {
         let (r, pub_r) = self.generate_keypair();
         let r_sign = pub_r.as_point() + statement.as_public_key().as_point();
-        let challenge = match pubkey {
-            Some(pk) => self.hash_to_scalar(message, &r_sign, pk),
-            None => {
-                let pubkey = PublicKey::from_secret(&sk);
-                self.hash_to_scalar(message, &r_sign, &pubkey)
-            }
-        };
+        let r_sign = PublicKey::from(r_sign);
+        let public_key = pubkey.cloned().unwrap_or_else(|| PublicKey::from_secret(&sk));
+        let challenge = self.hash_to_scalar(message, &r_sign, &public_key);
         // Schnorr signature scheme for partial signature
         let s = r.as_scalar() + challenge * sk.as_scalar();
-        let pre_sig = PreSignature { challenge, s };
+        let pre_sig = PreSignature { challenge, s, public_key };
         Ok((r, pre_sig))
     }
 
@@ -171,6 +175,7 @@ pub trait ConsecutiveAdaptorSignature {
     ) -> bool {
         let r_pre = &pre_sig.s * ED25519_BASEPOINT_TABLE - pre_sig.challenge * pubkey.as_point();
         let r_sign = r_pre + statement.as_public_key().as_point();
+        let r_sign = PublicKey::from(r_sign);
         let challenge = self.hash_to_scalar(message, &r_sign, &pubkey);
         pre_sig.challenge == challenge
     }
@@ -178,6 +183,7 @@ pub trait ConsecutiveAdaptorSignature {
     /// Verifies full signature validity
     fn verify_signature<B: AsRef<[u8]>>(&self, sig: &Signature, pubkey: &PublicKey, message: B) -> bool {
         let public_r = &sig.s * ED25519_BASEPOINT_TABLE - sig.challenge * pubkey.as_point();
+        let public_r = PublicKey::from(public_r);
         let challenge = self.hash_to_scalar(message, &public_r, pubkey);
         sig.challenge == challenge
     }

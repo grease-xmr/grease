@@ -1,6 +1,7 @@
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{EdwardsPoint, Scalar};
+use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 pub struct SecretKey(Scalar);
@@ -8,6 +9,15 @@ pub struct SecretKey(Scalar);
 impl SecretKey {
     pub fn as_scalar(&self) -> &Scalar {
         &self.0
+    }
+    pub fn to_scalar(self) -> Scalar {
+        self.0
+    }
+    pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
+        let mut scalar_bytes = [0u8; 64];
+        rng.fill_bytes(&mut scalar_bytes);
+        let s = Scalar::from_bytes_mod_order_wide(&scalar_bytes);
+        Self(s)
     }
 }
 
@@ -17,12 +27,19 @@ impl From<Scalar> for SecretKey {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct PublicKey {
     compressed_point: CompressedEdwardsY,
     point: EdwardsPoint,
 }
 
 impl PublicKey {
+    pub fn keypair<R: CryptoRng + RngCore>(rng: &mut R) -> (SecretKey, Self) {
+        let secret_key = SecretKey::random(rng);
+        let public_key = Self::from_secret(&secret_key);
+        (secret_key, public_key)
+    }
+
     pub fn from_secret(secret_key: &SecretKey) -> Self {
         let point = secret_key.as_scalar() * ED25519_BASEPOINT_TABLE;
         point.into()
