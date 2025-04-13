@@ -1,8 +1,10 @@
 use crate::state_machine::closed_channel::ClosedChannelState;
-use crate::state_machine::closing_channel::ClosingChannelState;
-use crate::state_machine::disputing_channel::DisputingChannelState;
-use crate::state_machine::establishing_channel::EstablishingChannelState;
-use crate::state_machine::new_channel::NewChannelState;
+use crate::state_machine::closing_channel::{
+    ClosingChannelState, InvalidCloseInfo, StartCloseInfo, SuccessfulCloseInfo,
+};
+use crate::state_machine::disputing_channel::{DisputeResolvedInfo, DisputingChannelState};
+use crate::state_machine::establishing_channel::{ChannelEstablishedInfo, EstablishingChannelState};
+use crate::state_machine::new_channel::{NewChannelInfo, NewChannelState, TimeoutReason};
 use crate::state_machine::open_channel::OpenChannelState;
 use std::fmt::Display;
 
@@ -21,6 +23,22 @@ pub enum LifecycleStage {
     Closed,
     /// The channel is in dispute.
     Disputing,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ChannelRole {
+    Merchant,
+    Customer,
+}
+
+pub enum LifeCycleEvent<P> {
+    OnNewChannelInfo(Box<NewChannelInfo<P>>),
+    OnTimeout(Box<TimeoutReason>),
+    OnChannelEstablished(Box<ChannelEstablishedInfo>),
+    OnStartClose(Box<StartCloseInfo>),
+    OnInvalidClose(Box<InvalidCloseInfo>),
+    OnDisputeResolved(Box<DisputeResolvedInfo>),
+    OnSuccessfulClose(Box<SuccessfulCloseInfo>),
 }
 
 impl Display for LifecycleStage {
