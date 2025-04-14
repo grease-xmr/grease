@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 pub const PICONERO: u64 = 1_000_000_000_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoneroAmount {
     /// The amount of money in the channel
     amount: u64,

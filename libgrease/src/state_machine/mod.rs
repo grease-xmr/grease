@@ -16,4 +16,4 @@ pub use disputing_channel::DisputingChannelState;
 pub use establishing_channel::EstablishingChannelState;
 pub use lifecycle::{ChannelLifeCycle, LifecycleStage};
 pub use new_channel::NewChannelState;
-pub use open_channel::OpenChannelState;
+pub use open_channel::EstablishedChannelState;
