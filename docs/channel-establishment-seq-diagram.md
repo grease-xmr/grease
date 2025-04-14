@@ -20,8 +20,8 @@ sequenceDiagram
     participant L1 as Monero blockchain
     participant L2 as ZK chain
 
-    M ->> C: Initiate New Channel Request<br/>{amt, pubkey, channel_id}
-    C ->> M: Accept Channel Request<br/>{pubkey, channel_id, tf_c, tc_c0}
+    M ->> C: Initiate New Channel Request<br/>{amt_p, pubkey_M, channel_id_M}
+    C ->> M: Accept Channel Request<br/>{pubkey_C, channel_id, tf_c, tc_c0, dk_0}
     par KES creation
         M ->> C: KES Public Info<br/>{channel_id, P_kes}
         C -->>+ L2: Watch for KES creation (optional)
