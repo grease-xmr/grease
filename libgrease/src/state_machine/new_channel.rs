@@ -1,6 +1,9 @@
 use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
-use crate::state_machine::lifecycle::ChannelRole;
+use crate::crypto::traits::PublicKey;
+use crate::payment_channel::ChannelRole;
+use crate::state_machine::error::InvalidProposal;
+use crate::state_machine::establishing_channel::Balances;
 use crate::state_machine::LifecycleStage;
 use digest::Digest;
 
@@ -11,25 +14,41 @@ use digest::Digest;
 /// There aren't any interaction events in this phase besides the initial call from the customer, so this phase is
 /// structured around a builder pattern. Both merchant and customer get the necessary info from "somewhere". In
 /// practice, it'll be a QR code or deep link, or a direct RPC call from the customer.
-pub struct NewChannelState<PublicKey, SecretKey> {
+pub struct NewChannelBuilder<P: PublicKey> {
     channel_role: ChannelRole,
-    my_public_key: PublicKey,
-    my_secret_key: SecretKey,
+    my_public_key: P,
+    my_secret_key: P::SecretKey,
+    kes_public_key: Option<P>,
     my_partial_channel_id: Option<Vec<u8>>,
-    peer_public_key: Option<PublicKey>,
+    peer_public_key: Option<P>,
     peer_partial_channel_id: Option<Vec<u8>>,
-    amount: Option<MoneroAmount>,
+    merchant_amount: Option<MoneroAmount>,
+    customer_amount: Option<MoneroAmount>,
 }
 
-impl<PublicKey, SecretKey> NewChannelState<PublicKey, SecretKey>
-where
-    PublicKey: Clone,
-{
-    pub fn build<D: Digest>(&self) -> Option<NewChannelInfo<PublicKey>> {
+pub struct RejectNewChannelReason;
+
+impl<P: PublicKey> NewChannelBuilder<P> {
+    pub fn new(channel_role: ChannelRole, my_public_key: P, my_secret_key: P::SecretKey) -> Self {
+        NewChannelBuilder {
+            channel_role,
+            my_public_key,
+            my_secret_key,
+            kes_public_key: None,
+            my_partial_channel_id: None,
+            peer_public_key: None,
+            peer_partial_channel_id: None,
+            merchant_amount: None,
+            customer_amount: None,
+        }
+    }
+
+    pub fn build<D: Digest>(&self) -> Option<NewChannelState<P>> {
         if self.my_partial_channel_id.is_none()
             || self.peer_partial_channel_id.is_none()
-            || self.amount.is_none()
+            || (self.merchant_amount.is_none() && self.customer_amount.is_none())
             || self.peer_public_key.is_none()
+            || self.kes_public_key.is_none()
         {
             return None;
         }
@@ -40,44 +59,129 @@ where
             ChannelRole::Merchant => [my_salt, their_salt].concat(),
             ChannelRole::Customer => [their_salt, my_salt].concat(),
         };
+        let merchant_initial = self.merchant_amount.clone().unwrap_or_default();
+        let customer_initial = self.customer_amount.clone().unwrap_or_default();
+        let initial_balances = Balances::new(merchant_initial, customer_initial);
         let channel_id = ChannelId::new::<D, _, _, _>(
             self.my_partial_channel_id.clone().unwrap(),
             self.peer_partial_channel_id.clone().unwrap(),
             salt,
-            self.amount.clone().unwrap(),
+            initial_balances,
         );
-        Some(NewChannelInfo {
+        let (merchant_pubkey, customer_pubkey) = match self.channel_role {
+            ChannelRole::Merchant => (self.my_public_key.clone(), self.peer_public_key.clone().unwrap()),
+            ChannelRole::Customer => (self.peer_public_key.clone().unwrap(), self.my_public_key.clone()),
+        };
+        Some(NewChannelState {
             role: self.channel_role,
-            merchant_pubkey: self.my_public_key.clone(),
-            customer_pubkey: self.peer_public_key.clone().unwrap(),
-            amount: self.amount.clone().unwrap(),
+            merchant_pubkey,
+            customer_pubkey,
+            kes_public_key: self.kes_public_key.clone().unwrap(),
+            secret_key: self.my_secret_key.clone(),
+            initial_balances,
+            customer_partial_channel_id: self.my_partial_channel_id.clone().unwrap(),
+            merchant_partial_channel_id: self.peer_partial_channel_id.clone().unwrap(),
             channel_id,
         })
     }
+
+    pub fn with_peer_public_key(mut self, peer_public_key: P) -> Self {
+        self.peer_public_key = Some(peer_public_key);
+        self
+    }
+
+    pub fn with_peer_partial_channel_id(mut self, peer_partial_channel_id: Vec<u8>) -> Self {
+        self.peer_partial_channel_id = Some(peer_partial_channel_id);
+        self
+    }
+
+    pub fn with_my_partial_channel_id(mut self, my_partial_channel_id: Vec<u8>) -> Self {
+        self.my_partial_channel_id = Some(my_partial_channel_id);
+        self
+    }
+
+    pub fn with_merchant_initial_balance<A: Into<MoneroAmount>>(mut self, amount: A) -> Self {
+        self.merchant_amount = Some(amount.into());
+        self
+    }
+
+    pub fn with_customer_initial_balance<A: Into<MoneroAmount>>(mut self, amount: A) -> Self {
+        self.customer_amount = Some(amount.into());
+        self
+    }
+
+    pub fn with_kes_public_key(mut self, kes_public_key: P) -> Self {
+        self.kes_public_key = Some(kes_public_key);
+        self
+    }
 }
 
-pub enum NewChannelStateCustomer {
-    Initialize,
-    CreatingKes,
-    CreatingFundTx, // placeholder. Split into discrete steps
-}
-
-pub enum NewChannelStateMerchant {
-    Initialize,
-    WaitingForKes,
-    CreatingFundTx, // placeholder. Split into discrete steps
-}
-
-pub struct NewChannelInfo<PublicKey> {
-    role: ChannelRole,
-    pub merchant_pubkey: PublicKey,
-    pub customer_pubkey: PublicKey,
+/// The internal state of the channel in the "new" phase.
+#[derive(Clone)]
+pub struct NewChannelState<P: PublicKey> {
+    /// My role, whether customer or merchant
+    pub role: ChannelRole,
+    /// My secret key for the 2-of-2 multisig wallet
+    pub(crate) secret_key: P::SecretKey,
+    /// The public key of the merchant, for use in adaptor signatures
+    pub merchant_pubkey: P,
+    /// The public key of the customer, for use in adaptor signatures
+    pub customer_pubkey: P,
+    /// The public key of the KES key, for encrypting the secret share
+    pub kes_public_key: P,
     /// The amount of money in the channel
-    pub amount: MoneroAmount,
+    pub initial_balances: Balances,
+    /// Salt used to derive the channel ID - customer portion
+    pub customer_partial_channel_id: Vec<u8>,
+    /// Salt used to derive the channel ID - merchant portion
+    pub merchant_partial_channel_id: Vec<u8>,
     /// The channel ID
     pub channel_id: ChannelId,
 }
 
+impl<P: PublicKey> NewChannelState<P> {
+    /// A sanity check to make sure that information coming from the peer in the proposal matches what I shared with
+    /// her initially.
+    pub fn review_proposal(&self, proposal: &ProposedChannelInfo<P>) -> Result<(), InvalidProposal> {
+        if self.role == proposal.role {
+            return Err(InvalidProposal::IncompatibleRoles);
+        }
+        if self.initial_balances != proposal.initial_balances {
+            return Err(InvalidProposal::MismatchedBalances);
+        }
+        if self.merchant_pubkey != proposal.merchant_pubkey {
+            return Err(InvalidProposal::MismatchedMerchantPublicKey);
+        }
+        if self.customer_pubkey != proposal.customer_pubkey {
+            return Err(InvalidProposal::MismatchedCustomerPublicKey);
+        }
+        if self.kes_public_key != proposal.kes_public_key {
+            return Err(InvalidProposal::MismatchedKesPublicKey);
+        }
+        if self.channel_id != proposal.channel_id {
+            return Err(InvalidProposal::MismatchedChannelId);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct ProposedChannelInfo<P: PublicKey> {
+    pub role: ChannelRole,
+    pub merchant_pubkey: P,
+    pub customer_pubkey: P,
+    pub kes_public_key: P,
+    /// The amount of money in the channel
+    pub initial_balances: Balances,
+    /// Salt used to derive the channel ID - customer portion
+    pub customer_partial_channel_id: Vec<u8>,
+    /// Salt used to derive the channel ID - merchant portion
+    pub merchant_partial_channel_id: Vec<u8>,
+    /// The channel ID
+    pub channel_id: ChannelId,
+}
+
+#[derive(Clone, Debug)]
 pub struct TimeoutReason {
     /// The reason for the timeout
     pub reason: String,

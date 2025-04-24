@@ -1,7 +1,8 @@
-use crate::cas::{CasError, Statement, StatementWitnessPair, StatementWitnessProof, Witness, VCOF};
-use crate::hashes::{Blake512, HashToScalar};
-use crate::keys::{PublicKey, SecretKey};
-use crate::monero_impl::{MoneroStatement, MoneroWitness, SchnorrProof};
+use crate::crypto::cas::{CasError, Statement, StatementWitnessPair, StatementWitnessProof, Witness, VCOF};
+use crate::crypto::hashes::{Blake512, HashToScalar};
+use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::crypto::monero_impl::{MoneroStatement, MoneroWitness, SchnorrProof};
+use crate::crypto::traits::PublicKey;
 use blake::Blake;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
@@ -9,7 +10,11 @@ use curve25519_dalek::Scalar;
 pub struct Vcof25519;
 
 impl Vcof25519 {
-    fn construct_challenge(public_nonce: &PublicKey, statement_prev: &PublicKey, statement: &PublicKey) -> Scalar {
+    fn construct_challenge(
+        public_nonce: &Curve25519PublicKey,
+        statement_prev: &Curve25519PublicKey,
+        statement: &Curve25519PublicKey,
+    ) -> Scalar {
         let mut hasher = Blake::new(256).expect("Should be able to create Blake instance");
         hasher.update(public_nonce.as_compressed().as_bytes());
         hasher.update(statement_prev.as_compressed().as_bytes());
@@ -27,7 +32,7 @@ impl VCOF for Vcof25519 {
 
     fn generate(&self) -> (MoneroWitness, MoneroStatement) {
         let mut rng = rand::rng();
-        let (sk, pk) = PublicKey::keypair(&mut rng);
+        let (sk, pk) = Curve25519PublicKey::keypair(&mut rng);
         let witness = MoneroWitness::from_scalar(sk.to_scalar());
         let statement = MoneroStatement::from_public_key(pk);
         (witness, statement)
@@ -55,10 +60,10 @@ impl VCOF for Vcof25519 {
         // Generate the next witness - y_{i+1} = H(y_i)
         let mut hasher = Blake512;
         let witness_next = hasher.hash_to_scalar(witness_prev.as_bytes());
-        let witness_next = SecretKey::from(witness_next);
-        let statement_next = PublicKey::from_secret(&witness_next);
+        let witness_next = Curve25519Secret::from(witness_next);
+        let statement_next = Curve25519PublicKey::from_secret(&witness_next);
         // Generate a Schnorr proof for the next witness committing to the consecutive statements
-        let (r, public_nonce) = PublicKey::keypair(&mut rng);
+        let (r, public_nonce) = Curve25519PublicKey::keypair(&mut rng);
         let challenge = Vcof25519::construct_challenge(&public_nonce, &statement_prev, &statement_next);
         let s = r.as_scalar() + challenge * witness_next.as_scalar();
 
@@ -82,8 +87,8 @@ impl VCOF for Vcof25519 {
 
 #[cfg(test)]
 mod test {
-    use crate::cas::{StatementWitnessProof, VCOF};
-    use crate::vcof_25519::Vcof25519;
+    use crate::crypto::cas::{StatementWitnessProof, VCOF};
+    use crate::crypto::vcof_25519::Vcof25519;
 
     #[test]
     #[allow(non_snake_case)]

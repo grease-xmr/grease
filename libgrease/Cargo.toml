@@ -3,15 +3,25 @@ name = "libgrease"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# The `dummy_channel` feature is used to enable a dummy implementation of the payment channels. 
+dummy_channel = []
+default = ["dummy_channel"]
+test_features = ["dummy_channel"]     
+
 [dependencies]
 blake = "2.0.2"
 chrono = "0.4"
 curve25519-dalek = { version = "4.1.3", features = ["digest"] }
 digest = "0.10.7"
-futures = "0.3.31"
 hex = "0.4.3"
 rand = { workspace = true }
 thiserror = "2.0.12"
+log = "0.4.27"
 
 [dev-dependencies]
 blake2 = "0.10.6"
+env_logger = "0.11.8"
+
+[profile.test]
+features = ["test_features"]

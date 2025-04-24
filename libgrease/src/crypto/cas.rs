@@ -45,14 +45,15 @@
 //! - **Forward Security**: Compromising \(y_i\) does not expose earlier secrets \(y_0, \dots, y_{i-1}\).
 //! - **Batch Verification**: Multiple pre-signatures can be verified efficiently using VCOF proofs.
 
-use crate::keys::{PublicKey, SecretKey};
+use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::crypto::traits::PublicKey;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
 use thiserror::Error;
 
 pub trait Statement {
-    fn as_public_key(&self) -> &PublicKey;
-    fn from_public_key(key: PublicKey) -> Self;
+    fn as_public_key(&self) -> &Curve25519PublicKey;
+    fn from_public_key(key: Curve25519PublicKey) -> Self;
 }
 
 pub trait Witness {
@@ -70,7 +71,7 @@ pub struct Signature {
 pub struct PreSignature {
     pub s: Scalar,
     pub challenge: Scalar,
-    pub public_key: PublicKey,
+    pub public_key: Curve25519PublicKey,
 }
 
 pub struct StatementWitnessPair<SW: VCOF + ?Sized> {
@@ -134,9 +135,14 @@ pub trait ConsecutiveAdaptorSignature {
     type W: Witness;
 
     /// Generates a new random key pair
-    fn generate_keypair(&mut self) -> (SecretKey, PublicKey);
+    fn generate_keypair(&mut self) -> (Curve25519Secret, Curve25519PublicKey);
 
-    fn hash_to_scalar<B: AsRef<[u8]>>(&self, message: B, nonce: &PublicKey, public_key: &PublicKey) -> Scalar;
+    fn hash_to_scalar<B: AsRef<[u8]>>(
+        &self,
+        message: B,
+        nonce: &Curve25519PublicKey,
+        public_key: &Curve25519PublicKey,
+    ) -> Scalar;
 
     /// Create pre-signature (adapter signature) for message using a secret key and statement
     ///
@@ -146,15 +152,15 @@ pub trait ConsecutiveAdaptorSignature {
     /// `sk.G` or else the signature will be invalid. This is not checked in the default implementation.
     fn pre_sign<B: AsRef<[u8]>>(
         &mut self,
-        sk: &SecretKey,
-        pubkey: Option<&PublicKey>,
+        sk: &Curve25519Secret,
+        pubkey: Option<&Curve25519PublicKey>,
         message: B,
         statement: &<Self::W as Witness>::S,
-    ) -> Result<(SecretKey, PreSignature), CasError> {
+    ) -> Result<(Curve25519Secret, PreSignature), CasError> {
         let (r, pub_r) = self.generate_keypair();
         let r_sign = pub_r.as_point() + statement.as_public_key().as_point();
-        let r_sign = PublicKey::from(r_sign);
-        let public_key = pubkey.cloned().unwrap_or_else(|| PublicKey::from_secret(&sk));
+        let r_sign = Curve25519PublicKey::from(r_sign);
+        let public_key = pubkey.cloned().unwrap_or_else(|| Curve25519PublicKey::from_secret(&sk));
         let challenge = self.hash_to_scalar(message, &r_sign, &public_key);
         // Schnorr signature scheme for partial signature
         let s = r.as_scalar() + challenge * sk.as_scalar();
@@ -169,21 +175,21 @@ pub trait ConsecutiveAdaptorSignature {
     fn verify_pre_signature<B: AsRef<[u8]>>(
         &self,
         pre_sig: &PreSignature,
-        pubkey: &PublicKey,
+        pubkey: &Curve25519PublicKey,
         message: B,
         statement: &<Self::W as Witness>::S,
     ) -> bool {
         let r_pre = &pre_sig.s * ED25519_BASEPOINT_TABLE - pre_sig.challenge * pubkey.as_point();
         let r_sign = r_pre + statement.as_public_key().as_point();
-        let r_sign = PublicKey::from(r_sign);
+        let r_sign = Curve25519PublicKey::from(r_sign);
         let challenge = self.hash_to_scalar(message, &r_sign, &pubkey);
         pre_sig.challenge == challenge
     }
 
     /// Verifies full signature validity
-    fn verify_signature<B: AsRef<[u8]>>(&self, sig: &Signature, pubkey: &PublicKey, message: B) -> bool {
+    fn verify_signature<B: AsRef<[u8]>>(&self, sig: &Signature, pubkey: &Curve25519PublicKey, message: B) -> bool {
         let public_r = &sig.s * ED25519_BASEPOINT_TABLE - sig.challenge * pubkey.as_point();
-        let public_r = PublicKey::from(public_r);
+        let public_r = Curve25519PublicKey::from(public_r);
         let challenge = self.hash_to_scalar(message, &public_r, pubkey);
         sig.challenge == challenge
     }

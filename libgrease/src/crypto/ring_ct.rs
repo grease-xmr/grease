@@ -1,4 +1,4 @@
-use crate::hashes::{HashToPoint, HashToScalar};
+use crate::crypto::hashes::{HashToPoint, HashToScalar};
 use std::future::Future;
 
 pub trait RingCT {

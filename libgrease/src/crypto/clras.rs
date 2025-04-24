@@ -2,8 +2,8 @@
 //!
 //! This module implements the 2P-CLRAS signature scheme as described in https://eprint.iacr.org/2022/744.pdf.
 
-use crate::cas::{CasError, ConsecutiveAdaptorSignature, PreSignature, Signature, Statement, Witness};
-use crate::keys::{PublicKey, SecretKey};
+use crate::crypto::cas::{CasError, ConsecutiveAdaptorSignature, PreSignature, Signature, Statement, Witness};
+use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use curve25519_dalek::Scalar;
 use thiserror::Error;
 
@@ -13,31 +13,45 @@ pub trait Clras2P {
     /// Provides a hash function to map data to a scalar.
     ///
     /// Implementations should consider domain separation.
-    fn hash_to_scalar<B: AsRef<[u8]>>(&self, data: B, nonce: &PublicKey, ring: &[PublicKey]) -> Scalar;
+    fn hash_to_scalar<B: AsRef<[u8]>>(
+        &self,
+        data: B,
+        nonce: &Curve25519PublicKey,
+        ring: &[Curve25519PublicKey],
+    ) -> Scalar;
 
     /// Generates a challenge for the signature scheme, given a message, nonce, and ring.
-    fn generate_challenge<B: AsRef<[u8]>>(&self, message: B, nonce: &PublicKey, ring: &[PublicKey]) -> Scalar {
+    fn generate_challenge<B: AsRef<[u8]>>(
+        &self,
+        message: B,
+        nonce: &Curve25519PublicKey,
+        ring: &[Curve25519PublicKey],
+    ) -> Scalar {
         self.hash_to_scalar(message, nonce, ring)
     }
 
     /// Generates this party's public nonce for the challenge of the signature scheme, given a secret nonce and a ring
     /// of public
     /// keys.
-    fn generate_public_nonce(&self, secret_nonce: &SecretKey, ring: &[PublicKey]) -> PublicKey;
+    fn generate_public_nonce(
+        &self,
+        secret_nonce: &Curve25519Secret,
+        ring: &[Curve25519PublicKey],
+    ) -> Curve25519PublicKey;
 
     /// Combined both peers' public nonces and the statement to create a combined public nonce.
     fn calculate_combined_public_nonce(
         &self,
-        public_nonce: &PublicKey,
-        peer_public_nonce: &PublicKey,
+        public_nonce: &Curve25519PublicKey,
+        peer_public_nonce: &Curve25519PublicKey,
         statement: &<<Self::Cas as ConsecutiveAdaptorSignature>::W as Witness>::S,
-    ) -> PublicKey {
+    ) -> Curve25519PublicKey {
         let combined = public_nonce.as_point() + peer_public_nonce.as_point() + statement.as_public_key().as_point();
-        PublicKey::from(combined)
+        Curve25519PublicKey::from(combined)
     }
 
     /// Sign the adapter signature with the local secret key to create a partial pre/adapter signature.
-    fn pre_partial_sign(&self, secret_nonce: &Scalar, challenge: &Scalar, ring: &[PublicKey]) -> Signature;
+    fn pre_partial_sign(&self, secret_nonce: &Scalar, challenge: &Scalar, ring: &[Curve25519PublicKey]) -> Signature;
 
     /// Combine two partial pre-signatures into a full signature. This method also checks that the two partial
     /// pre-signatures are valid and have the same challenge.
@@ -47,7 +61,7 @@ pub trait Clras2P {
         peer_pre_signature: &PreSignature,
         message: B,
         statement: &<<Self::Cas as ConsecutiveAdaptorSignature>::W as Witness>::S,
-        ring: &[PublicKey],
+        ring: &[Curve25519PublicKey],
     ) -> Result<Signature, Clras2PError> {
         if pre_signature.challenge != peer_pre_signature.challenge {
             return Err(Clras2PError::invalid_pre_signature("The signature challenges do not match"));
@@ -67,11 +81,11 @@ pub trait Clras2P {
         pre_signature: &PreSignature,
         message: B,
         statement: &<<Self::Cas as ConsecutiveAdaptorSignature>::W as Witness>::S,
-        ring: &[PublicKey],
+        ring: &[Curve25519PublicKey],
     ) -> bool;
 
     /// Verify the full ring signature, signed by the joint secret key.
-    fn verify<B: AsRef<[u8]>>(&self, signature: &Signature, message: B, ring: &[PublicKey]) -> bool;
+    fn verify<B: AsRef<[u8]>>(&self, signature: &Signature, message: B, ring: &[Curve25519PublicKey]) -> bool;
 
     fn adapt(
         &self,

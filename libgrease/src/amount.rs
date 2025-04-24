@@ -1,8 +1,9 @@
 use std::fmt::Display;
+use std::ops::{Add, AddAssign, SubAssign};
 
 pub const PICONERO: u64 = 1_000_000_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MoneroAmount {
     /// The amount of money in the channel
     amount: u64,
@@ -64,9 +65,48 @@ impl MoneroAmount {
     }
 }
 
+impl PartialOrd for MoneroAmount {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.amount.partial_cmp(&other.amount)
+    }
+}
+
+impl Add for MoneroAmount {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        MoneroAmount { amount: self.amount.saturating_add(other.amount) }
+    }
+}
+
+impl AddAssign for MoneroAmount {
+    fn add_assign(&mut self, other: Self) {
+        self.amount = self.amount.saturating_add(other.amount);
+    }
+}
+
+impl SubAssign for MoneroAmount {
+    fn sub_assign(&mut self, other: Self) {
+        self.amount = self.amount.saturating_sub(other.amount);
+    }
+}
+
+impl Ord for MoneroAmount {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.amount.cmp(&other.amount)
+    }
+}
+
 impl Display for MoneroAmount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:.9} XMR", self.to_xmr())
+    }
+}
+
+/// Converts a u64 into piconero.
+impl From<u64> for MoneroAmount {
+    fn from(amount: u64) -> Self {
+        MoneroAmount::from_piconero(amount)
     }
 }
 
