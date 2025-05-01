@@ -1,12 +1,14 @@
+use crate::crypto::traits::{PublicKey, SecretKey};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
-pub struct SecretKey(Scalar);
+#[derive(Clone, PartialEq, Eq)]
+pub struct Curve25519Secret(Scalar);
 
-impl SecretKey {
+impl Curve25519Secret {
     pub fn as_scalar(&self) -> &Scalar {
         &self.0
     }
@@ -21,30 +23,21 @@ impl SecretKey {
     }
 }
 
-impl From<Scalar> for SecretKey {
+impl SecretKey for Curve25519Secret {}
+
+impl From<Scalar> for Curve25519Secret {
     fn from(value: Scalar) -> Self {
         Self(value)
     }
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct PublicKey {
+pub struct Curve25519PublicKey {
     compressed_point: CompressedEdwardsY,
     point: EdwardsPoint,
 }
 
-impl PublicKey {
-    pub fn keypair<R: CryptoRng + RngCore>(rng: &mut R) -> (SecretKey, Self) {
-        let secret_key = SecretKey::random(rng);
-        let public_key = Self::from_secret(&secret_key);
-        (secret_key, public_key)
-    }
-
-    pub fn from_secret(secret_key: &SecretKey) -> Self {
-        let point = secret_key.as_scalar() * ED25519_BASEPOINT_TABLE;
-        point.into()
-    }
-
+impl Curve25519PublicKey {
     pub fn as_compressed(&self) -> &CompressedEdwardsY {
         &self.compressed_point
     }
@@ -54,18 +47,33 @@ impl PublicKey {
     }
 }
 
-impl From<EdwardsPoint> for PublicKey {
+impl From<EdwardsPoint> for Curve25519PublicKey {
     fn from(value: EdwardsPoint) -> Self {
         let compressed_point = value.compress();
         Self { compressed_point, point: value }
     }
 }
 
-impl TryFrom<CompressedEdwardsY> for PublicKey {
+impl TryFrom<CompressedEdwardsY> for Curve25519PublicKey {
     type Error = KeyError;
     fn try_from(value: CompressedEdwardsY) -> Result<Self, Self::Error> {
         let point = value.decompress().ok_or(KeyError::InvalidPoint)?;
         Ok(Self { compressed_point: value, point })
+    }
+}
+
+impl PublicKey for Curve25519PublicKey {
+    type SecretKey = Curve25519Secret;
+
+    fn keypair<R: CryptoRng + RngCore>(rng: &mut R) -> (Curve25519Secret, Self) {
+        let secret_key = Curve25519Secret::random(rng);
+        let public_key = Self::from_secret(&secret_key);
+        (secret_key, public_key)
+    }
+
+    fn from_secret(secret_key: &Self::SecretKey) -> Self {
+        let point = secret_key.as_scalar() * ED25519_BASEPOINT_TABLE;
+        point.into()
     }
 }
 

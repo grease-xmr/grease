@@ -1,4 +1,3 @@
-use crate::keys::SecretKey;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 

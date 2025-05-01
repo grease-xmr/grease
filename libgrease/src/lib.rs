@@ -1,10 +1,7 @@
-pub mod cas;
-pub mod clras;
-pub mod hashes;
-pub mod keys;
-pub mod monero_impl;
-pub mod ring_ct;
 pub mod amount;
 pub mod channel_id;
+pub mod crypto;
+pub mod kes;
+pub mod monero;
+pub mod payment_channel;
 pub mod state_machine;
-pub mod vcof_25519;
