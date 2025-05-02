@@ -1,15 +1,18 @@
+use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
-use crate::state_machine::establishing_channel::{Balances, ChannelEstablishedInfo};
+use crate::state_machine::establishing_channel::ChannelEstablishedInfo;
+use crate::state_machine::new_channel::NewChannelState;
+use crate::state_machine::traits::ChannelState;
 use log::debug;
 
 pub struct ChannelUpdateInfo<C>
 where
     C: ActivePaymentChannel,
 {
-    channel_id: Vec<u8>,
+    channel_name: String,
     update: C::UpdateInfo,
 }
 
@@ -17,8 +20,8 @@ impl<C> ChannelUpdateInfo<C>
 where
     C: ActivePaymentChannel,
 {
-    pub fn new(channel_id: Vec<u8>, update: C::UpdateInfo) -> Self {
-        ChannelUpdateInfo { channel_id, update }
+    pub fn new(channel_name: String, update: C::UpdateInfo) -> Self {
+        ChannelUpdateInfo { channel_name, update }
     }
 }
 
@@ -69,6 +72,22 @@ where
                 UpdateResult::Failure
             }
         }
+    }
+}
+
+impl<P, C, W, KES> ChannelState for EstablishedChannelState<P, C, W, KES>
+where
+    P: PublicKey,
+    C: ActivePaymentChannel,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+{
+    fn channel_id(&self) -> &ChannelId {
+        &self.payment_channel.channel_id()
+    }
+
+    fn role(&self) -> ChannelRole {
+        self.payment_channel.role()
     }
 }
 

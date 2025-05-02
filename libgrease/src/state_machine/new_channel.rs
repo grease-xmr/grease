@@ -4,6 +4,7 @@ use crate::crypto::traits::PublicKey;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::InvalidProposal;
 use crate::state_machine::establishing_channel::Balances;
+use crate::state_machine::traits::ChannelState;
 use crate::state_machine::LifecycleStage;
 use digest::Digest;
 
@@ -162,6 +163,16 @@ impl<P: PublicKey> NewChannelState<P> {
             return Err(InvalidProposal::MismatchedChannelId);
         }
         Ok(())
+    }
+}
+
+impl<P: PublicKey> ChannelState for NewChannelState<P> {
+    fn channel_id(&self) -> &ChannelId {
+        &self.channel_id
+    }
+
+    fn role(&self) -> ChannelRole {
+        self.role
     }
 }
 
