@@ -1,0 +1,5 @@
+[toolchain]
+channel = "stable" # Use the stable Rust toolchain
+components = ["rustfmt", "clippy"] # Add commonly used components
+targets = ["x86_64-unknown-linux-gnu"] # Specify the target platform
+profile = "minimal"
