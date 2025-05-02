@@ -2,15 +2,17 @@ use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ChannelRole, ClosedPaymentChannel};
-use crate::state_machine::new_channel::{NewChannelState, TimeoutReason};
+use crate::state_machine::disputing_channel::DisputeResult;
+use crate::state_machine::new_channel::{RejectNewChannelReason, TimeoutReason};
 use crate::state_machine::traits::ChannelState;
 
-pub struct ClosedChannelState<W, C>
+pub struct ClosedChannelState<P, W, C>
 where
+    P: PublicKey,
     W: MultiSigWallet,
     C: ClosedPaymentChannel,
 {
-    reason: ChannelClosedReason,
+    reason: ChannelClosedReason<P>,
     wallet: Option<W>,
     channel: CloseType<C>,
 }
@@ -20,24 +22,25 @@ enum CloseType<C: ClosedPaymentChannel> {
     NoChannel { channel_id: ChannelId, channel_role: ChannelRole },
 }
 
-impl<W, C> ClosedChannelState<W, C>
+impl<P, W, C> ClosedChannelState<P, W, C>
 where
+    P: PublicKey,
     W: MultiSigWallet,
     C: ClosedPaymentChannel,
 {
     /// Create a new closed channel state
-    pub fn new(reason: ChannelClosedReason, channel: C, wallet: W) -> Self {
+    pub fn new(reason: ChannelClosedReason<P>, channel: C, wallet: W) -> Self {
         let channel = CloseType::Channel(channel);
         ClosedChannelState { reason, wallet: Some(wallet), channel }
     }
 
-    pub fn empty(reason: ChannelClosedReason, channel_id: ChannelId, role: ChannelRole) -> Self {
+    pub fn empty(reason: ChannelClosedReason<P>, channel_id: ChannelId, role: ChannelRole) -> Self {
         let channel = CloseType::NoChannel { channel_id, channel_role: role };
         ClosedChannelState { reason, wallet: None, channel }
     }
 
     /// Get the reason for the channel being closed
-    pub fn reason(&self) -> &ChannelClosedReason {
+    pub fn reason(&self) -> &ChannelClosedReason<P> {
         &self.reason
     }
 
@@ -53,8 +56,9 @@ where
     }
 }
 
-impl<W, C> ChannelState for ClosedChannelState<W, C>
+impl<P, W, C> ChannelState for ClosedChannelState<P, W, C>
 where
+    P: PublicKey,
     W: MultiSigWallet,
     C: ClosedPaymentChannel,
 {
@@ -74,11 +78,13 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub enum ChannelClosedReason {
+pub enum ChannelClosedReason<P: PublicKey> {
     /// The channel was closed normally
     Normal,
     /// The channel was closed due to a timeout
     Timeout(TimeoutReason),
     /// The channel was closed following the dispute process
-    Dispute,
+    Dispute(DisputeResult<P>),
+    /// The channel was never opened because the terms were rejected
+    Rejected(RejectNewChannelReason),
 }

@@ -3,20 +3,15 @@ use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::ActivePaymentChannel;
 use crate::state_machine::closed_channel::ClosedChannelState;
-use crate::state_machine::closing_channel::{
-    ClosingChannelState, InvalidCloseInfo, StartCloseInfo, SuccessfulCloseInfo,
-};
-use crate::state_machine::disputing_channel::{
-    AbandonedChannelInfo, DisputeResolvedInfo, DisputingChannelState, ForceCloseInfo, ForceCloseResolvedInfo,
-    TriggerForceCloseInfo,
-};
+use crate::state_machine::closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};
+use crate::state_machine::disputing_channel::{DisputeResolvedInfo, DisputingChannelState, ForceCloseInfo};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::establishing_channel::{ChannelEstablishedInfo, EstablishingChannelState};
 use crate::state_machine::new_channel::{NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason};
 use crate::state_machine::open_channel::{ChannelUpdateInfo, EstablishedChannelState, UpdateResult};
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::ChannelClosedReason;
-use log::{debug, warn};
+use log::*;
 use std::fmt::{Display, Formatter};
 
 /// A lightweight type indicating which phase of the lifecycle we're in. Generally used for reporting purposes.
@@ -50,11 +45,7 @@ where
     OnStartClose(Box<StartCloseInfo>),
     OnRejectNewChannel(Box<RejectNewChannelReason>),
     OnForceClose(Box<ForceCloseInfo>),
-    OnAbandonedChannel(Box<AbandonedChannelInfo>),
-    OnTriggerForceClose(Box<TriggerForceCloseInfo>),
-    OnInvalidClose(Box<InvalidCloseInfo>),
-    OnDisputeResolved(Box<DisputeResolvedInfo>),
-    OnForceCloseResolved(Box<ForceCloseResolvedInfo>),
+    OnDisputeResolved(Box<DisputeResolvedInfo<P>>),
     OnSuccessfulClose(Box<SuccessfulCloseInfo>),
 }
 
@@ -74,11 +65,7 @@ where
             LifeCycleEvent::OnStartClose(_) => write!(f, "OnStartClose"),
             LifeCycleEvent::OnRejectNewChannel(_) => write!(f, "OnRejectNewChannel"),
             LifeCycleEvent::OnForceClose(_) => write!(f, "OnForceClose"),
-            LifeCycleEvent::OnAbandonedChannel(_) => write!(f, "OnAbandonedChannel"),
-            LifeCycleEvent::OnTriggerForceClose(_) => write!(f, "OnTriggerForceClose"),
-            LifeCycleEvent::OnInvalidClose(_) => write!(f, "OnInvalidClose"),
             LifeCycleEvent::OnDisputeResolved(_) => write!(f, "OnDisputeResolved"),
-            LifeCycleEvent::OnForceCloseResolved(_) => write!(f, "OnForceCloseResolved"),
             LifeCycleEvent::OnSuccessfulClose(_) => write!(f, "OnSuccessfulClose"),
         }
     }
@@ -111,7 +98,7 @@ where
     Open(Box<EstablishedChannelState<P, C, W, KES>>),
     /// The channel is closed and cannot be used anymore.
     Closing(Box<ClosingChannelState<P, C, W, KES>>),
-    Closed(Box<ClosedChannelState<W, C::Finalized>>),
+    Closed(Box<ClosedChannelState<P, W, C::Finalized>>),
     Disputing(Box<DisputingChannelState<P, C, W, KES>>),
 }
 
@@ -173,6 +160,18 @@ where
         }
     }
 
+    fn reject_new_channel(self, reason: RejectNewChannelReason) -> Result<Self, (Self, LifeCycleError)> {
+        let Self::New(new_state) = self else {
+            return Err((self, LifeCycleError::InvalidStateTransition));
+        };
+        warn!("Channel proposal rejected: {}", reason.reason());
+        let reason = ChannelClosedReason::Rejected(reason);
+        let channel_id = new_state.channel_id.clone();
+        let channel_role = new_state.role;
+        let state = ClosedChannelState::empty(reason, channel_id, channel_role);
+        Ok(ChannelLifeCycle::Closed(Box::new(state)))
+    }
+
     /// Manage the transition from the Establishing state to the Open state. This is an elaborate process that involves
     /// multiple steps, and therefore makes use of a subordinate state machine.
     fn establishing_to_open(self, info: ChannelEstablishedInfo<C, W, KES>) -> Result<Self, (Self, LifeCycleError)> {
@@ -218,22 +217,57 @@ where
         Ok(ChannelLifeCycle::Closed(Box::new(closed_state)))
     }
 
-    fn open_to_dispute(self, info: InvalidCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
+    fn open_to_dispute(self, info: ForceCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
         let Self::Open(open_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
-        warn!("Invalid close channel request: {}", info.reason);
-        let dispute_state = DisputingChannelState::from_open(*open_state);
+        warn!(
+            "Channel {} is force closing. Origin: {}. Reason: {}",
+            open_state.name(),
+            info.origin,
+            info.reason
+        );
+        let dispute_state = DisputingChannelState::from_open(*open_state, info);
         Ok(ChannelLifeCycle::Disputing(Box::new(dispute_state)))
     }
 
-    fn closing_to_dispute(self, info: InvalidCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
+    fn closing_to_dispute(self, info: ForceCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
         let Self::Closing(closing_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
-        warn!("Invalid close channel request: {}", info.reason);
-        let dispute_state = DisputingChannelState::from_closing(*closing_state);
+        warn!(
+            "Channel {} is force closing. Origin: {}. Reason: {}",
+            closing_state.name(),
+            info.origin,
+            info.reason
+        );
+        let dispute_state = DisputingChannelState::from_closing(*closing_state, info);
         Ok(ChannelLifeCycle::Disputing(Box::new(dispute_state)))
+    }
+
+    fn timeout(self, reason: TimeoutReason) -> Self {
+        warn!(
+            "Channel in stage ´{}´ timed out and is now closed. Reason: {}",
+            reason.stage(),
+            reason.reason()
+        );
+        let timeout = ChannelClosedReason::Timeout(reason);
+        let channel_id = self.current_state().channel_id().clone();
+        let channel_role = self.current_state().role();
+        let state = ClosedChannelState::empty(timeout, channel_id, channel_role);
+        ChannelLifeCycle::Closed(Box::new(state))
+    }
+
+    fn disputing_to_closed(self, info: DisputeResolvedInfo<P>) -> Result<Self, (Self, LifeCycleError)> {
+        let Self::Disputing(disputing_state) = self else {
+            return Err((self, LifeCycleError::InvalidStateTransition));
+        };
+        let reason = ChannelClosedReason::Dispute(info.result);
+        let wallet = disputing_state.wallet;
+        let channel = disputing_state.payment_channel;
+        let closed_channel = channel.finalize();
+        let state = ClosedChannelState::new(reason, closed_channel, wallet);
+        Ok(ChannelLifeCycle::Closed(Box::new(state)))
     }
 
     // Converts Result<Self, Self+> to Self, logging the error in the process
@@ -255,31 +289,21 @@ where
         use LifecycleStage::*;
         match (self.stage(), event) {
             (New, OnAckNewChannel(prop)) => Self::log_and_consolidate(New, self.new_to_establishing(*prop)),
-            (New | Establishing, OnTimeout(reason)) => {
-                let reason = ChannelClosedReason::Timeout(*reason);
-                let channel_id = self.current_state().channel_id().clone();
-                let channel_role = self.current_state().role();
-                let state = ClosedChannelState::empty(reason, channel_id, channel_role);
-                ChannelLifeCycle::Closed(Box::new(state))
-            }
+            (New, OnRejectNewChannel(reason)) => Self::log_and_consolidate(New, self.reject_new_channel(*reason)),
+            (New | Establishing, OnTimeout(reason)) => self.timeout(*reason),
             (Establishing, OnChannelEstablished(info)) => {
                 Self::log_and_consolidate(Establishing, self.establishing_to_open(*info))
             }
             (Open, OnUpdateChannel(info)) => Self::log_and_consolidate(Open, self.update_channel(*info)),
             (Open, OnStartClose(info)) => Self::log_and_consolidate(Open, self.open_to_closing(*info)),
-            (Open, OnInvalidClose(info)) => Self::log_and_consolidate(Open, self.open_to_dispute(*info)),
+            (Open, OnForceClose(info)) => Self::log_and_consolidate(Open, self.open_to_dispute(*info)),
             (Closing, OnSuccessfulClose(info)) => Self::log_and_consolidate(Closing, self.closing_to_closed(*info)),
-            (Closing, OnInvalidClose(info)) => Self::log_and_consolidate(Open, self.closing_to_dispute(*info)),
-            (Disputing, OnDisputeResolved(_info)) => {
-                let reason = ChannelClosedReason::Dispute;
-                // todo: implement dispute resolution
-                let channel_id = self.current_state().channel_id().clone();
-                let channel_role = self.current_state().role();
-                let state = ClosedChannelState::empty(reason, channel_id, channel_role);
-                ChannelLifeCycle::Closed(Box::new(state))
+            (Closing, OnForceClose(info)) => Self::log_and_consolidate(Open, self.closing_to_dispute(*info)),
+            (Disputing, OnDisputeResolved(info)) => {
+                Self::log_and_consolidate(Disputing, self.disputing_to_closed(*info))
             }
             (_, ev) => {
-                debug!("Unhandled event / state combination: {ev} in {}", self.stage());
+                error!("Unhandled event / state combination: {ev} in {}", self.stage());
                 self
             }
         }
@@ -302,7 +326,7 @@ where
     }
 
     /// If the channel is closed, this will return the reason for the closure
-    pub fn closed_reason(&self) -> Option<&ChannelClosedReason> {
+    pub fn closed_reason(&self) -> Option<&ChannelClosedReason<P>> {
         match self {
             ChannelLifeCycle::Closed(closed_state) => Some(closed_state.reason()),
             _ => None,
@@ -329,14 +353,20 @@ mod test {
     use crate::monero::MultiSigWallet;
     use crate::payment_channel::dummy_impl::{DummyActiveChannel, DummyUpdateInfo};
     use crate::payment_channel::{ActivePaymentChannel, ChannelRole, ClosedPaymentChannel};
+    use crate::state_machine::disputing_channel::DisputeResult;
     use crate::state_machine::establishing_channel::ChannelEstablishedInfo;
     use crate::state_machine::lifecycle::LifeCycleEvent;
-    use crate::state_machine::new_channel::{NewChannelState, ProposedChannelInfo};
+    use crate::state_machine::new_channel::{
+        NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
+    };
     use crate::state_machine::open_channel::ChannelUpdateInfo;
-    use crate::state_machine::{ChannelClosedReason, ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
+    use crate::state_machine::{
+        Balances, ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
+        NewChannelBuilder,
+    };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};
     use blake2::Blake2b512;
-    use log::info;
+    use log::*;
 
     type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
     type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
@@ -423,6 +453,15 @@ mod test {
         lc
     }
 
+    fn trigger_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+        // We are triggering a force close
+        let close_info = ForceCloseInfo::trigger("Some people want the world to burn");
+        let close_event = DummyEvent::OnForceClose(Box::new(close_info));
+        lc = lc.handle_event(close_event);
+        assert_eq!(lc.stage(), LifecycleStage::Disputing);
+        lc
+    }
+
     fn successful_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The channel closure was successfully negotiated
         let info = SuccessfulCloseInfo {};
@@ -430,6 +469,32 @@ mod test {
         lc = lc.handle_event(event);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Normal)));
+        lc
+    }
+
+    fn uncontested_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+        // The force close was successful
+        let info = DisputeResolvedInfo::uncontested();
+        let event = DummyEvent::OnDisputeResolved(Box::new(info));
+        lc = lc.handle_event(event);
+        assert_eq!(lc.stage(), LifecycleStage::Closed);
+        assert!(matches!(
+            lc.closed_reason(),
+            Some(ChannelClosedReason::Dispute(DisputeResult::UncontestedForceClose))
+        ));
+        lc
+    }
+
+    fn lose_dispute(mut lc: DummyLifecycle) -> DummyLifecycle {
+        // The force close was successful
+        let info = DisputeResolvedInfo::lost("Provided more recent state to KES");
+        let event = DummyEvent::OnDisputeResolved(Box::new(info));
+        lc = lc.handle_event(event);
+        assert_eq!(lc.stage(), LifecycleStage::Closed);
+        assert!(matches!(
+            lc.closed_reason(),
+            Some(ChannelClosedReason::Dispute(DisputeResult::DisputeLost(_)))
+        ));
         lc
     }
 
@@ -450,5 +515,86 @@ mod test {
         let final_balance = lc.closed_channel().unwrap().final_balance();
         assert_eq!(final_balance.customer, MoneroAmount::from_xmr("0.65").unwrap());
         assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.85").unwrap());
+    }
+
+    #[test]
+    fn timeout_new() {
+        env_logger::try_init().ok();
+        let (mut lc, _) = new_channel_state();
+        // Merchant never responds
+        let event = LifeCycleEvent::OnTimeout(Box::new(TimeoutReason::new("Merchant timeout", lc.stage())));
+        lc = lc.handle_event(event);
+        assert_eq!(lc.stage(), LifecycleStage::Closed);
+        assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Timeout(_))));
+    }
+
+    #[test]
+    fn timeout_establishing() {
+        env_logger::try_init().ok();
+        let (mut lc, initial_state) = new_channel_state();
+        lc = accept_proposal(lc, &initial_state);
+        // Merchant doesn't respond
+        let event = LifeCycleEvent::OnTimeout(Box::new(TimeoutReason::new(
+            "Merchant timeout during channel negotiation",
+            lc.stage(),
+        )));
+        lc = lc.handle_event(event);
+        assert_eq!(lc.stage(), LifecycleStage::Closed);
+        assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Timeout(_))));
+    }
+
+    #[test]
+    fn reject_new_channel() {
+        env_logger::try_init().ok();
+        let (mut lc, initial_state) = new_channel_state();
+        // Merchant rejects the channel proposal
+        let reason = RejectNewChannelReason::new("At capacity");
+        let event = LifeCycleEvent::OnRejectNewChannel(Box::new(reason));
+        lc = lc.handle_event(event);
+        assert_eq!(lc.stage(), LifecycleStage::Closed);
+        assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Rejected(_))));
+    }
+
+    #[test]
+    fn try_invalid_new_to_payment() {
+        // Test invalid state transition. You can´t make a payment (channel update) while still in the New state
+        env_logger::try_init().ok();
+        let (mut lc, initial_state) = new_channel_state();
+        let new_balance = initial_state.initial_balances;
+        let update = DummyUpdateInfo { new_balance };
+        let channel_name = lc.current_state().name();
+        let info = ChannelUpdateInfo::new(channel_name, update);
+        let update = DummyEvent::OnUpdateChannel(Box::new(info));
+        lc = lc.handle_event(update);
+        assert_eq!(lc.stage(), LifecycleStage::New);
+    }
+
+    #[test]
+    fn dispute_via_force_close() {
+        env_logger::try_init().ok();
+        let (mut lc, initial_state) = new_channel_state();
+        lc = accept_proposal(lc, &initial_state);
+        lc = open_channel(lc, &initial_state);
+        lc = payment(lc, MoneroAmount::from_xmr("0.1").unwrap());
+        lc = payment(lc, MoneroAmount::from_xmr("0.2").unwrap());
+        lc = payment(lc, MoneroAmount::from_xmr("0.3").unwrap());
+        let channel = lc.payment_channel().expect("Failed to get payment channel");
+        assert_eq!(channel.transaction_count(), 3);
+        assert_eq!(channel.my_balance(), MoneroAmount::from_xmr("0.65").unwrap());
+        lc = trigger_force_close(lc);
+        lc = uncontested_force_close(lc);
+        let final_balance = lc.closed_channel().unwrap().final_balance();
+        assert_eq!(final_balance.customer, MoneroAmount::from_xmr("0.65").unwrap());
+        assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.85").unwrap());
+    }
+
+    #[test]
+    fn punished_via_dispute() {
+        env_logger::try_init().ok();
+        let (mut lc, initial_state) = new_channel_state();
+        lc = accept_proposal(lc, &initial_state);
+        lc = open_channel(lc, &initial_state);
+        lc = trigger_force_close(lc);
+        lose_dispute(lc);
     }
 }

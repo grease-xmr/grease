@@ -27,7 +27,18 @@ pub struct NewChannelBuilder<P: PublicKey> {
     customer_amount: Option<MoneroAmount>,
 }
 
-pub struct RejectNewChannelReason;
+#[derive(Debug, Clone)]
+pub struct RejectNewChannelReason(String);
+
+impl RejectNewChannelReason {
+    pub fn new(reason: impl Into<String>) -> Self {
+        RejectNewChannelReason(reason.into())
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.0
+    }
+}
 
 impl<P: PublicKey> NewChannelBuilder<P> {
     pub fn new(channel_role: ChannelRole, my_public_key: P, my_secret_key: P::SecretKey) -> Self {
@@ -195,7 +206,23 @@ pub struct ProposedChannelInfo<P: PublicKey> {
 #[derive(Clone, Debug)]
 pub struct TimeoutReason {
     /// The reason for the timeout
-    pub reason: String,
+    reason: String,
     /// The phase of the lifecycle when the timeout occurred
-    pub stage: LifecycleStage,
+    stage: LifecycleStage,
+}
+
+impl TimeoutReason {
+    pub fn new(reason: impl Into<String>, stage: LifecycleStage) -> Self {
+        TimeoutReason { reason: reason.into(), stage }
+    }
+
+    /// Get the reason for the timeout
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// Get the stage of the lifecycle when the timeout occurred
+    pub fn stage(&self) -> LifecycleStage {
+        self.stage
+    }
 }

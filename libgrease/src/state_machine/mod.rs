@@ -13,8 +13,8 @@ mod open_channel;
 mod traits;
 
 pub use closed_channel::{ChannelClosedReason, ClosedChannelState};
-pub use closing_channel::{ClosingChannelState, InvalidCloseInfo, StartCloseInfo, SuccessfulCloseInfo};
-pub use disputing_channel::DisputingChannelState;
+pub use closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};
+pub use disputing_channel::{DisputeOrigin, DisputeResolvedInfo, DisputingChannelState, ForceCloseInfo};
 pub use establishing_channel::{Balances, EstablishingChannelState};
 pub use lifecycle::{ChannelLifeCycle, LifecycleStage};
 pub use new_channel::NewChannelBuilder;
