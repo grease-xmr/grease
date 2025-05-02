@@ -74,6 +74,12 @@ impl ChannelId {
     pub fn hash(&self) -> &[u8] {
         &self.hashed_id
     }
+
+    /// The channel name, which is always in the format `XGC<first 16 bytes of hex encoded channel id>`
+    pub fn name(&self) -> String {
+        let hash = self.hash();
+        format!("XGC{}", hex::encode(&hash[..16]))
+    }
 }
 
 impl Debug for ChannelId {

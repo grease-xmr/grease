@@ -5,6 +5,8 @@ use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::ActivePaymentChannel;
 use crate::payment_channel::ChannelRole;
+use crate::state_machine::new_channel::NewChannelState;
+use crate::state_machine::traits::ChannelState;
 
 pub struct EstablishingChannelState<P: PublicKey> {
     pub role: ChannelRole,
@@ -63,6 +65,16 @@ impl<P: PublicKey> EstablishingChannelState<P> {
 
     pub fn initial_balances(&self) -> Balances {
         self.initial_balances
+    }
+}
+
+impl<P: PublicKey> ChannelState for EstablishingChannelState<P> {
+    fn channel_id(&self) -> &ChannelId {
+        &self.channel_id
+    }
+
+    fn role(&self) -> ChannelRole {
+        self.role
     }
 }
 

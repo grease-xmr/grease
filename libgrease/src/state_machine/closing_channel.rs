@@ -1,7 +1,10 @@
+use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
-use crate::payment_channel::ActivePaymentChannel;
+use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
+use crate::state_machine::new_channel::NewChannelState;
+use crate::state_machine::traits::ChannelState;
 use crate::state_machine::EstablishedChannelState;
 
 pub struct ClosingChannelState<P, C, W, KES>
@@ -35,10 +38,22 @@ where
     }
 }
 
-pub struct StartCloseInfo {}
+impl<P, C, W, KES> ChannelState for ClosingChannelState<P, C, W, KES>
+where
+    P: PublicKey,
+    C: ActivePaymentChannel,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+{
+    fn channel_id(&self) -> &ChannelId {
+        &self.payment_channel.channel_id()
+    }
 
-pub struct InvalidCloseInfo {
-    pub reason: String,
+    fn role(&self) -> ChannelRole {
+        self.payment_channel.role()
+    }
 }
+
+pub struct StartCloseInfo {}
 
 pub struct SuccessfulCloseInfo {}

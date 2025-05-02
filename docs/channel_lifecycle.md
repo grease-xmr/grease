@@ -71,9 +71,8 @@ On a high level, the payment channel lifecycle goes through 6 phases:
   state. 
   If the counterparty party initiates a force-close on the channel via the KES, an `onForceClose` event is emitted, 
   and the channel moves to the `Disputing` state.
-  If the counterparty stops responding to updates (resulting in an `onAbandonedChannel` event), or for whatever other 
-  reason (an `onTriggerForceClose` event), the channel will move to the `ForceClosing` state, which is technically 
-  also a dispute state, but one which is initiated by the local peer.
+  If the counterparty stops responding to updates or for whatever other reason, you can trigger a force close (an 
+  `onTriggerForceClose` event), and the channel will move to the `Disputing` state.
 * `Closing` - The channel is being closed. This phase includes the KES closing, sharing of adapter sharing secrets and 
   signing of the final commitment transaction. The merchant is responsible for closing down the KES. Once both 
   parties have signed the final commitment transaction, any party will be able to broadcast it, but by convention 
@@ -101,8 +100,8 @@ stateDiagram-v2
     Open --> Open: onUpdateChannel
     Open --> Closing: onStartClose
     Closing --> Closed: onSuccessfulClose
-    Open --> Disputing: onForceClose(reason)<br/>onAbandonedChannel(reason)<br/>onTriggerForceClose(reason)
-    Closing --> Disputing: onInvalidClose(reason)<br/>onAbandonedChannel(reason)<br/>onTriggerForceClose(reason)
+    Open --> Disputing: onForceClose(reason)<br/>onTriggerForceClose(reason)
+    Closing --> Disputing: onForceClose(reason)<br/>onTriggerForceClose(reason)
     Disputing --> Closed: onDisputeResolved(reason)<br/>onForceCloseResolved(reason)
     Closed --> [*]
 ```
