@@ -1,6 +1,7 @@
 pub mod amount;
 pub mod channel_id;
 pub mod crypto;
+pub mod file_store;
 pub mod kes;
 pub mod monero;
 pub mod payment_channel;

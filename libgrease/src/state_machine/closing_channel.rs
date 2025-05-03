@@ -5,7 +5,10 @@ use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::EstablishedChannelState;
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct ClosingChannelState<P, C, W, KES>
 where
     P: PublicKey,

@@ -7,10 +7,10 @@ mod closing_channel;
 mod disputing_channel;
 pub mod error;
 mod establishing_channel;
-mod lifecycle;
+pub mod lifecycle;
 mod new_channel;
 mod open_channel;
-mod traits;
+pub mod traits;
 
 pub use closed_channel::{ChannelClosedReason, ClosedChannelState};
 pub use closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};

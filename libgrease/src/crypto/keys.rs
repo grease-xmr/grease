@@ -4,6 +4,7 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use hex::FromHexError;
 use rand::{CryptoRng, RngCore};
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use thiserror::Error;
 
@@ -43,9 +44,28 @@ impl Curve25519Secret {
 
 impl SecretKey for Curve25519Secret {}
 
+impl Serialize for Curve25519Secret {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.as_hex())
+    }
+}
+
 impl From<Scalar> for Curve25519Secret {
     fn from(value: Scalar) -> Self {
         Self(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for Curve25519Secret {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let hex_str = String::deserialize(deserializer)?;
+        Curve25519Secret::from_hex(&hex_str).map_err(serde::de::Error::custom)
     }
 }
 
@@ -121,6 +141,25 @@ impl PublicKey for Curve25519PublicKey {
 impl Debug for Curve25519PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_hex())
+    }
+}
+
+impl Serialize for Curve25519PublicKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.as_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Curve25519PublicKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let hex_str = String::deserialize(deserializer)?;
+        Curve25519PublicKey::from_hex(&hex_str).map_err(serde::de::Error::custom)
     }
 }
 

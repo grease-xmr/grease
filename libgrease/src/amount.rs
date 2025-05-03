@@ -5,6 +5,7 @@ use std::ops::{Add, AddAssign, SubAssign};
 pub const PICONERO: u64 = 1_000_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct MoneroAmount {
     /// The amount of money in the channel
     amount: u64,

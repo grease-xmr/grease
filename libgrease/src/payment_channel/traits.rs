@@ -2,6 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
 use crate::payment_channel::{ChannelRole, UpdateError};
 use crate::state_machine::Balances;
+use serde::{Deserialize, Serialize};
 
 pub trait ChannelPayment: Sized {
     fn get_amount(&self) -> MoneroAmount;
@@ -10,7 +11,7 @@ pub trait ChannelPayment: Sized {
     fn get_sender_signature(&self) -> String;
 }
 
-pub trait ActivePaymentChannel {
+pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> {
     type UpdateInfo;
     type Finalized: ClosedPaymentChannel;
 
@@ -29,7 +30,7 @@ pub trait ActivePaymentChannel {
     fn finalize(self) -> Self::Finalized;
 }
 
-pub trait ClosedPaymentChannel {
+pub trait ClosedPaymentChannel: Serialize + for<'d> Deserialize<'d> {
     fn channel_id(&self) -> &ChannelId;
     fn role(&self) -> ChannelRole;
     fn final_balance(&self) -> Balances;

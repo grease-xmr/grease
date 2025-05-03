@@ -2,7 +2,9 @@ use crate::channel_id::ChannelId;
 use crate::payment_channel::traits::ActivePaymentChannel;
 use crate::payment_channel::{ChannelRole, ClosedPaymentChannel, UpdateError};
 use crate::state_machine::Balances;
+use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DummyActiveChannel {
     channel_id: ChannelId,
     role: ChannelRole,
@@ -61,6 +63,7 @@ pub struct DummyUpdateInfo {
     pub new_balance: Balances,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct DummyClosedChannel {
     channel_id: ChannelId,
     role: ChannelRole,
