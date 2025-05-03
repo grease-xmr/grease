@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "C: ActivePaymentChannel + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct DisputingChannelState<P, C, W, KES>
 where
     P: PublicKey,
@@ -122,7 +122,7 @@ impl<P: PublicKey> Debug for DisputeWonInfo<P> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum DisputeResult<P: PublicKey> {
     UncontestedForceClose,
     DisputeLost(DisputeLostInfo),

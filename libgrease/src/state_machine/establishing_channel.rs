@@ -9,7 +9,7 @@ use crate::state_machine::traits::ChannelState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub struct EstablishingChannelState<P: PublicKey> {
     pub role: ChannelRole,
     pub(crate) secret_key: P::SecretKey,

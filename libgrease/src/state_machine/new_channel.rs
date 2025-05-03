@@ -132,7 +132,7 @@ impl<P: PublicKey> NewChannelBuilder<P> {
 
 /// The internal state of the channel in the "new" phase.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub struct NewChannelState<P>
 where
     P: PublicKey,

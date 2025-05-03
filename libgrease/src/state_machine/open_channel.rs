@@ -26,7 +26,7 @@ where
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "C: ActivePaymentChannel + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct EstablishedChannelState<P, C, W, KES>
 where
     P: PublicKey,

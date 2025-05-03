@@ -87,7 +87,7 @@ impl Display for LifecycleStage {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum ChannelLifeCycle<P, C, W, KES>
 where
     P: PublicKey,

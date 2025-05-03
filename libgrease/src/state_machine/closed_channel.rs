@@ -8,7 +8,7 @@ use crate::state_machine::traits::ChannelState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "C: ClosedPaymentChannel + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "C: ClosedPaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct ClosedChannelState<P, W, C>
 where
     P: PublicKey,
@@ -21,7 +21,7 @@ where
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "C: ClosedPaymentChannel + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "C: ClosedPaymentChannel + for<'d> Deserialize<'d>"))]
 enum CloseType<C: ClosedPaymentChannel> {
     Channel(C),
     NoChannel { channel_id: ChannelId, channel_role: ChannelRole },
@@ -83,7 +83,7 @@ where
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum ChannelClosedReason<P: PublicKey> {
     /// The channel was closed normally
     Normal,

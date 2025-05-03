@@ -8,7 +8,7 @@ use crate::state_machine::EstablishedChannelState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound = "C: ActivePaymentChannel + for<'d> Deserialize<'d>")]
+#[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct ClosingChannelState<P, C, W, KES>
 where
     P: PublicKey,
