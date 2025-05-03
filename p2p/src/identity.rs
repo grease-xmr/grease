@@ -5,7 +5,7 @@ use std::fmt::{Debug, Display};
 use std::path::Path;
 use thiserror::Error;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChannelIdentity {
     id: String,
     #[serde(serialize_with = "serialize_key", deserialize_with = "deserialize_key")]

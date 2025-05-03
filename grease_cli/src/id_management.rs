@@ -79,6 +79,14 @@ impl LocalIdentitySet {
         self.identities.insert(id, identity)
     }
 
+    pub fn ids(&self) -> impl Iterator<Item = &String> {
+        self.identities.keys()
+    }
+
+    pub fn identities(&self) -> impl Iterator<Item = &ChannelIdentity> {
+        self.identities.values()
+    }
+
     pub fn remove<S: AsRef<str>>(&mut self, id: S) -> Option<ChannelIdentity> {
         self.identities.remove(id.as_ref())
     }
