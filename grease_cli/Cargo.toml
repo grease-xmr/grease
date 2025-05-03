@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 grease-p2p = { workspace = true }
+libgrease = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "unicode"] }

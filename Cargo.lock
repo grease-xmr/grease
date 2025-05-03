@@ -1034,6 +1034,7 @@ dependencies = [
  "env_logger",
  "futures",
  "grease-p2p",
+ "libgrease",
  "libp2p",
  "log",
  "serde",
@@ -1048,6 +1049,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "hex",
+ "libgrease",
  "libp2p",
  "log",
  "rand 0.9.1",
@@ -1593,6 +1595,7 @@ dependencies = [
  "hex",
  "log",
  "rand 0.9.1",
+ "serde",
  "thiserror 2.0.12",
 ]
 

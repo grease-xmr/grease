@@ -3,7 +3,6 @@ use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
-use crate::state_machine::new_channel::NewChannelState;
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::EstablishedChannelState;
 

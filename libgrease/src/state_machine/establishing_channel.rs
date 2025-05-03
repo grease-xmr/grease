@@ -5,8 +5,8 @@ use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::ActivePaymentChannel;
 use crate::payment_channel::ChannelRole;
-use crate::state_machine::new_channel::NewChannelState;
 use crate::state_machine::traits::ChannelState;
+use serde::{Deserialize, Serialize};
 
 pub struct EstablishingChannelState<P: PublicKey> {
     pub role: ChannelRole,
@@ -20,7 +20,7 @@ pub struct EstablishingChannelState<P: PublicKey> {
     pub channel_id: ChannelId,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Balances {
     pub merchant: MoneroAmount,
     pub customer: MoneroAmount,

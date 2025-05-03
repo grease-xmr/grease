@@ -1,5 +1,4 @@
 use crate::crypto::hashes::{HashToPoint, HashToScalar};
-use std::future::Future;
 
 pub trait RingCT {
     type SecretKey;

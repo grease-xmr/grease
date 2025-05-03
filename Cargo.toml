@@ -8,6 +8,7 @@ members = [
 
 [workspace.dependencies]
 grease-p2p = { version = "0.1.0", path = "./p2p" }
+libgrease = { version = "0.1.0", path = "./libgrease" }
 
 anyhow = { version = "1.0.96" }
 clap = { version = "4.5.31" }

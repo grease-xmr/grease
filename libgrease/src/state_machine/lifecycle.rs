@@ -361,7 +361,7 @@ mod test {
     };
     use crate::state_machine::open_channel::ChannelUpdateInfo;
     use crate::state_machine::{
-        Balances, ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
+        ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
         NewChannelBuilder,
     };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};

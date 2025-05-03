@@ -1,7 +1,10 @@
 #![doc = include_str!("../README.md")]
 
 use clap::{Args, Parser, Subcommand};
-use grease_p2p::message_types::NewChannelData;
+use grease_p2p::message_types::NewChannelProposal;
+use libgrease::amount::MoneroAmount;
+use libgrease::payment_channel::ChannelRole;
+use libgrease::state_machine::Balances;
 use libp2p::Multiaddr;
 use std::path::PathBuf;
 
@@ -93,10 +96,23 @@ pub enum ChannelAction {
 }
 
 impl ChannelAction {
-    pub fn extract_new_channel_data(&self) -> Option<NewChannelData> {
+    pub fn extract_new_channel_data(&self) -> Option<NewChannelProposal> {
         match self {
             ChannelAction::Open { our_amount, their_amount } => {
-                Some(NewChannelData { our_amount: *our_amount, their_amount: their_amount.unwrap_or(0) })
+                let initial_balances = Balances::new(
+                    MoneroAmount::from_piconero(*our_amount),
+                    MoneroAmount::from_piconero(their_amount.unwrap_or(0)),
+                );
+                Some(NewChannelProposal {
+                    role: ChannelRole::Customer,
+                    merchant_pubkey: "todo".to_string(),
+                    customer_pubkey: "todo".to_string(),
+                    kes_public_key: "todo".to_string(),
+                    initial_balances,
+                    customer_partial_channel_id: vec![],
+                    merchant_partial_channel_id: vec![],
+                    channel_name: "".to_string(),
+                })
             }
             _ => None,
         }
