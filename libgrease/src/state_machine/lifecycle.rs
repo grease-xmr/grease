@@ -12,10 +12,12 @@ use crate::state_machine::open_channel::{ChannelUpdateInfo, EstablishedChannelSt
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::ChannelClosedReason;
 use log::*;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// A lightweight type indicating which phase of the lifecycle we're in. Generally used for reporting purposes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LifecycleStage {
     /// The channel is being created.
     New,
@@ -84,6 +86,8 @@ impl Display for LifecycleStage {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
 pub enum ChannelLifeCycle<P, C, W, KES>
 where
     P: PublicKey,
@@ -345,7 +349,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use crate::amount::MoneroAmount;
     use crate::crypto::keys::Curve25519PublicKey;
     use crate::kes::dummy_impl::DummyKes;
@@ -370,7 +374,7 @@ mod test {
     type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
     type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
 
-    fn new_channel_state() -> (DummyLifecycle, NewChannelState<Curve25519PublicKey>) {
+    pub fn new_channel_state() -> (DummyLifecycle, NewChannelState<Curve25519PublicKey>) {
         // All this info is known, or can be scanned in from a QR code etc
         let (my_secret, my_pubkey) =
             Curve25519PublicKey::keypair_from_hex("0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d")
@@ -398,7 +402,10 @@ mod test {
         (lc, initial_state)
     }
 
-    fn accept_proposal(mut lc: DummyLifecycle, initial_state: &NewChannelState<Curve25519PublicKey>) -> DummyLifecycle {
+    pub fn accept_proposal(
+        mut lc: DummyLifecycle,
+        initial_state: &NewChannelState<Curve25519PublicKey>,
+    ) -> DummyLifecycle {
         // Data gets sent to merchant. They respond with an ack and a proposal
         let proposal = ProposedChannelInfo {
             role: ChannelRole::Merchant,
@@ -417,7 +424,10 @@ mod test {
         lc
     }
 
-    fn open_channel(mut lc: DummyLifecycle, initial_state: &NewChannelState<Curve25519PublicKey>) -> DummyLifecycle {
+    pub fn open_channel(
+        mut lc: DummyLifecycle,
+        initial_state: &NewChannelState<Curve25519PublicKey>,
+    ) -> DummyLifecycle {
         // All the comms in the Establishing state machine are negotiated, and eventually are successful
         let channel_id = initial_state.channel_id.clone();
         let channel =
@@ -431,7 +441,7 @@ mod test {
         lc
     }
 
-    fn payment(mut lc: DummyLifecycle, amount: MoneroAmount) -> DummyLifecycle {
+    pub fn payment(mut lc: DummyLifecycle, amount: MoneroAmount) -> DummyLifecycle {
         // The channel can be used to send payments
         let balance = lc.payment_channel().unwrap().balances();
         let new_balance = balance.pay(amount).unwrap();
@@ -444,7 +454,7 @@ mod test {
         lc
     }
 
-    fn start_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    pub fn start_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // A co-operative close channel request has been fired
         let close_info = StartCloseInfo {};
         let close_event = DummyEvent::OnStartClose(Box::new(close_info));
@@ -452,7 +462,7 @@ mod test {
         lc
     }
 
-    fn trigger_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    pub fn trigger_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // We are triggering a force close
         let close_info = ForceCloseInfo::trigger("Some people want the world to burn");
         let close_event = DummyEvent::OnForceClose(Box::new(close_info));
@@ -461,7 +471,7 @@ mod test {
         lc
     }
 
-    fn successful_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    pub fn successful_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The channel closure was successfully negotiated
         let info = SuccessfulCloseInfo {};
         let event = DummyEvent::OnSuccessfulClose(Box::new(info));

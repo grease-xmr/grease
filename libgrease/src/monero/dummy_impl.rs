@@ -1,5 +1,7 @@
 use crate::monero::MultiSigWallet;
+use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DummyWallet;
 
 impl MultiSigWallet for DummyWallet {

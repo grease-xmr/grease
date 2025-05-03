@@ -1,8 +1,9 @@
 use crate::state_machine::Balances;
 use digest::Digest;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChannelId {
     merchant_id: Vec<u8>,
     customer_id: Vec<u8>,
@@ -73,7 +74,7 @@ impl Debug for ChannelId {
 
 impl Display for ChannelId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(&self.hashed_id))
+        write!(f, "{}", self.name())
     }
 }
 
@@ -101,7 +102,7 @@ mod test {
         assert_eq!(id.customer(), "customer");
         assert_eq!(id.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
         assert_eq!(id.initial_balance().customer.to_piconero(), 750_000_000_000);
-        assert_eq!(id.to_string(), "a2edd1f8091cc375b12357b427a748ba");
+        assert_eq!(id.to_string(), "XGCa2edd1f8091cc375b12357b427a748ba");
     }
 
     #[test]

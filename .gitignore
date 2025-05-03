@@ -18,4 +18,5 @@ ENV/
 env.bak/
 venv.bak/
 
-
+# test artifacts
+/libgrease/test_data/

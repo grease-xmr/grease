@@ -6,6 +6,7 @@ use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::establishing_channel::ChannelEstablishedInfo;
 use crate::state_machine::traits::ChannelState;
 use log::debug;
+use serde::{Deserialize, Serialize};
 
 pub struct ChannelUpdateInfo<C>
 where
@@ -24,6 +25,8 @@ where
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "C: ActivePaymentChannel + for<'d> Deserialize<'d>")]
 pub struct EstablishedChannelState<P, C, W, KES>
 where
     P: PublicKey,

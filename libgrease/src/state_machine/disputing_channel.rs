@@ -5,8 +5,11 @@ use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::{ClosingChannelState, EstablishedChannelState};
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "C: ActivePaymentChannel + for<'d> Deserialize<'d>")]
 pub struct DisputingChannelState<P, C, W, KES>
 where
     P: PublicKey,
@@ -22,6 +25,7 @@ where
     pub(crate) kes: KES,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DisputeOrigin {
     /// You have  initiated a force close.
     ForceCloseTriggered,
@@ -100,12 +104,12 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DisputeLostInfo {
     pub(crate) reason: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DisputeWonInfo<P: PublicKey> {
     pub(crate) reason: String,
     pub(crate) peer_spend_key: P::SecretKey,
@@ -117,7 +121,8 @@ impl<P: PublicKey> Debug for DisputeWonInfo<P> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
 pub enum DisputeResult<P: PublicKey> {
     UncontestedForceClose,
     DisputeLost(DisputeLostInfo),

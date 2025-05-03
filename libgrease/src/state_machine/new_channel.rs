@@ -7,6 +7,7 @@ use crate::state_machine::establishing_channel::Balances;
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::LifecycleStage;
 use digest::Digest;
+use serde::{Deserialize, Serialize};
 
 /// Holds all information that needs to be collected before the merchant and client can begin the channel
 /// establishment protocol. At the successful conclusion of this phase, we can emit an `OnNewChannelInfo` event with
@@ -27,7 +28,8 @@ pub struct NewChannelBuilder<P: PublicKey> {
     customer_amount: Option<MoneroAmount>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RejectNewChannelReason(String);
 
 impl RejectNewChannelReason {
@@ -129,8 +131,12 @@ impl<P: PublicKey> NewChannelBuilder<P> {
 }
 
 /// The internal state of the channel in the "new" phase.
-#[derive(Clone)]
-pub struct NewChannelState<P: PublicKey> {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(bound = "P: PublicKey  + for<'d> Deserialize<'d>")]
+pub struct NewChannelState<P>
+where
+    P: PublicKey,
+{
     /// My role, whether customer or merchant
     pub role: ChannelRole,
     /// My secret key for the 2-of-2 multisig wallet
@@ -203,7 +209,7 @@ pub struct ProposedChannelInfo<P: PublicKey> {
     pub channel_id: ChannelId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimeoutReason {
     /// The reason for the timeout
     reason: String,
