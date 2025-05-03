@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, SubAssign};
 
 pub const PICONERO: u64 = 1_000_000_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct MoneroAmount {
     /// The amount of money in the channel
     amount: u64,

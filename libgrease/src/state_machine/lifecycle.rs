@@ -361,8 +361,7 @@ mod test {
     };
     use crate::state_machine::open_channel::ChannelUpdateInfo;
     use crate::state_machine::{
-        Balances, ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
-        NewChannelBuilder,
+        ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage, NewChannelBuilder,
     };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};
     use blake2::Blake2b512;

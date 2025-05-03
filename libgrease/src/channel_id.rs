@@ -1,5 +1,4 @@
 use crate::state_machine::Balances;
-use chrono::{DateTime, Utc};
 use digest::Digest;
 use std::fmt::{Debug, Display};
 
@@ -9,28 +8,11 @@ pub struct ChannelId {
     customer_id: Vec<u8>,
     initial_balance: Balances,
     salt: Vec<u8>,
-    timestamp: DateTime<Utc>,
     hashed_id: Vec<u8>,
 }
 
 impl ChannelId {
-    pub fn new<D, S1, S2, S3>(merchant: S1, customer: S2, salt: S3, balances: Balances) -> Self
-    where
-        S1: AsRef<[u8]>,
-        S2: AsRef<[u8]>,
-        S3: AsRef<[u8]>,
-        D: Digest,
-    {
-        ChannelId::new_with_timestamp::<D, S1, S2, S3>(merchant, customer, salt, balances, Utc::now())
-    }
-
-    pub fn new_with_timestamp<D, S1, S2, S3>(
-        merchant: S1,
-        customer: S2,
-        salt: S3,
-        initial_balance: Balances,
-        timestamp: DateTime<Utc>,
-    ) -> Self
+    pub fn new<D, S1, S2, S3>(merchant: S1, customer: S2, salt: S3, initial_balance: Balances) -> Self
     where
         S1: AsRef<[u8]>,
         S2: AsRef<[u8]>,
@@ -42,17 +24,15 @@ impl ChannelId {
         let salt = salt.as_ref().to_vec();
         let amount_mer = initial_balance.merchant.to_piconero().to_le_bytes();
         let amount_cust = initial_balance.customer.to_piconero().to_le_bytes();
-        let timestamp_val = timestamp.timestamp_micros().to_le_bytes();
         let mut hasher = D::new();
         hasher.update(b"ChannelId");
         hasher.update(&merchant_id);
         hasher.update(&customer_id);
         hasher.update(&amount_mer);
         hasher.update(&amount_cust);
-        hasher.update(&timestamp_val);
         hasher.update(&salt);
         let hashed_id = hasher.finalize().to_vec();
-        ChannelId { merchant_id, customer_id, initial_balance, salt, timestamp, hashed_id }
+        ChannelId { merchant_id, customer_id, initial_balance, salt, hashed_id }
     }
 
     pub fn merchant(&self) -> String {
@@ -60,15 +40,11 @@ impl ChannelId {
     }
 
     pub fn customer(&self) -> String {
-        String::from_utf8(self.customer_id.clone()).unwrap_or_else(|_| "Merchant".to_string())
+        String::from_utf8(self.customer_id.clone()).unwrap_or_else(|_| "Customer".to_string())
     }
 
     pub fn initial_balance(&self) -> Balances {
         self.initial_balance
-    }
-
-    pub fn timestamp(&self) -> &DateTime<Utc> {
-        &self.timestamp
     }
 
     pub fn hash(&self) -> &[u8] {
@@ -90,7 +66,6 @@ impl Debug for ChannelId {
             .field("salt", &hex::encode(&self.salt))
             .field("initial balance (merchant)", &self.initial_balance.merchant)
             .field("initial balance (customer)", &self.initial_balance.customer)
-            .field("timestamp", &self.timestamp)
             .field("hashed_id", &hex::encode(&self.hashed_id))
             .finish()
     }
@@ -116,37 +91,31 @@ mod test {
     use crate::channel_id::ChannelId;
     use crate::state_machine::Balances;
     use blake2::Blake2b;
-    use chrono::{TimeZone, Utc};
     use digest::consts::{U16, U32};
 
     #[test]
     fn channel_id() {
-        let ts = Utc.with_ymd_and_hms(2024, 11, 12, 0, 0, 0).unwrap();
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
-        let id = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance, ts);
+        let id = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance);
         assert_eq!(id.merchant(), "merchant");
         assert_eq!(id.customer(), "customer");
         assert_eq!(id.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
         assert_eq!(id.initial_balance().customer.to_piconero(), 750_000_000_000);
-        assert_eq!(id.to_string(), "48a2718ff244700ad846c905794a4cc6");
+        assert_eq!(id.to_string(), "a2edd1f8091cc375b12357b427a748ba");
     }
 
     #[test]
     fn id_equality() {
-        let ts = Utc.with_ymd_and_hms(2024, 11, 12, 0, 0, 0).unwrap();
-        let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
+        let amt = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let amt2 = Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("0.5").unwrap());
-        let id1 = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance, ts);
-        let id2 = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance, ts);
-        let id3 =
-            ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance, Utc::now());
-        let id4 = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("Bob", "customer", "test", balance, ts);
-        let id5 = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "Charlie", "test", balance, ts);
-        let id6 = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "Charlie", "test", amt2, ts);
-        let id7 = ChannelId::new_with_timestamp::<Blake2b<U32>, _, _, _>("merchant", "customer", "test", balance, ts);
-        let id8 = ChannelId::new_with_timestamp::<Blake2b<U16>, _, _, _>("merchant", "customer", "xxxx", balance, ts);
+        let id1 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", amt);
+        let id2 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", amt);
+        let id4 = ChannelId::new::<Blake2b<U16>, _, _, _>("Bob", "customer", "test", amt);
+        let id5 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "Charlie", "test", amt);
+        let id6 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "Charlie", "test", amt2);
+        let id7 = ChannelId::new::<Blake2b<U32>, _, _, _>("merchant", "customer", "test", amt);
+        let id8 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "xxxx", amt);
         assert_eq!(id1, id2);
-        assert_ne!(id1, id3);
         assert_ne!(id1, id4);
         assert_ne!(id1, id5);
         assert_ne!(id1, id6);

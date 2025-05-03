@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+libgrease = { workspace = true }
 futures = { workspace = true }
 hex = "0.4.3"
 libp2p = { workspace = true, features = [ "identify", "json", "macros", "noise", "request-response", "tcp", "tokio", "yamux"] }

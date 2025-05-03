@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
@@ -8,7 +9,7 @@ pub enum LifeCycleError {
     Proposal(#[from] InvalidProposal),
 }
 
-#[derive(Clone, Debug, Error)]
+#[derive(Clone, Debug, Error, Serialize, Deserialize)]
 pub enum InvalidProposal {
     #[error("A channel requires one merchant role and one customer role")]
     IncompatibleRoles,

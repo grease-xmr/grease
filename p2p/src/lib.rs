@@ -7,5 +7,5 @@ mod network_client;
 
 pub use event_loop::EventLoop;
 pub use identity::{ChannelIdentity, IdentityError};
-pub use message_types::{GreaseRequest, GreaseResponse, PeerConnectionCommand, PeerConnectionEvent};
+pub use message_types::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnectionEvent};
 pub use network_client::{new_connection, Client, PeerConnection};
