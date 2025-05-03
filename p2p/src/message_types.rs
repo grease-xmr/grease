@@ -57,7 +57,7 @@ pub enum ClientCommand {
     MultiSigSetupRequest {
         peer_id: PeerId,
         multi_sig_setup: usize, // todo
-        sender: oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>,
+        sender: oneshot::Sender<MultiSigSetupResponse>,
     },
     ResponseToMultiSigSetup {
         res: MultiSigSetupResponse,
@@ -66,7 +66,7 @@ pub enum ClientCommand {
     KesReadyNotification {
         peer_id: PeerId,
         kes_ready: usize, // todo
-        sender: oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>,
+        sender: oneshot::Sender<AckKesNotification>,
     },
     AckKesReadyNotification {
         res: AckKesNotification,
@@ -75,7 +75,7 @@ pub enum ClientCommand {
     FundingTxRequestStart {
         peer_id: PeerId,
         funding_tx: usize, // todo
-        sender: oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>,
+        sender: oneshot::Sender<FundingTxStartResponse>,
     },
     ResponseToFundingTxRequestStart {
         res: FundingTxStartResponse,
@@ -84,7 +84,7 @@ pub enum ClientCommand {
     FundingTxFinalizeRequest {
         peer_id: PeerId,
         funding_tx: usize, // todo
-        sender: oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>,
+        sender: oneshot::Sender<FundingTxFinalizeResponse>,
     },
     ResponseToFundingTxFinalizeRequest {
         res: FundingTxFinalizeResponse,
@@ -93,7 +93,7 @@ pub enum ClientCommand {
     FundingTxBroadcastNotification {
         peer_id: PeerId,
         funding_tx: usize, // todo
-        sender: oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>,
+        sender: oneshot::Sender<AckFundingTxBroadcast>,
     },
     AckFundingTxBroadcastNotification {
         res: AckFundingTxBroadcast,
@@ -107,19 +107,19 @@ pub enum ClientCommand {
     Shutdown(oneshot::Sender<bool>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MultiSigSetupResponse;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FundingTxStartResponse;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FundingTxFinalizeResponse;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AckFundingTxBroadcast;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AckKesNotification;
 
 #[derive(Debug)]

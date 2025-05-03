@@ -13,7 +13,7 @@ pub async fn start_server(cmd: ServerCommand, config: GlobalOptions) -> Result<(
     let identity = assign_identity(path, config.id_name.as_ref())?;
     let (mut network_client, mut network_events, network_event_loop) = new_connection(identity.take_keypair()).await?;
     // Spawn the network task for it to run in the background.
-    tokio::spawn(network_event_loop.run());
+    let handle = tokio::spawn(network_event_loop.run());
     network_client.start_listening(cmd.listen_address).await?;
     while let Some(ev) = network_events.next().await {
         trace!("Event received.");
@@ -27,6 +27,7 @@ pub async fn start_server(cmd: ServerCommand, config: GlobalOptions) -> Result<(
             }
         }
     }
+    handle.await?;
     info!("Server has shut down.");
     Ok(())
 }
@@ -49,7 +50,6 @@ pub async fn handle_incoming_grease_request(
     };
     if let Err(err) = result {
         error!("Error handling request: {err}");
-        //todo - retry logic
     }
 }
 

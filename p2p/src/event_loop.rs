@@ -280,6 +280,12 @@ impl EventLoop {
         error: OutboundFailure,
     ) {
         warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
+        if let Some(sender) = self.pending_new_channel_proposals.remove(&request_id) {
+            debug!("Removing pending channel proposal for request id: {request_id}");
+            let reason = RejectReason::NotSent(format!("Outbound request failed. Error: {error}"));
+            let response = RejectChannelProposal::new(reason, RetryOptions::close_only());
+            sender.send(Err(response)).unwrap()
+        }
     }
 
     /// Handle a failed inbound request
