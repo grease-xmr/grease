@@ -32,9 +32,6 @@ pub enum CliCommand {
     /// Run the server.
     #[command(name = "serve", alias = "start")]
     Serve(ServerCommand),
-    /// Channel commands. These commands connect to a peer, execute and then quit.
-    #[command(name = "channel", alias = "chan")]
-    Channel(ChannelCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -61,62 +58,9 @@ pub struct ServerCommand {
     /// The address to listen to. The default is `/ip4/127.0.0.1/tcp/7740`.
     #[arg(long = "listen-address", short = 'a', default_value = "/ip4/127.0.0.1/tcp/7740")]
     pub listen_address: Multiaddr,
-}
-
-#[derive(Debug, Args)]
-pub struct ChannelCommand {
-    /// The address of the server to connect to. It must contain a peer id.
-    /// Examples:
-    /// /ip4/192.168.1.100/tcp/7740/p2p/QmZzv3sdlfkdlsdfd...
-    /// /dns4/grease.example.com/tcp/7740/p2p/QmZzv3sdlfkdlsdfd...
-    #[arg(long = "server", short = 's', verbatim_doc_comment)]
-    pub server_address: Multiaddr,
-    /// The action to perform.
-    #[command(subcommand)]
-    pub action: ChannelAction,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ChannelAction {
-    /// List all open channels and their status.
-    List,
-    /// Open a new channel.
-    Open {
-        /// The amount to deposit in the channel.
-        our_amount: u64,
-        /// The amount the peer must deposit in the channel.
-        their_amount: Option<u64>,
-    },
-    /// Send a payment over an existing channel.
-    Send,
-    /// Initiate closure of an existing channel.
-    Close,
-    /// Dispute the forced closure of a channel by the counterparty.
-    Dispute,
-}
-
-impl ChannelAction {
-    pub fn extract_new_channel_data(&self) -> Option<NewChannelProposal> {
-        match self {
-            ChannelAction::Open { our_amount, their_amount } => {
-                let initial_balances = Balances::new(
-                    MoneroAmount::from_piconero(*our_amount),
-                    MoneroAmount::from_piconero(their_amount.unwrap_or(0)),
-                );
-                Some(NewChannelProposal {
-                    role: ChannelRole::Customer,
-                    merchant_pubkey: "todo".to_string(),
-                    customer_pubkey: "todo".to_string(),
-                    kes_public_key: "todo".to_string(),
-                    initial_balances,
-                    customer_partial_channel_id: vec![],
-                    merchant_partial_channel_id: vec![],
-                    channel_name: "".to_string(),
-                })
-            }
-            _ => None,
-        }
-    }
+    /// Disable the server's interactive user interface.
+    #[arg(long = "quiet", short = 'q', default_value_t = false)]
+    pub quiet: bool,
 }
 
 pub struct GlobalOptions {
