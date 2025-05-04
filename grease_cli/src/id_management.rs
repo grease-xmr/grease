@@ -2,7 +2,7 @@ use crate::config::{GlobalOptions, IdCommand};
 use crate::error::ServerError;
 use anyhow::anyhow;
 use grease_p2p::ChannelIdentity;
-use log::info;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,44 +10,64 @@ use std::path::{Path, PathBuf};
 pub fn exec_id_command(cmd: IdCommand, config: GlobalOptions) -> Result<(), anyhow::Error> {
     match cmd {
         IdCommand::Create { name } => {
-            let path = config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
-            let mut local_identities = load_or_create_identities(&path)?;
-            let identity = match name {
-                Some(name) => ChannelIdentity::random_with_id(name.clone()),
-                None => ChannelIdentity::random(),
-            };
-            if local_identities.contains(identity.id()) {
-                return Err(anyhow!("Identity with id {} already exists.", identity.id()));
-            }
-            println!("Identity created: {identity}");
-            local_identities.insert(identity.id().to_string(), identity);
-            println!("Saving identities to {}", path.to_str().unwrap_or("[invalid utf-8 path]"));
-            local_identities.save(&path)?;
+            let id = create_identity(&config, name)?;
+            println!("Identity saved: {id}");
         }
         IdCommand::List => {
-            let path = config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
-            let local_identities = load_or_create_identities(&path)?;
-            println!("{} Local identities found.", local_identities.identities.len());
-            for (_, id) in local_identities.identities {
-                println!("{id}");
-            }
+            let ids = list_identities(&config)?;
+            println!("{}", ids.join("\n"));
         }
         IdCommand::Delete { id } => {
-            let path = config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
-            let mut local_identities = load_or_create_identities(&path)?;
-            match local_identities.remove(&id) {
-                Some(identity) => {
-                    println!("Identity deleted: {identity}");
-                    local_identities.save(&path)?;
-                }
-                None => {
-                    return Err(anyhow!("Identity with id {} not found.", id));
-                }
+            if delete_identity(&config, &id)? {
+                println!("Identity deleted: {id}");
+            } else {
+                println!("Identity not found: {id}");
             }
         }
     }
     Ok(())
 }
+
+pub fn delete_identity(config: &GlobalOptions, id: &String) -> Result<bool, anyhow::Error> {
+    let path = config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
+    let mut local_identities = load_or_create_identities(&path)?;
+    match local_identities.remove(&id) {
+        Some(identity) => {
+            info!("Identity deleted: {identity}");
+            local_identities.save(&path)?;
+            Ok(true)
+        }
+        None => {
+            info!("Cannot delete identity with id {id}. It is not in the database.");
+            Ok(false)
+        }
+    }
+}
+
+pub fn create_identity(config: &GlobalOptions, name: Option<String>) -> Result<ChannelIdentity, anyhow::Error> {
+    let path = config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
+    let mut local_identities = load_or_create_identities(&path)?;
+    let identity = match name {
+        Some(name) => ChannelIdentity::random_with_id(name.clone()),
+        None => ChannelIdentity::random(),
+    };
+    if local_identities.contains(identity.id()) {
+        return Err(anyhow!("Identity with id {} already exists.", identity.id()));
+    }
+    local_identities.insert(identity.id().to_string(), identity.clone());
+    info!("Saving identities to {}", path.to_str().unwrap_or("[invalid utf-8 path]"));
+    local_identities.save(&path)?;
+    Ok(identity)
+}
+
+pub fn list_identities(config: &GlobalOptions) -> Result<Vec<String>, anyhow::Error> {
+    let path = config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
+    let local_identities = load_or_create_identities(&path)?;
+    debug!("{} Local identities found.", local_identities.identities.len());
+    let ids = local_identities.identities.iter().map(|(_, id)| id.to_string()).collect::<Vec<String>>();
+    Ok(ids)
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct LocalIdentitySet {
     pub identities: HashMap<String, ChannelIdentity>,

@@ -15,26 +15,59 @@ pub mod commands {
     pub const LIST_CHANNELS: &str = "List channels";
     pub const LIST_IDENTITIES: &str = "List identities";
     pub const LOGOUT: &str = "Logout";
-    pub const MAKE_PAYMENT_ON_CHANNEL: &str = "Make a payment on channel";
     pub const NAV_BACK: &str = "Back";
-    pub const NAV_TO_CHANNELS_MENU: &str = "Payment Channels Menu";
-    pub const NAV_TO_IDENTITY_MENU: &str = "Identity Menu";
+    pub const NAV_TO_CUSTOMER_MENU: &str = "For Customers";
+    pub const NAV_TO_IDENTITY_MENU: &str = "Manage Identities";
+    pub const NAV_TO_MERCHANT_MENU: &str = "For Merchants";
+    pub const PAYMENT_REQUEST: &str = "Request payment";
+    pub const PAYMENT_SEND: &str = "Send payment";
     pub const PROPOSE_CHANNEL: &str = "Create New channel";
     pub const REMOVE_IDENTITY: &str = "Remove identity";
+    pub const SHARE_MERCHANT_INFO: &str = "Share merchant info";
 }
 
 pub use commands::*;
 
-pub const TOP_MENU: [&str; 3] = [NAV_TO_CHANNELS_MENU, NAV_TO_IDENTITY_MENU, EXIT];
+pub const TOP_MENU: [&str; 4] = [NAV_TO_CUSTOMER_MENU, NAV_TO_MERCHANT_MENU, NAV_TO_IDENTITY_MENU, EXIT];
 
-pub const IDENTITY_MENU: [&str; 7] =
-    [ADD_IDENTITY, LIST_IDENTITIES, LOGOUT, REMOVE_IDENTITY, NAV_TO_CHANNELS_MENU, NAV_BACK, EXIT];
+pub const IDENTITY_MENU: [&str; 8] = [
+    LIST_IDENTITIES,
+    ADD_IDENTITY,
+    REMOVE_IDENTITY,
+    NAV_TO_CUSTOMER_MENU,
+    NAV_TO_MERCHANT_MENU,
+    NAV_BACK,
+    LOGOUT,
+    EXIT,
+];
 
-pub const CHANNELS_MENU: [&str; 6] =
-    [CONNECT_TO_CHANNEL, PROPOSE_CHANNEL, LIST_CHANNELS, NAV_TO_IDENTITY_MENU, NAV_BACK, EXIT];
+pub const CUSTOMER_MENU: [&str; 11] = [
+    CONNECT_TO_CHANNEL,
+    PROPOSE_CHANNEL,
+    LIST_CHANNELS,
+    PAYMENT_SEND,
+    PAYMENT_REQUEST,
+    NAV_TO_IDENTITY_MENU,
+    NAV_BACK,
+    CLOSE_CHANNEL,
+    FORCE_CLOSE_CHANNEL,
+    DISPUTE_CHANNEL_CLOSE,
+    EXIT,
+];
 
-pub const ACTIVE_CHANNEL_MENU: [&str; 6] =
-    [MAKE_PAYMENT_ON_CHANNEL, CLOSE_CHANNEL, FORCE_CLOSE_CHANNEL, DISPUTE_CHANNEL_CLOSE, NAV_BACK, EXIT];
+pub const MERCHANT_MENU: [&str; 11] = [
+    CONNECT_TO_CHANNEL,
+    SHARE_MERCHANT_INFO,
+    LIST_CHANNELS,
+    PAYMENT_SEND,
+    PAYMENT_REQUEST,
+    NAV_TO_IDENTITY_MENU,
+    NAV_BACK,
+    CLOSE_CHANNEL,
+    FORCE_CLOSE_CHANNEL,
+    DISPUTE_CHANNEL_CLOSE,
+    EXIT,
+];
 
 pub fn top_menu() -> &'static Menu {
     &("Main", &TOP_MENU)
@@ -44,10 +77,10 @@ pub fn identity_menu() -> &'static Menu {
     &("Identities", &IDENTITY_MENU)
 }
 
-pub fn channels_menu() -> &'static Menu {
-    &("Payment Channels", &CHANNELS_MENU)
+pub fn customer_menu() -> &'static Menu {
+    &("Customers", &CUSTOMER_MENU)
 }
 
-pub fn active_channel_menu() -> &'static Menu {
-    &("Active Channel", &ACTIVE_CHANNEL_MENU)
+pub fn merchant_menu() -> &'static Menu {
+    &("Merchants", &MERCHANT_MENU)
 }

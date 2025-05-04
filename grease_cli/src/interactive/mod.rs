@@ -5,7 +5,9 @@ use std::fmt::Display;
 pub mod formatting;
 pub mod menus;
 use crate::config::GlobalOptions;
-use crate::id_management::{default_id_path, load_or_create_identities};
+use crate::id_management::{
+    create_identity, default_id_path, delete_identity, list_identities, load_or_create_identities,
+};
 use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use menus::*;
@@ -72,7 +74,22 @@ impl InteractiveApp {
             match self.current_menu.1[i] {
                 LOGOUT => self.logout(),
                 NAV_BACK => self.pop_menu(),
+                NAV_TO_CUSTOMER_MENU => self.select_menu(customer_menu()),
+                NAV_TO_MERCHANT_MENU => self.select_menu(merchant_menu()),
+                NAV_TO_IDENTITY_MENU => self.select_menu(identity_menu()),
                 EXIT => break,
+                ADD_IDENTITY => handle_response(self.create_identity()),
+                REMOVE_IDENTITY => handle_response(self.delete_identity()),
+                LIST_IDENTITIES => handle_response(self.list_identities()),
+                CLOSE_CHANNEL => println!("Coming soon"),
+                CONNECT_TO_CHANNEL => println!("Coming soon"),
+                DISPUTE_CHANNEL_CLOSE => println!("Coming soon"),
+                FORCE_CLOSE_CHANNEL => println!("Coming soon"),
+                LIST_CHANNELS => println!("Coming soon"),
+                PAYMENT_REQUEST => println!("Coming soon"),
+                PAYMENT_SEND => println!("Coming soon"),
+                PROPOSE_CHANNEL => println!("Coming soon"),
+                SHARE_MERCHANT_INFO => println!("Coming soon"),
                 _ => continue,
             }
         }
@@ -84,20 +101,25 @@ impl InteractiveApp {
         println!("Logged out");
     }
 
-    async fn add_profile(&mut self) -> Result<String> {
+    fn create_identity(&mut self) -> Result<String> {
         let name = dialoguer::Input::<String>::new().with_prompt("Enter new identity name").interact()?;
-        let identity = ChannelIdentity::random_with_id(name);
+        let id = create_identity(&self.config, Some(name))?;
+        Ok(id.to_string())
+    }
 
+    fn list_identities(&mut self) -> Result<String> {
+        let id = list_identities(&self.config)?;
+        Ok(format!("Found {} identities:\n{}", id.len(), id.join("\n")))
+    }
+
+    fn delete_identity(&mut self) -> Result<String> {
         let path = self.config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
-        let mut local_identities = load_or_create_identities(&path)?;
-        if local_identities.contains(identity.id()) {
-            return Err(anyhow!("Identity with id {} already exists.", identity.id()));
-        }
-        println!("Identity created: {identity}");
-        local_identities.insert(identity.id().to_string(), identity);
-        println!("Saving identities to {}", path.to_str().unwrap_or("[invalid utf-8 path]"));
-        local_identities.save(&path)?;
-        Ok("Identity added successfully".into())
+        let local_identities = load_or_create_identities(&path)?;
+        let names = local_identities.ids().cloned().collect::<Vec<String>>();
+        let i = FuzzySelect::new().with_prompt("Select identity to delete").items(&names).interact()?;
+        let name = &names[i];
+        delete_identity(&self.config, name)?;
+        Ok(format!("Identity {name} deleted"))
     }
 }
 
@@ -108,8 +130,8 @@ fn print_logo() {
 
 fn handle_response<T: Display>(res: Result<T>) {
     match res {
-        Ok(res) => println!("{res}"),
-        Err(e) => println!("Error: {}", e),
+        Ok(res) => println!("Ok.\n{res}\n\n"),
+        Err(e) => println!("Error.\n{}", e),
     }
 }
 
