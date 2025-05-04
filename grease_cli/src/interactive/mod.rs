@@ -51,8 +51,7 @@ impl InteractiveApp {
     pub fn menu_prompt(&self) -> String {
         let breadcrumbs = self.breadcrumbs.iter().map(|m| m.0).collect::<Vec<&str>>().join(" » ");
         let status = if self.is_logged_in() {
-            let identity = self.identity.as_ref().expect("User is logged in. Identity should not be None");
-            identity.id()
+            self.identity.as_ref().map(|identity| identity.id()).unwrap_or("Unknown")
         } else {
             "Not logged in"
         };

@@ -23,7 +23,7 @@ pub mod commands {
     pub const PAYMENT_SEND: &str = "Send payment";
     pub const PROPOSE_CHANNEL: &str = "Create New channel";
     pub const REMOVE_IDENTITY: &str = "Remove identity";
-    pub const SHARE_MERCHANT_INFO: &str = "Create new channel";
+    pub const SHARE_MERCHANT_INFO: &str = "Display new channel QR code";
 }
 
 pub use commands::*;
