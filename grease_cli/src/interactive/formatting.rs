@@ -20,9 +20,8 @@ fn markdown_style(table: &mut Table) {
     table.set_format(markdown_format());
 }
 
-pub fn format_server_id_with_qr_code(server_info: &String) -> String {
-    let qr_link = format!("server details go here: {server_info}");
-    let code = QrCode::new(qr_link)
+pub fn qr_code(info: &str) -> String {
+    let code = QrCode::new(info)
         .map(|code| {
             code.render::<unicode::Dense1x2>()
                 .dark_color(unicode::Dense1x2::Dark)

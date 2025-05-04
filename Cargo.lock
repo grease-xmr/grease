@@ -1110,6 +1110,7 @@ dependencies = [
  "prettytable-rs",
  "qrcode",
  "serde",
+ "serde_json",
  "serde_yml",
  "thiserror 2.0.12",
  "tokio",
