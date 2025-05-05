@@ -51,6 +51,7 @@ impl Debug for Curve25519Secret {
 }
 
 impl Serialize for Curve25519Secret {
+    /// Serializes the secret key as a hex-encoded string.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
