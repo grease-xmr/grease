@@ -123,7 +123,7 @@ impl Display for ConversationIdentity {
 
 impl Debug for ConversationIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ChannelIdentity({self})")
+        write!(f, "ConversationIdentity({self})")
     }
 }
 
@@ -131,7 +131,7 @@ impl PartialEq for ConversationIdentity {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
             && self.keypair.public() == other.keypair.public()
-            && self.peer_id.to_base58() == self.peer_id.to_base58()
+            && self.peer_id.to_base58() == other.peer_id.to_base58()
     }
 }
 

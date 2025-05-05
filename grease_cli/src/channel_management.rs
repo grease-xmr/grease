@@ -41,8 +41,8 @@ where
     W: MultiSigWallet,
     KES: KeyEscrowService,
 {
-    identity: ConversationIdentity,
-    peer_info: ContactInfo,
-    seed_info: ChannelSeedInfo<P>,
-    state: ChannelLifeCycle<P, C, W, KES>,
+    pub identity: ConversationIdentity,
+    pub peer_info: ContactInfo,
+    pub seed_info: ChannelSeedInfo<P>,
+    pub state: ChannelLifeCycle<P, C, W, KES>,
 }

@@ -253,7 +253,7 @@ where
     pub user_label: String,
 }
 
-/// The builder dtruct for the [`ChannelSeedInfo`].
+/// The builder struct for the [`ChannelSeedInfo`].
 /// See [`ChannelSeedInfo`] for more information about each field.
 pub struct ChannelSeedBuilder<P>
 where
@@ -292,8 +292,8 @@ impl<P: PublicKey> ChannelSeedBuilder<P> {
         self
     }
 
-    pub fn with_user_label(mut self, partial_channel_id: String) -> Self {
-        self.user_label = Some(partial_channel_id);
+    pub fn with_user_label(mut self, label: impl Into<String>) -> Self {
+        self.user_label = Some(label.into());
         self
     }
 

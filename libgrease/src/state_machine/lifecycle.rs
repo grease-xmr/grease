@@ -302,7 +302,7 @@ where
             (Open, OnStartClose(info)) => Self::log_and_consolidate(Open, self.open_to_closing(*info)),
             (Open, OnForceClose(info)) => Self::log_and_consolidate(Open, self.open_to_dispute(*info)),
             (Closing, OnSuccessfulClose(info)) => Self::log_and_consolidate(Closing, self.closing_to_closed(*info)),
-            (Closing, OnForceClose(info)) => Self::log_and_consolidate(Open, self.closing_to_dispute(*info)),
+            (Closing, OnForceClose(info)) => Self::log_and_consolidate(Closing, self.closing_to_dispute(*info)),
             (Disputing, OnDisputeResolved(info)) => {
                 Self::log_and_consolidate(Disputing, self.disputing_to_closed(*info))
             }
