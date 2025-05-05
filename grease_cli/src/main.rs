@@ -4,6 +4,9 @@ use grease_cli::id_management::exec_id_command;
 use grease_cli::server::start_server;
 
 #[tokio::main]
+/// Entry point for the CLI application.
+///
+/// Initializes logging, parses command-line arguments, loads configuration, and executes the specified command. Exits the process with an error message if configuration loading or command execution fails.
 async fn main() {
     env_logger::init();
     let options: CliOptions = CliOptions::parse();

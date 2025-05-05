@@ -76,6 +76,10 @@ pub struct GlobalOptions {
 }
 
 impl GlobalOptions {
+    /// Loads global configuration options from a YAML file.
+    ///
+    /// If a path is provided, attempts to load the configuration from that file; otherwise, uses the default configuration path.
+    /// Returns an error if the file does not exist or cannot be parsed.
     pub fn load_config<F: AsRef<Path>>(path: Option<F>) -> Result<Self, anyhow::Error> {
         let path = path.map(|p| p.as_ref().to_path_buf()).unwrap_or_else(default_config_path);
         if !path.exists() {
@@ -87,18 +91,22 @@ impl GlobalOptions {
         Ok(config)
     }
 
+    /// Returns a clone of the configured server listening address, if set.
     pub fn server_address(&self) -> Option<Multiaddr> {
         self.server_address.clone()
     }
 
+    /// Returns a clone of the configured Curve25519 public key, if set.
     pub fn kes_public_key(&self) -> Option<Curve25519PublicKey> {
         self.kes_public_key.clone()
     }
 
+    /// Returns the optional user label configured for channels.
     pub fn user_label(&self) -> Option<String> {
         self.user_label.clone()
     }
 
+    /// Returns a clone of the initial Curve25519 secret key, if set in the configuration.
     pub fn initial_secret(&self) -> Option<Curve25519Secret> {
         self.initial_secret.clone()
     }

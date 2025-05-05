@@ -20,6 +20,7 @@ impl<P> OutOfBandMerchantInfo<P>
 where
     P: PublicKey,
 {
+    /// Creates a new `OutOfBandMerchantInfo` with the given contact and channel seed information.
     pub fn new(contact: ContactInfo, seed: ChannelSeedInfo<P>) -> Self {
         OutOfBandMerchantInfo { contact, seed }
     }
