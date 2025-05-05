@@ -1,23 +1,23 @@
 #![doc = include_str!("../README.md")]
 
+use crate::id_management::default_config_path;
+use anyhow::anyhow;
 use clap::{Args, Parser, Subcommand};
-use grease_p2p::message_types::NewChannelProposal;
-use libgrease::amount::MoneroAmount;
-use libgrease::payment_channel::ChannelRole;
-use libgrease::state_machine::Balances;
+use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libp2p::Multiaddr;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Grease Monero Payment Channels.
 ///
 /// Payment channel management and command-line client for grease.
 #[derive(Parser, Debug)]
 #[command(version, about)]
-pub struct Config {
+pub struct CliOptions {
     /// Path to the configuration file. The default is `$HOME/.grease/config.yml`.
     #[arg(long = "config-file", short = 'c')]
     pub config_file: Option<PathBuf>,
-    /// Peer id name to use. If omitted, the first peer record in `$HOME/.grease/config.yml` is used.
+    /// P2P identity to use. If omitted, the first record in the identity database is used.
     #[arg(long = "id")]
     pub id_name: Option<String>,
     #[command(subcommand)]
@@ -63,14 +63,43 @@ pub struct ServerCommand {
     pub quiet: bool,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GlobalOptions {
-    pub config_file: Option<PathBuf>,
-    pub id_name: Option<String>,
+    pub identities_file: Option<PathBuf>,
+    pub preferred_identity: Option<String>,
+    pub server_address: Option<Multiaddr>,
+    pub kes_public_key: Option<Curve25519PublicKey>,
+    /// A name, or label that will be inserted into every channel you are part of.
+    /// Make it descriptive and somewhat unique.
+    pub user_label: Option<String>,
+    pub initial_secret: Option<Curve25519Secret>,
 }
 
-impl Config {
-    pub fn to_parts(self) -> (GlobalOptions, CliCommand) {
-        let global = GlobalOptions { config_file: self.config_file, id_name: self.id_name };
-        (global, self.command)
+impl GlobalOptions {
+    pub fn load_config<F: AsRef<Path>>(path: Option<F>) -> Result<Self, anyhow::Error> {
+        let path = path.map(|p| p.as_ref().to_path_buf()).unwrap_or_else(default_config_path);
+        if !path.exists() {
+            return Err(anyhow!("Configuration file not found: {}", path.display()));
+        }
+        let file = std::fs::File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+        let config = serde_yml::from_reader(reader)?;
+        Ok(config)
+    }
+
+    pub fn server_address(&self) -> Option<Multiaddr> {
+        self.server_address.clone()
+    }
+
+    pub fn kes_public_key(&self) -> Option<Curve25519PublicKey> {
+        self.kes_public_key.clone()
+    }
+
+    pub fn user_label(&self) -> Option<String> {
+        self.user_label.clone()
+    }
+
+    pub fn initial_secret(&self) -> Option<Curve25519Secret> {
+        self.initial_secret.clone()
     }
 }

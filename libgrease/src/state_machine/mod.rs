@@ -17,5 +17,5 @@ pub use closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseIn
 pub use disputing_channel::{DisputeOrigin, DisputeResolvedInfo, DisputingChannelState, ForceCloseInfo};
 pub use establishing_channel::{Balances, EstablishingChannelState};
 pub use lifecycle::{ChannelLifeCycle, LifecycleStage};
-pub use new_channel::NewChannelBuilder;
+pub use new_channel::{ChannelSeedBuilder, ChannelSeedInfo, NewChannelBuilder};
 pub use open_channel::EstablishedChannelState;

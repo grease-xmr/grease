@@ -1,29 +1,33 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::ChannelIdentity;
+use grease_p2p::{ContactInfo, ConversationIdentity};
 use std::fmt::Display;
 
 pub mod formatting;
 pub mod menus;
+use crate::channel_management::OutOfBandMerchantInfo;
 use crate::config::GlobalOptions;
 use crate::id_management::{
-    create_identity, default_id_path, delete_identity, list_identities, load_or_create_identities, LocalIdentitySet,
+    create_identity, default_config_path, delete_identity, list_identities, load_or_create_identities, KeyManager,
+    LocalIdentitySet,
 };
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
 use dialoguer::theme::Theme;
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use libgrease::amount::MoneroAmount;
+use libgrease::crypto::keys::Curve25519Secret;
+use libgrease::state_machine::{Balances, ChannelSeedBuilder};
+use log::{info, warn};
 use menus::*;
-use qrcode::render::unicode;
-use qrcode::QrCode;
-use serde_json::json;
+use rand::Rng;
 
 pub struct InteractiveApp {
-    identity: Option<ChannelIdentity>,
+    identity: Option<ConversationIdentity>,
     config: GlobalOptions,
     identities: Option<LocalIdentitySet>,
     current_menu: &'static Menu,
     breadcrumbs: Vec<&'static Menu>,
+    key_manager: KeyManager,
 }
 
 impl InteractiveApp {
@@ -31,7 +35,17 @@ impl InteractiveApp {
         let identity = None;
         let current_menu = top_menu();
         let breadcrumbs = vec![top_menu()];
-        Self { identity, current_menu, breadcrumbs, config, identities: None }
+        let secret = config.initial_secret().unwrap_or_else(|| {
+            warn!("No `initial_secret` found in config file. Generating a random one.");
+            Curve25519Secret::random(&mut rand::rng())
+        });
+        let key_manager = KeyManager::new(secret);
+        let identities = config.identities_file.as_ref().map(|p| load_or_create_identities(&p).ok()).flatten();
+        let mut app = Self { identity, current_menu, breadcrumbs, config, identities, key_manager };
+        if let Some(id) = app.config.preferred_identity.clone() {
+            app.login_as(&id);
+        }
+        app
     }
 
     pub fn is_logged_in(&self) -> bool {
@@ -44,8 +58,26 @@ impl InteractiveApp {
         }
         let theme = ColorfulTheme { values_style: Style::new().yellow().dim(), ..ColorfulTheme::default() };
         let (name, id) = self.select_identity(&theme)?;
-        self.identity = Some(id.clone());
+        self.login_as(&name).ok_or_else(|| anyhow!("Identity not found"))?;
         Ok(format!("Logged in as {name}"))
+    }
+
+    pub fn login_as<'a>(&mut self, name: &'a str) -> Option<&'a str> {
+        self.identities
+            .as_ref()
+            .and_then(|ids| ids.get(name).cloned())
+            .and_then(|mut id| match (id.address(), self.config.server_address()) {
+                (None, Some(config_addr)) => {
+                    info!("Setting identity address from config file");
+                    id.set_address(config_addr);
+                    Some(id)
+                }
+                _ => Some(id),
+            })
+            .map(|id| {
+                self.identity = Some(id);
+                name
+            })
     }
 
     pub fn menu_prompt(&self) -> String {
@@ -119,11 +151,16 @@ impl InteractiveApp {
         Ok(format!("Found {} identities:\n{}", id.len(), id.join("\n")))
     }
 
-    fn select_identity(&mut self, theme: &dyn Theme) -> Result<(String, &ChannelIdentity)> {
+    fn select_identity(&mut self, theme: &dyn Theme) -> Result<(String, &ConversationIdentity)> {
         let ids = match self.identities {
             Some(ref identities) => identities,
             None => {
-                let path = self.config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
+                let path = self
+                    .config
+                    .identities_file
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| anyhow!("Identity file location not specified in config file"))?;
                 let local_identities = load_or_create_identities(&path)?;
                 self.identities = Some(local_identities);
                 self.identities.as_ref().expect("Should never be None")
@@ -136,7 +173,7 @@ impl InteractiveApp {
     }
 
     fn delete_identity(&mut self) -> Result<String> {
-        let path = self.config.config_file.as_ref().cloned().unwrap_or_else(default_id_path);
+        let path = self.config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
         let local_identities = load_or_create_identities(&path)?;
         let names = local_identities.ids().cloned().collect::<Vec<String>>();
         let i = FuzzySelect::new().with_prompt("Select identity to delete").items(&names).interact()?;
@@ -149,7 +186,6 @@ impl InteractiveApp {
         if !self.is_logged_in() {
             let _ = self.login()?;
         }
-        let id = self.identity.as_ref().expect("User is logged in. Identity should not be None");
         let valid_xmr = |v: &String| -> Result<(), &str> {
             match MoneroAmount::from_xmr(v) {
                 Some(_) => Ok(()),
@@ -164,20 +200,36 @@ impl InteractiveApp {
             .with_prompt("Enter merchant initial balance")
             .validate_with(valid_xmr)
             .interact()?;
-        let peer_id = id.peer_id().to_base58();
-        let info = json!({
-            "new_channel_info": {
-                "merchant_peer_id": peer_id,
-                "merchant_public_key": "TBC",
-                "initial_balances": {
-                    "customer": customer_balance,
-                    "merchant": merchant_balance,
-                },
-            },
-        });
-        let info = info.to_string();
-        let qr = qr_code(&info);
-        Ok(format!("Channel info:\n{qr}\n{info}"))
+        let balances = Balances::new(
+            MoneroAmount::from_xmr(&merchant_balance).ok_or_else(|| anyhow!("Invalid merchant balance"))?,
+            MoneroAmount::from_xmr(&customer_balance).ok_or_else(|| anyhow!("Invalid customer balance"))?,
+        );
+        let contact_info =
+            self.identity.as_ref().map(|id| id.contact_info()).flatten().ok_or_else(|| {
+                anyhow!("No contact info found. Is the server address is configured in the config file?")
+            })?;
+        let kes = self
+            .config
+            .kes_public_key()
+            .ok_or_else(|| anyhow!("No KES public key found. Is `kes_public_key` configured in the config file?"))?;
+        let label = self
+            .config
+            .user_label()
+            .ok_or_else(|| anyhow!("No user label found. Is `user_label` configured in the config file?"))?;
+        let index = rand::rng().random();
+        // Definitely not the way to do this in production, but hacking this in for now
+        let channel_id = format!("{label}-{index}");
+        let (_secret, channel_pubkey) = self.key_manager.new_keypair(index);
+        let seed_info = ChannelSeedBuilder::default()
+            .with_pubkey(channel_pubkey)
+            .with_kes_public_key(kes)
+            .with_initial_balances(balances)
+            .with_user_label(channel_id)
+            .build()?;
+        let info = OutOfBandMerchantInfo::new(contact_info, seed_info);
+        let val = serde_json::to_string(&info)?;
+        let qr = qr_code(&val);
+        Ok(format!("Channel info:\n{qr}\n{val}"))
     }
 }
 
