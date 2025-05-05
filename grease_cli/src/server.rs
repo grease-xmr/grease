@@ -1,5 +1,5 @@
 use crate::config::{GlobalOptions, ServerCommand};
-use crate::id_management::{assign_identity, default_id_path};
+use crate::id_management::{assign_identity, default_config_path};
 use crate::interactive::InteractiveApp;
 use futures::StreamExt;
 use grease_p2p::errors::PeerConnectionError;
@@ -13,8 +13,8 @@ pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
 pub async fn start_server(cmd: ServerCommand, config: GlobalOptions) -> Result<(), anyhow::Error> {
     info!("Starting server");
     if cmd.quiet {
-        let path = config.config_file.unwrap_or_else(default_id_path);
-        let identity = assign_identity(path, config.id_name.as_ref())?;
+        let path = config.identities_file.unwrap_or_else(default_config_path);
+        let identity = assign_identity(path, config.preferred_identity.as_ref())?;
         let (mut network_client, mut network_events, network_event_loop) =
             new_connection(identity.take_keypair()).await?;
         // Spawn the network task for it to run in the background.

@@ -391,8 +391,8 @@ pub mod test {
             .with_customer_initial_balance(initial_customer_amount)
             .with_merchant_initial_balance(initial_merchant_amount)
             .with_peer_public_key(merchant_pubkey.clone())
-            .with_my_partial_channel_id(b"me".to_vec())
-            .with_peer_partial_channel_id(b"you".to_vec())
+            .with_my_partial_channel_id("me")
+            .with_peer_partial_channel_id("you")
             .build::<Blake2b512>()
             .expect("Failed to build initial state");
         // Create a new channel state machine
@@ -414,8 +414,8 @@ pub mod test {
             customer_pubkey: initial_state.customer_pubkey.clone(),
             kes_public_key: initial_state.kes_public_key.clone(),
             initial_balances: initial_state.initial_balances,
-            customer_partial_channel_id: initial_state.customer_partial_channel_id.clone(),
-            merchant_partial_channel_id: initial_state.merchant_partial_channel_id.clone(),
+            customer_label: initial_state.customer_partial_channel_id.clone(),
+            merchant_label: initial_state.merchant_partial_channel_id.clone(),
         };
         let event = LifeCycleEvent::OnAckNewChannel(Box::new(proposal));
         lc = lc.handle_event(event);

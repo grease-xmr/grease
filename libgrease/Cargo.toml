@@ -18,8 +18,10 @@ hex = "0.4.3"
 rand = { workspace = true }
 thiserror = "2.0.12"
 log = "0.4.27"
-ron = "0.10.1"
+ron = {  workspace = true }
 serde = { version = "1.0.219", features = ["derive"] }
+serde_yml = {  workspace = true }
+
 
 [dev-dependencies]
 blake2 = "0.10.6"

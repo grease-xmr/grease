@@ -15,9 +15,11 @@ futures = { workspace = true }
 libp2p = { workspace = true }
 log = { workspace = true }
 prettytable-rs = { version = "0.10.0" }
+rand = { workspace = true }
 qrcode = {  version = "0.14.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yml = {  version = "0.0.12" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+serde_yaml = "0.9.34+deprecated"

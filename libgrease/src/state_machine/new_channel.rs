@@ -8,6 +8,7 @@ use crate::state_machine::traits::ChannelState;
 use crate::state_machine::LifecycleStage;
 use digest::Digest;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// Holds all information that needs to be collected before the merchant and client can begin the channel
 /// establishment protocol. At the successful conclusion of this phase, we can emit an `OnNewChannelInfo` event with
@@ -21,9 +22,9 @@ pub struct NewChannelBuilder<P: PublicKey> {
     my_public_key: P,
     my_secret_key: P::SecretKey,
     kes_public_key: Option<P>,
-    my_partial_channel_id: Option<Vec<u8>>,
+    my_partial_channel_id: Option<String>,
     peer_public_key: Option<P>,
-    peer_partial_channel_id: Option<Vec<u8>>,
+    peer_partial_channel_id: Option<String>,
     merchant_amount: Option<MoneroAmount>,
     customer_amount: Option<MoneroAmount>,
 }
@@ -104,13 +105,13 @@ impl<P: PublicKey> NewChannelBuilder<P> {
         self
     }
 
-    pub fn with_peer_partial_channel_id(mut self, peer_partial_channel_id: Vec<u8>) -> Self {
-        self.peer_partial_channel_id = Some(peer_partial_channel_id);
+    pub fn with_peer_partial_channel_id(mut self, peer_partial_channel_id: &str) -> Self {
+        self.peer_partial_channel_id = Some(peer_partial_channel_id.to_string());
         self
     }
 
-    pub fn with_my_partial_channel_id(mut self, my_partial_channel_id: Vec<u8>) -> Self {
-        self.my_partial_channel_id = Some(my_partial_channel_id);
+    pub fn with_my_partial_channel_id(mut self, my_partial_channel_id: &str) -> Self {
+        self.my_partial_channel_id = Some(my_partial_channel_id.to_string());
         self
     }
 
@@ -150,9 +151,9 @@ where
     /// The amount of money in the channel
     pub initial_balances: Balances,
     /// Salt used to derive the channel ID - customer portion
-    pub customer_partial_channel_id: Vec<u8>,
+    pub customer_partial_channel_id: String,
     /// Salt used to derive the channel ID - merchant portion
-    pub merchant_partial_channel_id: Vec<u8>,
+    pub merchant_partial_channel_id: String,
     /// The channel ID
     pub channel_id: ChannelId,
 }
@@ -202,9 +203,9 @@ pub struct ProposedChannelInfo<P: PublicKey> {
     /// The amount of money in the channel
     pub initial_balances: Balances,
     /// Salt used to derive the channel ID - customer portion
-    pub customer_partial_channel_id: Vec<u8>,
+    pub customer_label: String,
     /// Salt used to derive the channel ID - merchant portion
-    pub merchant_partial_channel_id: Vec<u8>,
+    pub merchant_label: String,
     /// The channel ID
     pub channel_id: ChannelId,
 }
@@ -231,4 +232,95 @@ impl TimeoutReason {
     pub fn stage(&self) -> LifecycleStage {
         self.stage
     }
+}
+
+/// A record that (usually) the merchant will send offline to the customer to give them the seed information they
+/// need to complete a new channel proposal.
+#[derive(Serialize, Deserialize)]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
+pub struct ChannelSeedInfo<P>
+where
+    P: PublicKey,
+{
+    /// Peer's role. Usually, this will be [`ChannelRole::Customer`]
+    pub role: ChannelRole,
+    /// The public key of the merchant, for use in adaptor signatures
+    pub pubkey: P,
+    /// The proposed KES public key. May or may not be accepted by the peer.
+    pub kes_public_key: P,
+    /// The proposed initial set of channel balances
+    pub initial_balances: Balances,
+    pub user_label: String,
+}
+
+/// The builder dtruct for the [`ChannelSeedInfo`].
+/// See [`ChannelSeedInfo`] for more information about each field.
+pub struct ChannelSeedBuilder<P>
+where
+    P: PublicKey,
+{
+    role: ChannelRole,
+    pubkey: Option<P>,
+    kes_public_key: Option<P>,
+    initial_balances: Option<Balances>,
+    user_label: Option<String>,
+}
+
+impl<P: PublicKey> ChannelSeedBuilder<P> {
+    pub fn new(peer_role: ChannelRole) -> Self {
+        ChannelSeedBuilder {
+            role: peer_role,
+            pubkey: None,
+            kes_public_key: None,
+            initial_balances: None,
+            user_label: None,
+        }
+    }
+
+    pub fn with_pubkey(mut self, pubkey: P) -> Self {
+        self.pubkey = Some(pubkey);
+        self
+    }
+
+    pub fn with_kes_public_key(mut self, kes_public_key: P) -> Self {
+        self.kes_public_key = Some(kes_public_key);
+        self
+    }
+
+    pub fn with_initial_balances(mut self, initial_balances: Balances) -> Self {
+        self.initial_balances = Some(initial_balances);
+        self
+    }
+
+    pub fn with_user_label(mut self, partial_channel_id: String) -> Self {
+        self.user_label = Some(partial_channel_id);
+        self
+    }
+
+    pub fn build(self) -> Result<ChannelSeedInfo<P>, MissingSeedInfo> {
+        let pubkey = self.pubkey.ok_or(MissingSeedInfo::MissingPublicKey)?;
+        let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::MissingKesPublicKey)?;
+        let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::MissingInitialBalances)?;
+        let user_label = self.user_label.ok_or(MissingSeedInfo::MissingPartialChannelId)?;
+
+        Ok(ChannelSeedInfo { role: self.role, pubkey, kes_public_key, initial_balances, user_label })
+    }
+}
+
+impl<P: PublicKey> Default for ChannelSeedBuilder<P> {
+    fn default() -> Self {
+        ChannelSeedBuilder::new(ChannelRole::Customer)
+    }
+}
+
+#[derive(Debug, Clone, Error)]
+pub enum MissingSeedInfo {
+    #[error("Missing public key")]
+    MissingPublicKey,
+    #[error("Missing KES public key")]
+    MissingKesPublicKey,
+    #[error("Missing initial balances")]
+    MissingInitialBalances,
+    #[error("Missing partial channel ID")]
+    MissingPartialChannelId,
 }

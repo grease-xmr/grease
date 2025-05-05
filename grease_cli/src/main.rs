@@ -1,17 +1,23 @@
 use clap::Parser;
-use grease_cli::config::{CliCommand, Config};
+use grease_cli::config::{CliCommand, CliOptions, GlobalOptions};
 use grease_cli::id_management::exec_id_command;
 use grease_cli::server::start_server;
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    let config: Config = Config::parse();
-    let (global_options, command) = config.to_parts();
+    let options: CliOptions = CliOptions::parse();
+    let config = match GlobalOptions::load_config(options.config_file) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("** Error in configuration file** \n {err}");
+            std::process::exit(1);
+        }
+    };
 
-    let result = match command {
-        CliCommand::Id(id_command) => exec_id_command(id_command, global_options),
-        CliCommand::Serve(serve_command) => start_server(serve_command, global_options).await,
+    let result = match options.command {
+        CliCommand::Id(id_command) => exec_id_command(id_command, config),
+        CliCommand::Serve(serve_command) => start_server(serve_command, config).await,
     };
 
     match result {
