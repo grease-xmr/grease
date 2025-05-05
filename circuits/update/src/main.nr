@@ -1,6 +1,6 @@
 use dep::bignum;
-use dep::bignum::BigNumTrait;
-use dep::bignum::fields::U256;
+use dep::bignum::{BigNum, BigNumTrait};
+use dep::bignum::fields::U256::U256;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
@@ -24,11 +24,11 @@ fn VerifyCOF(
     let hash_scalar: _ = pedersen_hash([VCOF_CONSTANT, witness_im1]);
 
     //Clamp to Baby Jubjub order
-    let hash_bignum = U256::U256::from(hash_scalar);
-    let l_bignum = U256::U256::from(library::L);
+    let l_bignum: U256 = U256::from(library::L);
+
+    let hash_bignum = U256::from(hash_scalar);
     let mod_bignum = hash_bignum.umod(l_bignum);
     let mod_field = bignum::bignum::to_field(mod_bignum);
-    assert_lt(mod_field, library::L); //TODO: Is this necessary since the function has already been calculated?
 
     assert_eq(mod_field, witness_i); //TODO: Is this necessary since the function has already been calculated?
 

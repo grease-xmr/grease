@@ -1,4 +1,4 @@
-# NIZK Circuits for Greace interactive protocol
+# NIZK Circuits for Grease interactive protocol
 
 ## Prerequisites
 
@@ -22,25 +22,28 @@ bbup
 ## Noir proving system shell commands
 
 ### Compiler
-`nargo check`
-`nargo compile`
+`nargo check --workspace`
+`nargo compile --workspace`
 
-### Generate the verification key and save to ./target/vk
+### Generate the verification keys and save to ./target/vk
 ```bash
 mkdir target/vk
-bb write_vk -b ./target/Greasev0.json -o ./target/vk -v
-nargo execute -p Prover.toml
+bb write_vk -b ./target/Greasev0.json -o ./target/vk/vk.key -v
+bb write_vk -b ./target/GreaseUpdatev0.json -o ./target/vk/vkUpdate.key -v
+nargo execute -p Prover.toml --workspace
 ```
 
 ### Prove and save to ./target/proof
 ```bash
 mkdir target/proof
-bb prove -b ./target/Greasev0.json -w ./target/Greasev0.gz -o ./target/proof -v
+bb prove -b ./target/Greasev0.json -w ./target/Greasev0.gz -o ./target/proof/proof.key -v
+bb prove -b ./target/GreaseUpdatev0.json -w ./target/GreaseUpdatev0.gz -o ./target/proof/proofUpdate.key -v
 ```
 
-### Verify the proof
+### Verify the proofs
 ```bash
-bb verify -v -k ./target/vk/vk -p ./target/proof/proof
+bb verify -v -k ./target/vk/vk.key -p ./target/proof/proof.key
+bb verify -v -k ./target/vk/vkUpdate.key -p ./target/proof/proofUpdate.key
 ```
 
 Hint: If you get a `bad_alloc` error, make sure that the `-k` and `-p` paths point to the proof and verification key 
@@ -48,12 +51,17 @@ _files_ and not their enclosing folders.
 
 ## Circuit costs
 
-### VerifyWitness0
+### init
 gates: 28742
 
-### VerifyTi
-gates: 4962
+### update
+gates: 14373
 
-### VerifyWitnessSharing
-gates: 19664
+## Proof sizes
+
+### init
+2496 bytes
+
+### update
+2272 bytes
 

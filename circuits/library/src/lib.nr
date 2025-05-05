@@ -1,3 +1,6 @@
+use dep::bignum;
+use dep::bignum::BigNumTrait;
+use dep::bignum::fields::U256;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
@@ -11,6 +14,8 @@ global BASE8: [Field; 2] = [
     16950150798460657717958625567821834550301663161624707787222815936182638968203,
 ];
 
+global generator: Curve<BabyJubJubParams> = BabyJubJub::from((BASE8[0], BASE8[1]));
+
 // Baby Jubjub curve order [251 bit value]
 pub global L: Field = 2736030358979909402780800718157159386076813972158567259200215660948447373041;
 
@@ -18,8 +23,6 @@ pub global L: Field = 2736030358979909402780800718157159386076813972158567259200
 pub fn field_scalar_to_point(value: Field) -> edwards::Curve<BabyJubJubParams> {
     // Ensure value < l.
     assert_lt(value, L);
-
-    let generator: Curve<BabyJubJubParams> = BabyJubJub::from((BASE8[0], BASE8[1]));
 
     // ScalarField is parameterised by the number of 4-bit slices it contains.
     // Since value is already known to be max 251 bits, there are 63 slices.
@@ -62,7 +65,7 @@ pub fn encrypt_message(
 /// Verify T_i [given previous VerifyCOF() and original VerifyWitness0()]
 pub fn VerifyTi(T_i: edwards::Curve<BabyJubJubParams>, witness_i: Field) {
     //Produce statement point
-    let public_key = field_scalar_to_point(witness_i);
+    let public_key: Curve<BabyJubJubParams> = field_scalar_to_point(witness_i);
     assert_eq(public_key, T_i);
 }
 
@@ -76,8 +79,6 @@ pub fn FeldmanSecretShare_2_of_2(
     // Ensure a_1 < l.
     assert_lt(a_1, L);
 
-    let generator: Curve<BabyJubJubParams> = BabyJubJub::from((BASE8[0], BASE8[1]));
-
     // ScalarField is parameterised by the number of 4-bit slices it contains.
     // Since secret is already known to be max 251 bits, there are 63 slices.
     let secret_scalar: ScalarField<63> = ScalarField::from(secret);
@@ -88,11 +89,19 @@ pub fn FeldmanSecretShare_2_of_2(
     let a_1_scalar: ScalarField<63> = ScalarField::from(a_1);
     let c_1: Curve<BabyJubJubParams> = generator.mul(a_1_scalar);
 
-    let share_1: Field = secret + a_1;
-    assert_lt(share_1, L);
+    //Clamp to Baby Jubjub order
+    let l_bignum: U256::U256 = U256::U256::from(L);
 
-    let share_2 = secret + (a_1 * 2);
-    assert_lt(share_2, L);
+    let share_1_calc: Field = secret + a_1;
+    let share_1_calc_bignum = U256::U256::from(share_1_calc);
+    let share_1_calc_mod_bignum = share_1_calc_bignum.umod(l_bignum);
+    let share_1_calc_mod_field = bignum::bignum::to_field(share_1_calc_mod_bignum);
 
-    (c_0, c_1, share_1, share_2)
+    // let share_2 = secret + (a_1 * 2);
+    let share_2_calc = share_1_calc_mod_field + a_1;
+    let share_2_calc_bignum = U256::U256::from(share_2_calc);
+    let share_2_calc_mod_bignum = share_2_calc_bignum.umod(l_bignum);
+    let share_2_calc_mod_field = bignum::bignum::to_field(share_2_calc_mod_bignum);
+
+    (c_0, c_1, share_1_calc_mod_field, share_2_calc_mod_field)
 }
