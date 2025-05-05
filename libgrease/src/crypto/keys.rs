@@ -45,12 +45,32 @@ impl Curve25519Secret {
 impl SecretKey for Curve25519Secret {}
 
 impl Debug for Curve25519Secret {
+    /// Formats the `Curve25519Secret` for debugging without revealing secret data.
+    ///
+    /// Always outputs the fixed string `"Curve25519Secret"`, omitting any sensitive information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let secret = Curve25519Secret::random(&mut rand::thread_rng());
+    /// assert_eq!(format!("{:?}", secret), "Curve25519Secret");
+    /// ```
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Curve25519Secret")
     }
 }
 
 impl Serialize for Curve25519Secret {
+    /// Serializes the secret key as a hex-encoded string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use serde_json;
+    /// let secret = Curve25519Secret::random(&mut rand::thread_rng());
+    /// let json = serde_json::to_string(&secret).unwrap();
+    /// assert!(json.contains(&secret.as_hex()));
+    /// ```
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,

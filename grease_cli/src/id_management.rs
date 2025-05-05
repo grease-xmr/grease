@@ -16,11 +16,40 @@ pub struct KeyManager {
 }
 
 impl KeyManager {
+    /// Creates a new `KeyManager` from the given Curve25519 secret key, deriving its corresponding public key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let secret = Curve25519Secret::generate();
+    /// let manager = KeyManager::new(secret);
+    /// assert_eq!(manager.initial_public_key, Curve25519PublicKey::from_secret(&manager.initial_key));
+    /// ```
     pub fn new(initial_key: Curve25519Secret) -> Self {
         let initial_public_key = Curve25519PublicKey::from_secret(&initial_key);
         KeyManager { initial_key, initial_public_key }
     }
 
+    /// Deterministically generates a Curve25519 keypair based on the initial secret key and a given index.
+    ///
+    /// The resulting keypair is derived by hashing the initial secret scalar and the provided index,
+    /// ensuring that the same inputs always produce the same keypair. This is useful for generating
+    /// multiple related keys from a single root secret.
+    ///
+    /// # Parameters
+    /// - `index`: The index used to derive a unique keypair from the initial secret.
+    ///
+    /// # Returns
+    /// A tuple containing the derived secret key and its corresponding public key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let initial_secret = Curve25519Secret::random();
+    /// let manager = KeyManager::new(initial_secret);
+    /// let (secret, public) = manager.new_keypair(0);
+    /// assert_eq!(public, Curve25519PublicKey::from_secret(&secret));
+    /// ```
     pub fn new_keypair(&self, index: u64) -> (Curve25519Secret, Curve25519PublicKey) {
         let secret = self.initial_key.as_scalar().as_bytes();
         let mut buf = [0u8; 40];
@@ -33,6 +62,20 @@ impl KeyManager {
     }
 }
 
+/// Executes an identity management command, handling creation, listing, or deletion of conversation identities.
+///
+/// Depending on the provided `IdCommand` variant, this function creates a new identity, lists all existing identity IDs, or deletes a specified identity. Output is printed to standard output for user feedback.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the command completes successfully, or an error if any operation fails.
+///
+/// # Examples
+///
+/// ```
+/// let config = GlobalOptions::default();
+/// exec_id_command(IdCommand::List, config).unwrap();
+/// ```
 pub fn exec_id_command(cmd: IdCommand, config: GlobalOptions) -> Result<(), anyhow::Error> {
     match cmd {
         IdCommand::Create { name } => {
@@ -54,6 +97,16 @@ pub fn exec_id_command(cmd: IdCommand, config: GlobalOptions) -> Result<(), anyh
     Ok(())
 }
 
+/// Deletes a conversation identity by ID from the local identities file.
+///
+/// Returns `Ok(true)` if the identity was found and deleted, or `Ok(false)` if no such identity exists. Updates the identities file on successful deletion.
+///
+/// # Examples
+///
+/// ```
+/// let deleted = delete_identity(&config, &"alice".to_string()).unwrap();
+/// assert!(deleted || !deleted); // true if deleted, false if not found
+/// ```
 pub fn delete_identity(config: &GlobalOptions, id: &String) -> Result<bool, anyhow::Error> {
     let path = config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
     let mut local_identities = load_or_create_identities(&path)?;
@@ -70,6 +123,21 @@ pub fn delete_identity(config: &GlobalOptions, id: &String) -> Result<bool, anyh
     }
 }
 
+/// Creates and saves a new conversation identity, optionally with a specified ID.
+///
+/// If a name is provided, generates a random identity using that name as its ID; otherwise, generates a random identity with an automatically assigned ID. Fails if an identity with the same ID already exists. The new identity is persisted to the configured identities file.
+///
+/// # Errors
+///
+/// Returns an error if the identity ID already exists or if there is a failure loading or saving the identities file.
+///
+/// # Examples
+///
+/// ```
+/// let config = GlobalOptions { identities_file: None };
+/// let identity = create_identity(&config, Some("alice".to_string())).unwrap();
+/// assert_eq!(identity.id(), "alice");
+/// ```
 pub fn create_identity(config: &GlobalOptions, name: Option<String>) -> Result<ConversationIdentity, anyhow::Error> {
     let path = config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
     let mut local_identities = load_or_create_identities(&path)?;
@@ -86,6 +154,19 @@ pub fn create_identity(config: &GlobalOptions, name: Option<String>) -> Result<C
     Ok(identity)
 }
 
+/// Returns a list of all stored conversation identity IDs.
+///
+/// Loads the local identities from the configured file path and collects their IDs as strings.
+///
+/// # Examples
+///
+/// ```
+/// let config = GlobalOptions::default();
+/// let ids = list_identities(&config).unwrap();
+/// for id in ids {
+///     println!("{}", id);
+/// }
+/// ```
 pub fn list_identities(config: &GlobalOptions) -> Result<Vec<String>, anyhow::Error> {
     let path = config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
     let local_identities = load_or_create_identities(&path)?;
@@ -100,6 +181,16 @@ pub struct LocalIdentitySet {
 }
 
 impl LocalIdentitySet {
+    /// Loads a `LocalIdentitySet` from the specified file path.
+    ///
+    /// Returns an error if the file cannot be read or deserialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let ids = LocalIdentitySet::try_load("identities.yml")?;
+    /// assert!(!ids.is_empty());
+    /// ```
     pub fn try_load<P: AsRef<Path>>(path: P) -> Result<Self, ServerError> {
         let ids = load_identities_file(path)?;
         Ok(ids)
@@ -113,31 +204,105 @@ impl LocalIdentitySet {
         self.identities.is_empty()
     }
 
+    /// Checks whether an identity with the specified ID exists in the set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut set = LocalIdentitySet { identities: std::collections::HashMap::new() };
+    /// set.identities.insert("alice".to_string(), ConversationIdentity::random());
+    /// assert!(set.contains("alice"));
+    /// assert!(!set.contains("bob"));
+    /// ```
     pub fn contains(&self, id: &str) -> bool {
         self.identities.contains_key(id)
     }
 
+    /// Retrieves a reference to a conversation identity by its ID, if it exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut set = LocalIdentitySet { identities: HashMap::new() };
+    /// set.identities.insert("alice".to_string(), ConversationIdentity::random());
+    /// assert!(set.get("alice").is_some());
+    /// assert!(set.get("bob").is_none());
+    /// ```
     pub fn get(&self, id: &str) -> Option<&ConversationIdentity> {
         self.identities.get(id)
     }
 
+    /// Inserts a conversation identity with the specified ID, replacing any existing identity with the same ID.
+    ///
+    /// Returns the previous identity associated with the ID if it existed, or `None` if the ID was not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut set = LocalIdentitySet { identities: std::collections::HashMap::new() };
+    /// let id = "alice".to_string();
+    /// let identity = ConversationIdentity::random();
+    /// assert!(set.insert(id.clone(), identity).is_none());
+    /// ```
     pub fn insert(&mut self, id: String, identity: ConversationIdentity) -> Option<ConversationIdentity> {
         self.identities.insert(id, identity)
     }
 
+    /// Returns an iterator over the IDs of all stored conversation identities.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut set = LocalIdentitySet { identities: HashMap::new() };
+    /// set.identities.insert("alice".to_string(), ConversationIdentity::random());
+    /// let ids: Vec<&String> = set.ids().collect();
+    /// assert_eq!(ids, vec![&"alice".to_string()]);
+    /// ```
     pub fn ids(&self) -> impl Iterator<Item = &String> {
         self.identities.keys()
     }
 
+    /// Returns an iterator over all stored conversation identities.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut set = LocalIdentitySet { identities: HashMap::new() };
+    /// set.identities.insert("alice".to_string(), ConversationIdentity::random());
+    /// let ids: Vec<_> = set.identities().collect();
+    /// assert_eq!(ids.len(), 1);
+    /// ```
     pub fn identities(&self) -> impl Iterator<Item = &ConversationIdentity> {
         self.identities.values()
     }
 
+    /// Removes and returns the identity associated with the given ID, if it exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut set = LocalIdentitySet { identities: HashMap::new() };
+    /// let id = "alice".to_string();
+    /// let identity = ConversationIdentity::random();
+    /// set.identities.insert(id.clone(), identity.clone());
+    /// assert_eq!(set.remove(&id), Some(identity));
+    /// assert!(set.remove(&id).is_none());
+    /// ```
     pub fn remove<S: AsRef<str>>(&mut self, id: S) -> Option<ConversationIdentity> {
         self.identities.remove(id.as_ref())
     }
 }
 
+/// Returns the default path to the configuration file, typically `$HOME/.grease/config.yml`.
+///
+/// If the home directory cannot be determined, the path defaults to `./.grease/config.yml`.
+///
+/// # Examples
+///
+/// ```
+/// let path = default_config_path();
+/// assert!(path.ends_with(".grease/config.yml"));
+/// ```
 pub fn default_config_path() -> PathBuf {
     let mut home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.push(".grease");
@@ -145,6 +310,17 @@ pub fn default_config_path() -> PathBuf {
     home
 }
 
+/// Loads a set of conversation identities from a YAML file.
+///
+/// Attempts to open and deserialize the specified file into a `LocalIdentitySet`.
+///
+/// # Examples
+///
+/// ```
+/// let ids = load_identities_file("/tmp/identities.yml").unwrap();
+/// assert!(ids.is_empty() || ids.ids().count() > 0);
+/// ```
+pub fn load_identities_file<P: AsRef<Path>>(path: P) -> Result<LocalIdentitySet, ServerError>
 pub fn load_identities_file<P: AsRef<Path>>(path: P) -> Result<LocalIdentitySet, ServerError> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
@@ -152,6 +328,17 @@ pub fn load_identities_file<P: AsRef<Path>>(path: P) -> Result<LocalIdentitySet,
     Ok(local_peer_set)
 }
 
+/// Saves the provided set of conversation identities to a YAML file at the specified path.
+///
+/// Creates any necessary parent directories if they do not exist. Overwrites the file if it already exists.
+///
+/// # Examples
+///
+/// ```
+/// let ids = LocalIdentitySet::default();
+/// save_config_file("/tmp/identities.yml", &ids).unwrap();
+/// ```
+pub fn save_config_file<P: AsRef<Path>>(path: P, ids: &LocalIdentitySet) -> Result<(), ServerError> {
 pub fn save_config_file<P: AsRef<Path>>(path: P, ids: &LocalIdentitySet) -> Result<(), ServerError> {
     // Create directory path if required
     let path = path.as_ref();
@@ -164,6 +351,17 @@ pub fn save_config_file<P: AsRef<Path>>(path: P, ids: &LocalIdentitySet) -> Resu
     Ok(())
 }
 
+/// Loads a set of local conversation identities from the specified path, or creates an empty set if the file does not exist.
+///
+/// If the file at the given path is missing, returns a new, empty `LocalIdentitySet`. Other I/O or server errors are returned as `anyhow::Error`.
+///
+/// # Examples
+///
+/// ```
+/// let path = std::path::PathBuf::from("/tmp/nonexistent.yml");
+/// let identities = load_or_create_identities(&path).unwrap();
+/// assert!(identities.is_empty());
+/// ```
 pub fn load_or_create_identities(path: &PathBuf) -> Result<LocalIdentitySet, anyhow::Error> {
     match LocalIdentitySet::try_load(path) {
         Ok(local_identities) => Ok(local_identities),
@@ -182,6 +380,17 @@ pub fn load_or_create_identities(path: &PathBuf) -> Result<LocalIdentitySet, any
     }
 }
 
+/// Selects and removes a conversation identity from the local identity set.
+///
+/// Loads identities from the specified path and returns the identity matching the given name, or the first available identity if no name is provided. Returns an error if no identities exist or if the specified identity is not found.
+///
+/// # Examples
+///
+/// ```
+/// let path = PathBuf::from("/tmp/identities.yml");
+/// let identity = assign_identity(path, None).unwrap();
+/// println!("Assigned identity ID: {}", identity.id);
+/// ```
 pub fn assign_identity(path: PathBuf, id_name: Option<&String>) -> Result<ConversationIdentity, anyhow::Error> {
     info!("Loading identities from {}", path.to_str().unwrap_or("[invalid utf-8 path]"));
     let mut local_identities = load_or_create_identities(&path)?;

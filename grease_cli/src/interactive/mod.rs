@@ -31,6 +31,17 @@ pub struct InteractiveApp {
 }
 
 impl InteractiveApp {
+    /// Creates a new `InteractiveApp` instance with the provided configuration.
+    ///
+    /// Initializes the key manager with a secret from the configuration or generates a random one if absent. Loads identities from the configured file if available, sets up the initial menu state, and attempts to auto-login using a preferred identity if specified.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let config = GlobalOptions::default();
+    /// let app = InteractiveApp::new(config);
+    /// assert!(app.breadcrumbs.len() >= 1);
+    /// ```
     pub fn new(config: GlobalOptions) -> Self {
         let identity = None;
         let current_menu = top_menu();
@@ -48,10 +59,37 @@ impl InteractiveApp {
         app
     }
 
+    /// Returns `true` if a user identity is currently logged in, otherwise `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let app = InteractiveApp::new(config);
+    /// assert!(!app.is_logged_in());
+    /// ```
     pub fn is_logged_in(&self) -> bool {
         self.identity.is_some()
     }
 
+    /// Prompts the user to select and log in as an identity.
+    ///
+    /// If already logged in, returns immediately. Otherwise, displays a selection menu for available identities and logs in as the chosen one.
+    ///
+    /// # Returns
+    ///
+    /// A message indicating the login status or the name of the logged-in identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no identity is selected or found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut app = InteractiveApp::new(config);
+    /// let result = app.login();
+    /// assert!(result.is_ok());
+    /// ```
     pub fn login(&mut self) -> Result<String> {
         if self.is_logged_in() {
             return Ok("Logged In".to_string());
@@ -62,6 +100,26 @@ impl InteractiveApp {
         Ok(format!("Logged in as {name}"))
     }
 
+    /// Attempts to log in as the identity with the given name.
+    ///
+    /// If the identity exists, sets it as the current identity. If the identity does not have an address but a server address is specified in the configuration, assigns the server address to the identity before logging in.
+    ///
+    /// # Parameters
+    /// - `name`: The name of the identity to log in as.
+    ///
+    /// # Returns
+    /// The name of the identity if login is successful, or `None` if the identity is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut app = InteractiveApp::new(config);
+    /// if let Some(name) = app.login_as("alice") {
+    ///     println!("Logged in as {name}");
+    /// } else {
+    ///     println!("Identity not found");
+    /// }
+    /// ```
     pub fn login_as<'a>(&mut self, name: &'a str) -> Option<&'a str> {
         self.identities
             .as_ref()
@@ -80,6 +138,16 @@ impl InteractiveApp {
             })
     }
 
+    /// Constructs a formatted prompt string displaying the current menu navigation path and login status.
+    ///
+    /// The prompt shows the breadcrumb trail of menus and either the current identity's ID or a "Not logged in" message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let prompt = app.menu_prompt();
+    /// assert!(prompt.contains("Not logged in") || prompt.contains("»"));
+    /// ```
     pub fn menu_prompt(&self) -> String {
         let breadcrumbs = self.breadcrumbs.iter().map(|m| m.0).collect::<Vec<&str>>().join(" » ");
         let status = if self.is_logged_in() {
@@ -146,11 +214,36 @@ impl InteractiveApp {
         Ok(id.to_string())
     }
 
+    /// Lists all available identities from the configuration.
+    ///
+    /// Returns a formatted string containing the number of identities found and their names.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut app = InteractiveApp::new(config);
+    /// let output = app.list_identities().unwrap();
+    /// assert!(output.contains("Found"));
+    /// ```
     fn list_identities(&mut self) -> Result<String> {
         let id = list_identities(&self.config)?;
         Ok(format!("Found {} identities:\n{}", id.len(), id.join("\n")))
     }
 
+    /// Prompts the user to select an identity from the available list, loading identities from file if necessary.
+    ///
+    /// Returns the selected identity's name and a reference to its `ConversationIdentity`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identities file location is not specified in the configuration or if loading identities fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (name, identity) = app.select_identity(&theme)?;
+    /// println!("Selected identity: {}", name);
+    /// ```
     fn select_identity(&mut self, theme: &dyn Theme) -> Result<(String, &ConversationIdentity)> {
         let ids = match self.identities {
             Some(ref identities) => identities,
@@ -172,6 +265,17 @@ impl InteractiveApp {
         Ok((name.to_string(), ids.get(name).expect("Identity should exist")))
     }
 
+    /// Deletes a selected identity from the local identities file.
+    ///
+    /// Prompts the user to choose an identity to delete, removes it from the configured identities file, and returns a confirmation message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut app = InteractiveApp::new(config);
+    /// let result = app.delete_identity();
+    /// assert!(result.unwrap().contains("deleted"));
+    /// ```
     fn delete_identity(&mut self) -> Result<String> {
         let path = self.config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
         let local_identities = load_or_create_identities(&path)?;
@@ -182,6 +286,25 @@ impl InteractiveApp {
         Ok(format!("Identity {name} deleted"))
     }
 
+    /// Prompts for initial balances and generates merchant channel info as a QR code and JSON string.
+    ///
+    /// Prompts the user for customer and merchant initial balances, validates them as Monero amounts, and constructs a channel info object using the current identity, configuration, and a newly generated keypair. The resulting merchant info is serialized to JSON and rendered as a QR code for sharing.
+    ///
+    /// # Returns
+    /// A formatted string containing the QR code and the JSON-encoded merchant channel information.
+    ///
+    /// # Errors
+    /// Returns an error if the user is not logged in, required configuration fields are missing, balances are invalid, or serialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Assuming `app` is a mutable InteractiveApp instance with a loaded identity and config.
+    /// let result = app.share_merchant_info();
+    /// assert!(result.is_ok());
+    /// let output = result.unwrap();
+    /// assert!(output.contains("Channel info:"));
+    /// ```
     fn share_merchant_info(&mut self) -> Result<String> {
         if !self.is_logged_in() {
             let _ = self.login()?;

@@ -20,6 +20,15 @@ impl<P> OutOfBandMerchantInfo<P>
 where
     P: PublicKey,
 {
+    /// Creates a new `OutOfBandMerchantInfo` with the given contact and channel seed information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let contact = ContactInfo::default();
+    /// let seed = ChannelSeedInfo::default();
+    /// let info = OutOfBandMerchantInfo::new(contact, seed);
+    /// ```
     pub fn new(contact: ContactInfo, seed: ChannelSeedInfo<P>) -> Self {
         OutOfBandMerchantInfo { contact, seed }
     }

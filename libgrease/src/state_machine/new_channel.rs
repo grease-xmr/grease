@@ -100,16 +100,42 @@ impl<P: PublicKey> NewChannelBuilder<P> {
         })
     }
 
+    /// Sets the peer's public key for the channel builder.
+    ///
+    /// Returns a new builder instance with the peer public key assigned, allowing method chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = NewChannelBuilder::new(role, my_pubkey, my_secret_key)
+    ///     .with_peer_public_key(peer_pubkey);
+    /// ```
     pub fn with_peer_public_key(mut self, peer_public_key: P) -> Self {
         self.peer_public_key = Some(peer_public_key);
         self
     }
 
+    /// Sets the peer's partial channel ID for the builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = NewChannelBuilder::new(role, my_pubkey, my_secret_key)
+    ///     .with_peer_partial_channel_id("peer123");
+    /// ```
     pub fn with_peer_partial_channel_id(mut self, peer_partial_channel_id: &str) -> Self {
         self.peer_partial_channel_id = Some(peer_partial_channel_id.to_string());
         self
     }
 
+    /// Sets the builder's own partial channel ID label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = NewChannelBuilder::new(role, pubkey, secret_key)
+    ///     .with_my_partial_channel_id("user123");
+    /// ```
     pub fn with_my_partial_channel_id(mut self, my_partial_channel_id: &str) -> Self {
         self.my_partial_channel_id = Some(my_partial_channel_id.to_string());
         self
@@ -228,8 +254,14 @@ impl TimeoutReason {
         &self.reason
     }
 
-    /// Get the stage of the lifecycle when the timeout occurred
-    pub fn stage(&self) -> LifecycleStage {
+    /// Returns the lifecycle stage at which the timeout occurred.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let timeout = TimeoutReason::new("Timeout waiting for response", LifecycleStage::New);
+    /// assert_eq!(timeout.stage(), LifecycleStage::New);
+    /// ```    pub fn stage(&self) -> LifecycleStage {
         self.stage
     }
 }
@@ -267,6 +299,13 @@ where
 }
 
 impl<P: PublicKey> ChannelSeedBuilder<P> {
+    /// Creates a new `ChannelSeedBuilder` with the specified peer role.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = ChannelSeedBuilder::new(ChannelRole::Customer);
+    /// ```
     pub fn new(peer_role: ChannelRole) -> Self {
         ChannelSeedBuilder {
             role: peer_role,
@@ -277,26 +316,76 @@ impl<P: PublicKey> ChannelSeedBuilder<P> {
         }
     }
 
+    /// Sets the peer's public key for the channel seed information builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = ChannelSeedBuilder::new(ChannelRole::Customer)
+    ///     .with_pubkey(pubkey);
+    /// ```
     pub fn with_pubkey(mut self, pubkey: P) -> Self {
         self.pubkey = Some(pubkey);
         self
     }
 
+    /// ```
     pub fn with_kes_public_key(mut self, kes_public_key: P) -> Self {
         self.kes_public_key = Some(kes_public_key);
         self
     }
 
+    /// Sets the initial balances for the channel seed information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = ChannelSeedBuilder::default()
+    ///     .with_initial_balances(Balances { merchant: 100, customer: 50 });
+    /// ```
     pub fn with_initial_balances(mut self, initial_balances: Balances) -> Self {
         self.initial_balances = Some(initial_balances);
         self
     }
 
+    /// Sets the user label (partial channel ID) for the channel seed information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder = ChannelSeedBuilder::new(ChannelRole::Customer)
+    ///     .with_user_label("my_label".to_string());
+    /// ```
     pub fn with_user_label(mut self, partial_channel_id: String) -> Self {
         self.user_label = Some(partial_channel_id);
         self
     }
 
+    /// Attempts to construct a `ChannelSeedInfo` from the builder, returning an error if any required field is missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `MissingSeedInfo` error if the public key, KES public key, initial balances, or user label is not set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use my_crate::{ChannelSeedBuilder, ChannelRole, PublicKey, Balances};
+    ///
+    /// let pubkey = PublicKey::default();
+    /// let kes_pubkey = PublicKey::default();
+    /// let balances = Balances::new(100, 200);
+    ///
+    /// let seed_info = ChannelSeedBuilder::new(ChannelRole::Customer)
+    ///     .with_pubkey(pubkey)
+    ///     .with_kes_public_key(kes_pubkey)
+    ///     .with_initial_balances(balances)
+    ///     .with_user_label("user123".to_string())
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(seed_info.user_label, "user123");
+    /// ```
     pub fn build(self) -> Result<ChannelSeedInfo<P>, MissingSeedInfo> {
         let pubkey = self.pubkey.ok_or(MissingSeedInfo::MissingPublicKey)?;
         let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::MissingKesPublicKey)?;
@@ -308,6 +397,14 @@ impl<P: PublicKey> ChannelSeedBuilder<P> {
 }
 
 impl<P: PublicKey> Default for ChannelSeedBuilder<P> {
+    /// Creates a `ChannelSeedBuilder` with the role set to customer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let builder: ChannelSeedBuilder<MyPublicKeyType> = Default::default();
+    /// assert_eq!(builder.peer_role, ChannelRole::Customer);
+    /// ```
     fn default() -> Self {
         ChannelSeedBuilder::new(ChannelRole::Customer)
     }

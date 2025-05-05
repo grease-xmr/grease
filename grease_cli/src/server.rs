@@ -10,6 +10,23 @@ use log::{debug, error, info, trace};
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
+/// Starts the peer-to-peer payment channel server or runs the interactive application.
+///
+/// If the `quiet` flag is set in the server command, initializes the server with the specified identity and configuration, establishes a network connection, listens for incoming peer requests, and handles them asynchronously. Otherwise, launches the interactive command-line application.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the server or interactive application completes successfully, or an error if initialization or network operations fail.
+///
+/// # Examples
+///
+/// ```
+/// let cmd = ServerCommand { quiet: true, listen_address: "127.0.0.1:8080".parse().unwrap() };
+/// let config = GlobalOptions::default();
+/// tokio::spawn(async move {
+///     start_server(cmd, config).await.unwrap();
+/// });
+/// ```
 pub async fn start_server(cmd: ServerCommand, config: GlobalOptions) -> Result<(), anyhow::Error> {
     info!("Starting server");
     if cmd.quiet {

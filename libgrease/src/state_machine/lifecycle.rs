@@ -374,6 +374,16 @@ pub mod test {
     type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
     type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
 
+    /// Creates a new payment channel state machine in the `New` stage with predefined test keys and balances.
+    ///
+    /// Initializes a `NewChannelState` for a customer role using hardcoded Curve25519 keys, KES public key, and initial Monero balances. Returns the new channel lifecycle and its initial state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (lifecycle, state) = new_channel_state();
+    /// assert_eq!(lifecycle.stage(), LifecycleStage::New);
+    /// ```
     pub fn new_channel_state() -> (DummyLifecycle, NewChannelState<Curve25519PublicKey>) {
         // All this info is known, or can be scanned in from a QR code etc
         let (my_secret, my_pubkey) =
@@ -402,6 +412,18 @@ pub mod test {
         (lc, initial_state)
     }
 
+    /// Simulates the acceptance of a channel proposal, transitioning the lifecycle to the establishing phase.
+    ///
+    /// Constructs a `ProposedChannelInfo` from the provided initial state and triggers the `OnAckNewChannel` event on the given lifecycle. Asserts that the resulting lifecycle is in the `Establishing` stage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let initial_state = new_channel_state();
+    /// let lc = ChannelLifeCycle::new(initial_state.clone());
+    /// let lc = accept_proposal(lc, &initial_state);
+    /// assert_eq!(lc.stage(), LifecycleStage::Establishing);
+    /// ```
     pub fn accept_proposal(
         mut lc: DummyLifecycle,
         initial_state: &NewChannelState<Curve25519PublicKey>,

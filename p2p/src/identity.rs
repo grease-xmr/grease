@@ -27,8 +27,17 @@ pub struct ConversationIdentity {
 
 impl ConversationIdentity {
     /// Create a new identity with the given id and keypair.
-    /// The peer id is derived from the public key.
-    pub fn random_with_id<S: Into<String>>(id: S) -> Self {
+    /// Generates a new `ConversationIdentity` with the specified ID and a random Ed25519 keypair.
+    ///
+    /// The resulting identity uses the provided string as its local identifier, generates a new Ed25519 keypair for signing, and derives the peer ID from the public key. The network address is unset.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random_with_id("alice");
+    /// assert_eq!(identity.id(), "alice");
+    /// assert!(identity.address().is_none());
+    /// ```    pub fn random_with_id<S: Into<String>>(id: S) -> Self {
         let keypair = Keypair::generate_ed25519();
         let peer_id = keypair.public().to_peer_id();
         ConversationIdentity { id: id.into(), keypair, peer_id, address: None }
@@ -47,51 +56,159 @@ impl ConversationIdentity {
         &self.keypair
     }
 
+    /// Returns a reference to the libp2p `PeerId` associated with this identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// let peer_id = identity.peer_id();
+    /// println!("Peer ID: {}", peer_id);
+    /// ```
     pub fn peer_id(&self) -> &PeerId {
         &self.peer_id
     }
 
+    /// Sets the network address for this identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libp2p::multiaddr::Multiaddr;
+    /// let mut identity = ConversationIdentity::random();
+    /// let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+    /// identity.set_address(addr.clone());
+    /// assert_eq!(identity.address(), Some(&addr));
+    /// ```
     pub fn set_address(&mut self, address: Multiaddr) {
         self.address = Some(address);
     }
 
+    /// Returns the network address associated with this identity, if set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut identity = ConversationIdentity::random();
+    /// assert!(identity.address().is_none());
+    /// identity.set_address("/ip4/127.0.0.1/tcp/4001".parse().unwrap());
+    /// assert_eq!(
+    ///     identity.address().unwrap().to_string(),
+    ///     "/ip4/127.0.0.1/tcp/4001"
+    /// );
+    /// ```
     pub fn address(&self) -> Option<&Multiaddr> {
         self.address.as_ref()
     }
 
+    /// ```
     pub fn take_keypair(self) -> Keypair {
         self.keypair
     }
 
+    /// Saves the identity to a YAML file at the specified path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` if serialization fails or if the file cannot be written.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// identity.save_yml("identity.yml").unwrap();
+    /// ```
     pub fn save_yml<P: AsRef<Path>>(&self, path: P) -> Result<(), IdentityError> {
         let text = self.to_yml()?;
         std::fs::write(path, text)?;
         Ok(())
     }
 
+    /// Saves the identity to a file in RON format.
+    ///
+    /// Writes the serialized RON representation of this `ConversationIdentity` to the specified file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` if serialization or file writing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// identity.save_ron("identity.ron")?;
+    /// ```
     pub fn save_ron<P: AsRef<Path>>(&self, path: P) -> Result<(), IdentityError> {
         let text = self.to_ron()?;
         std::fs::write(path, text)?;
         Ok(())
     }
 
+    /// Serializes the identity to a YAML string.
+    ///
+    /// # Returns
+    ///
+    /// A YAML-formatted string representing the identity, or an `IdentityError` if serialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// let yaml = identity.to_yml().unwrap();
+    /// assert!(yaml.contains(&identity.id()));
+    /// ```
     pub fn to_yml(&self) -> Result<String, IdentityError> {
         let s = serde_yml::to_string(self)?;
         Ok(s)
     }
 
+    /// Serializes the identity to a pretty-printed RON string with compact arrays and maps.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the RON-formatted string on success, or an `IdentityError` if serialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// let ron_str = identity.to_ron().unwrap();
+    /// assert!(ron_str.contains("id"));
+    /// ```
     pub fn to_ron(&self) -> Result<String, IdentityError> {
         let config = PrettyConfig::new().compact_arrays(true).compact_maps(true);
         let val = ron::ser::to_string_pretty(self, config)?;
         Ok(val)
     }
 
+    /// Loads a `ConversationIdentity` from a YAML file.
+    ///
+    /// Returns an error if the file cannot be read or if deserialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::ConversationIdentity;
+    /// let identity = ConversationIdentity::load_yml("identity.yml").unwrap();
+    /// ```
     pub fn load_yml<P: AsRef<Path>>(path: P) -> Result<Self, IdentityError> {
         let text = std::fs::read_to_string(path)?;
         let identity: ConversationIdentity = serde_yml::from_str(&text)?;
         Ok(identity)
     }
 
+    /// Loads a `ConversationIdentity` from a RON-encoded file.
+    ///
+    /// Returns an error if the file cannot be read or if deserialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// identity.save_ron("identity.ron").unwrap();
+    /// let loaded = ConversationIdentity::load_ron("identity.ron").unwrap();
+    /// assert_eq!(identity, loaded);
+    /// ```
     pub fn load_ron<P: AsRef<Path>>(path: P) -> Result<Self, IdentityError> {
         let text = std::fs::read_to_string(path)?;
         let identity: ConversationIdentity = ron::from_str(&text).map_err(ron::Error::from)?;
@@ -100,8 +217,21 @@ impl ConversationIdentity {
 
     /// Return this identity as a contact info sheet. Other parties can use this to contact you.
     ///
-    /// The address must be set for this to return a contact sheet.
-    pub fn contact_info(&self) -> Option<ContactInfo> {
+    /// Returns the contact information for this identity if a network address is set.
+    ///
+    /// If the identity has an associated address, returns a `ContactInfo` struct containing the name, peer ID, and address. Otherwise, returns `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut identity = ConversationIdentity::random();
+    /// assert!(identity.contact_info().is_none());
+    ///
+    /// let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+    /// identity.set_address(addr.clone());
+    /// let info = identity.contact_info().unwrap();
+    /// assert_eq!(info.address, addr);
+    /// ```    pub fn contact_info(&self) -> Option<ContactInfo> {
         self.address.as_ref().map(|addr| ContactInfo {
             name: self.id.clone(),
             peer_id: self.peer_id.clone(),
@@ -109,25 +239,63 @@ impl ConversationIdentity {
         })
     }
 
-    /// Return an internal consistency check, that the Peer Id corresponds to the public key.
-    pub fn check(&self) -> bool {
+    /// Checks if the stored peer ID matches the peer ID derived from the public key.
+    ///
+    /// Returns `true` if the internal peer ID is consistent with the keypair's public key, otherwise `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// assert!(identity.check());
+    /// ```    pub fn check(&self) -> bool {
         self.peer_id == self.keypair.public().to_peer_id()
     }
 }
 
 impl Display for ConversationIdentity {
+    /// Formats the conversation identity as a string in the form "id:peer_id".
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random_with_id("alice");
+    /// assert_eq!(
+    ///     format!("{}", identity),
+    ///     format!("{}:{}", identity.id(), identity.peer_id())
+    /// );
+    /// ```
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.id, self.peer_id)
     }
 }
 
 impl Debug for ConversationIdentity {
+    /// Formats the `ConversationIdentity` for debugging as `ChannelIdentity({Display})`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let identity = ConversationIdentity::random();
+    /// println!("{:?}", identity); // Output: ChannelIdentity(funnynoun:peerid)
+    /// ```
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ChannelIdentity({self})")
     }
 }
 
 impl PartialEq for ConversationIdentity {
+    /// Checks if two `ConversationIdentity` instances are equal by comparing their IDs, public keys, and peer IDs.
+    ///
+    /// Returns `true` if the IDs and public keys are identical and the peer IDs match; otherwise, returns `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let id1 = ConversationIdentity::random_with_id("alice");
+    /// let id2 = id1.clone();
+    /// assert!(id1 == id2);
+    /// ```
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
             && self.keypair.public() == other.keypair.public()
