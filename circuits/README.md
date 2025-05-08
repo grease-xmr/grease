@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-`gcc` version 13 is required to run Noir. Ubuntu 22.04 does not support this version so you may need to look up how 
+`gcc` version 13 is required to run Noir. Ubuntu 22.04 does not support this version, so you may need to look up how 
 to upgrade it.
 
 ## Install the Noir compiler
@@ -16,9 +16,14 @@ curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/head
 bbup
 ```
 
-## Install Noir nightly version
+### Install Noir nightly version
 ```bash
 noirup --version nightly
+```
+
+### Verify Noir version
+```bash
+nargo --version
 ```
 
 ## Preliminary testing
@@ -28,7 +33,7 @@ noirup --version nightly
 
 ### Information
 ```bash
-nargo info --workspace`
+nargo info --workspace
 ```
 
 ### Preparation
@@ -42,25 +47,29 @@ nargo check --workspace
 nargo compile --workspace
 ```
 
-### Generate the verification keys and save to ./target/vk
+### Execution
 ```bash
-mkdir target/vk
-bb write_vk -b ./target/Greasev0.json -o ./target/vk/vk.key -v
-bb write_vk -b ./target/GreaseUpdatev0.json -o ./target/vk/vkUpdate.key -v
 nargo execute -p Prover.toml --workspace
 ```
 
 #### Per-package execution
 ```bash
-nargo execute -p Prover.toml --package Greasev0
-nargo execute -p Prover.toml --package GreaseUpdatev0
+nargo execute -p Prover.toml --package Grease
+nargo execute -p Prover.toml --package GreaseUpdate
+```
+
+### Generate the verification keys and save to ./target/vk
+```bash
+mkdir target/vk
+bb write_vk -b ./target/Grease.json -o ./target/vk/vk.key -v
+bb write_vk -b ./target/GreaseUpdate.json -o ./target/vk/vkUpdate.key -v
 ```
 
 ### Prove and save to ./target/proof
 ```bash
 mkdir target/proof
-bb prove -b ./target/Greasev0.json -w ./target/Greasev0.gz -o ./target/proof/proof.key -v
-bb prove -b ./target/GreaseUpdatev0.json -w ./target/GreaseUpdatev0.gz -o ./target/proof/proofUpdate.key -v
+bb prove -b ./target/Grease.json -w ./target/Grease.gz -o ./target/proof/proof.key -v
+bb prove -b ./target/GreaseUpdate.json -w ./target/GreaseUpdate.gz -o ./target/proof/proofUpdate.key -v
 ```
 
 ### Verify the proofs
@@ -76,5 +85,5 @@ _files_ and not their enclosing folders.
 
 | Stage      | Gates      | Proof size |
 | :--------- | :--------- | :--------- |
-| init       | 28 437     | 2 496 B    |
+| init       | 28 436     | 2 496 B    |
 | update     | 19 332     | 2 272 B    |

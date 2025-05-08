@@ -1,5 +1,5 @@
-var blake = require('blakejs')
-const { packPoint, unpackPoint, Base8, mulPointEscalar, Point, addPoint } =require( "@zk-kit/baby-jubjub")
+const blake = require('blakejs')
+const { Base8, mulPointEscalar } =require( "@zk-kit/baby-jubjub")
 
 
 const witness_im1 = BigInt('1812819055671836081919082473246651311844184517312342866801190068457152448493');
@@ -25,17 +25,13 @@ const byteArray = Buffer.from([
   ...Array(32).fill(0x00), // VCOF HASH_HEADER_CONSTANT
   ...bigIntTo32ByteArray(witness_im1),
 ]);
-console.log('byteArray length:', byteArray.length);
-console.log('byteArray:', byteArray);
 const hash = blake.blake2sHex(byteArray);
-console.log('BLAKE2s Hash hex:', hash);
 const hashBig = BigInt('0x' + hash); // Convert hex to BigInt
-console.log('BLAKE2s Hash decimal:', hashBig.toString()); // Print decimal value
 
 // Baby Jubjub curve order [251 bit value]
 const L = BigInt('2736030358979909402780800718157159386076813972158567259200215660948447373041');
 
-var witness_i = hashBig % L;
+const witness_i = hashBig % L;
 console.log('witness_i decimal:', witness_i.toString()); // Print decimal value
 
 let T_i = mulPointEscalar(Base8, witness_i);

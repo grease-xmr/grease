@@ -1,5 +1,5 @@
-var blake = require('blakejs')
-const { packPoint, unpackPoint, Base8, mulPointEscalar, Point, addPoint } =require( "@zk-kit/baby-jubjub")
+const blake = require('blakejs')
+const { Base8, mulPointEscalar, addPoint } =require( "@zk-kit/baby-jubjub")
 
 //Constants
 const nonce_peer = BigInt('1');
@@ -37,39 +37,39 @@ const L = BigInt('27360303589799094027808007181571593860768139721585672592002156
 console.log('Init: circuits/init/Prover.toml');
 console.log('');
 
-var byteArray_VerifyWitness0 = Buffer.from([
-  // ...Array(32).fill(0x00), // VerifyWitness0 HASH_HEADER_CONSTANT
+const byteArray_VerifyWitness0 = Buffer.from([
+  ...Array(32).fill(0x00), // VerifyWitness0 HASH_HEADER_CONSTANT
   ...bigIntTo32ByteArray(nonce_peer),
   ...bigIntTo32ByteArray(blinding),
 ]);
-var hash_VerifyWitness0 = blake.blake2sHex(byteArray_VerifyWitness0);
-var hashBig_VerifyWitness0 = BigInt('0x' + hash_VerifyWitness0); // Convert hex to BigInt
+const hash_VerifyWitness0 = blake.blake2sHex(byteArray_VerifyWitness0);
+const hashBig_VerifyWitness0 = BigInt('0x' + hash_VerifyWitness0); // Convert hex to BigInt
 
 let witness_0 = hashBig_VerifyWitness0 % L;
 let T_0 = mulPointEscalar(Base8, witness_0);
 
 //FeldmanSecretShare_2_of_2
 
-var c_0 = mulPointEscalar(Base8, witness_0);
-var c_1 = mulPointEscalar(Base8, a_1);
-var share_1 = (witness_0 + a_1) % L;
-var share_2 = (share_1 + a_1) % L;
+const c_0 = mulPointEscalar(Base8, witness_0);
+const c_1 = mulPointEscalar(Base8, a_1);
+const share_1 = (witness_0 + a_1) % L;
+const share_2 = (share_1 + a_1) % L;
 
 //Encrypt to peer
-var ephemeral_1 = mulPointEscalar(Base8, r_1);
-var shared_secret_1 = mulPointEscalar(pubkey_peer, r_1);
-var message_point_1 = mulPointEscalar(Base8, share_1);
-var cipher_1 = addPoint(message_point_1, shared_secret_1);
-var fi_1 = ephemeral_1;
-var enc_1 = cipher_1;
+const ephemeral_1 = mulPointEscalar(Base8, r_1);
+const shared_secret_1 = mulPointEscalar(pubkey_peer, r_1);
+const message_point_1 = mulPointEscalar(Base8, share_1);
+const cipher_1 = addPoint(message_point_1, shared_secret_1);
+const fi_1 = ephemeral_1;
+const enc_1 = cipher_1;
 
 //Encrypt to KES
-var ephemeral_2 = mulPointEscalar(Base8, r_2);
-var shared_secret_2 = mulPointEscalar(pubkey_peer, r_2);
-var message_point_2 = mulPointEscalar(Base8, share_2);
-var cipher_2 = addPoint(message_point_2, shared_secret_2);
-var fi_2 = ephemeral_2;
-var enc_2 = cipher_2;
+const ephemeral_2 = mulPointEscalar(Base8, r_2);
+const shared_secret_2 = mulPointEscalar(pubkey_KES, r_2);
+const message_point_2 = mulPointEscalar(Base8, share_2);
+const cipher_2 = addPoint(message_point_2, shared_secret_2);
+const fi_2 = ephemeral_2;
+const enc_2 = cipher_2;
 
 console.log(`a_1 = "${a_1.toString()}"`);
 console.log(`blinding = "${blinding.toString()}"`);
@@ -137,7 +137,7 @@ const byteArray = Buffer.from([
 const hash = blake.blake2sHex(byteArray);
 const hashBig = BigInt('0x' + hash); // Convert hex to BigInt
 
-var witness_i = hashBig % L;
+const witness_i = hashBig % L;
 console.log(`witness_i = "${witness_i.toString()}"`);
 console.log(`witness_im1 = "${witness_0.toString()}"`);
 

@@ -7,7 +7,7 @@ use edwards::CurveTrait;
 use std::hash::blake2s;
 
 // This is the constant for VCOF hashing
-global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32];
+global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32];//TODO: Create a domain-separation constant
 
 /// Verify COF [given VerifyWitness0() at initialization]
 fn VerifyCOF(
@@ -26,7 +26,8 @@ fn VerifyCOF(
     let pre_image_array: [u8; 64] = pre_image_slice.as_array();
     let hash_bytes: [u8; 32] = blake2s(pre_image_array);
     let hash_bytes_slice: [u8] = hash_bytes.as_slice();
-    //U256 data is structured as 257 bits and is stored in 33 bytes, so we must append a leading 0u8 which is ignored in the modulo
+    // U256 from_be_bytes expects 32 bytes + 1 byte for potential overflow
+    // We add a leading 0u8 since our data won't use the full 256-bit range and is ignored in the modulo
     let hash_bytes_33: [u8] = &[0].append(hash_bytes_slice);
     let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
 
@@ -36,7 +37,7 @@ fn VerifyCOF(
     let value_bignum = hash_bignum.umod(l_bignum);
     let value_field = bignum::bignum::to_field(value_bignum);
 
-    assert_eq(value_field, witness_i); //TODO: Is this necessary since the function has already been calculated?
+    assert_eq(value_field, witness_i);
 }
 
 /// Main function for update

@@ -98,11 +98,42 @@ pub fn FeldmanSecretShare_2_of_2(
     let share_1_calc_mod_bignum = share_1_calc_bignum.umod(l_bignum);
     let share_1_calc_mod_field = bignum::bignum::to_field(share_1_calc_mod_bignum);
 
-    // let share_2 = secret + (a_1 * 2);
+    // Calculate share_2 = secret + 2*a_1 by adding a_1 to share_1
     let share_2_calc = share_1_calc + a_1;
     let share_2_calc_bignum = U256::from(share_2_calc);
     let share_2_calc_mod_bignum = share_2_calc_bignum.umod(l_bignum);
     let share_2_calc_mod_field = bignum::bignum::to_field(share_2_calc_mod_bignum);
 
     (c_0, c_1, share_1_calc_mod_field, share_2_calc_mod_field)
+}
+
+/// Verify Feldman Secret Share is correct for all parameters and shares [given `secret` and `a_1`]
+pub fn FeldmanSecretShare_2_of_2_Optimized(
+    secret: Field,
+    a_1: Field,
+) -> (Curve<BabyJubJubParams>, Field, Field) {
+    // Given 0 < secret < l.
+    // Ensure a_1 < l.
+    assert_lt(a_1, L);
+
+    // ScalarField is parameterised by the number of 4-bit slices it contains.
+    // Since a_1 is already known to be max 251 bits, there are 63 slices.
+    let a_1_scalar: ScalarField<63> = ScalarField::from(a_1);
+    let c_1: Curve<BabyJubJubParams> = generator.mul(a_1_scalar);
+
+    //Clamp to Baby Jubjub order
+    let l_bignum: U256 = U256::from(L);
+
+    let share_1_calc: Field = secret + a_1;
+    let share_1_calc_bignum = U256::from(share_1_calc);
+    let share_1_calc_mod_bignum = share_1_calc_bignum.umod(l_bignum);
+    let share_1_calc_mod_field = bignum::bignum::to_field(share_1_calc_mod_bignum);
+
+    // Calculate share_2 = secret + 2*a_1 by adding a_1 to share_1
+    let share_2_calc = share_1_calc + a_1;
+    let share_2_calc_bignum = U256::from(share_2_calc);
+    let share_2_calc_mod_bignum = share_2_calc_bignum.umod(l_bignum);
+    let share_2_calc_mod_field = bignum::bignum::to_field(share_2_calc_mod_bignum);
+
+    (c_1, share_1_calc_mod_field, share_2_calc_mod_field)
 }
