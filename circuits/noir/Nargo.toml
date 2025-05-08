@@ -1,7 +1,0 @@
-[package]
-name = "Greasev0"
-type = "bin"
-authors = [""]
-
-[dependencies]
-edwards = { tag = "v0.2.1", git = "https://github.com/noir-lang/noir-edwards" }

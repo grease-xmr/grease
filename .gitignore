@@ -20,3 +20,4 @@ venv.bak/
 
 # test artifacts
 /libgrease/test_data/
+circuits/node_modules/
