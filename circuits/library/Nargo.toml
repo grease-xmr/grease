@@ -4,5 +4,5 @@ type = "lib"
 authors = [""]
 
 [dependencies]
-bignum = { tag = "v0.6.1", git = "https://github.com/noir-lang/noir-bignum" }
+bignum = { tag = "v0.7.1", git = "https://github.com/noir-lang/noir-bignum" }
 edwards = { tag = "v0.2.1", git = "https://github.com/noir-lang/noir-edwards" }

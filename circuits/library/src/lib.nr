@@ -1,6 +1,6 @@
 use dep::bignum;
-use dep::bignum::BigNumTrait;
-use dep::bignum::fields::U256;
+use dep::bignum::BigNum;
+use dep::bignum::fields::U256::U256;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
@@ -38,7 +38,8 @@ pub fn encrypt_message(
     r: Field,
     pubkey: edwards::Curve<BabyJubJubParams>,
 ) -> (edwards::Curve<BabyJubJubParams>, edwards::Curve<BabyJubJubParams>) {
-    // Ensure r < l.
+    // Ensure 0 < r < l.
+    assert(r != 0);
     assert_lt(r, L);
 
     // Ephemeral public key = r * G (G is the generator)
@@ -90,16 +91,16 @@ pub fn FeldmanSecretShare_2_of_2(
     let c_1: Curve<BabyJubJubParams> = generator.mul(a_1_scalar);
 
     //Clamp to Baby Jubjub order
-    let l_bignum: U256::U256 = U256::U256::from(L);
+    let l_bignum: U256 = U256::from(L);
 
     let share_1_calc: Field = secret + a_1;
-    let share_1_calc_bignum = U256::U256::from(share_1_calc);
+    let share_1_calc_bignum = U256::from(share_1_calc);
     let share_1_calc_mod_bignum = share_1_calc_bignum.umod(l_bignum);
     let share_1_calc_mod_field = bignum::bignum::to_field(share_1_calc_mod_bignum);
 
     // let share_2 = secret + (a_1 * 2);
-    let share_2_calc = share_1_calc_mod_field + a_1;
-    let share_2_calc_bignum = U256::U256::from(share_2_calc);
+    let share_2_calc = share_1_calc + a_1;
+    let share_2_calc_bignum = U256::from(share_2_calc);
     let share_2_calc_mod_bignum = share_2_calc_bignum.umod(l_bignum);
     let share_2_calc_mod_field = bignum::bignum::to_field(share_2_calc_mod_bignum);
 

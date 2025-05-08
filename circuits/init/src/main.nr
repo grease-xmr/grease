@@ -1,12 +1,14 @@
 use dep::bignum;
-use dep::bignum::BigNumTrait;
 use dep::bignum::BigNum;
-use dep::bignum::fields::U256;
+use dep::bignum::fields::U256::U256;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
 use std::field::bn254::assert_lt;
-use std::hash::pedersen_hash;
+use std::hash::blake2s;
+
+// // This is the constant for VerifyWitness0 hashing
+// global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32];
 
 /// Verify witness_0 [no given]
 fn VerifyWitness0(
@@ -22,22 +24,29 @@ fn VerifyWitness0(
     assert_lt(witness_0, library::L);
     assert_lt(blinding, library::L);
 
+    library::VerifyTi(T_0, witness_0);
+
     //Create hash (random oracle) from both peers' entropy to ensure uniqueness
-    let hash_scalar: _ = pedersen_hash([nonce_peer, blinding]);
+    // let constant_slice: [u8] = HASH_HEADER_CONSTANT.as_slice();
+    let nonce_peer_array: [u8; 32] = nonce_peer.to_be_bytes();
+    let blinding_array: [u8; 32] = blinding.to_be_bytes();
+
+    let pre_image_slice: [u8] = nonce_peer_array.as_slice().append(blinding_array);
+    let pre_image_array: [u8; 64] = pre_image_slice.as_array();
+    let hash_bytes: [u8; 32] = blake2s(pre_image_array);
+    let hash_bytes_slice: [u8] = hash_bytes.as_slice();
+    //U256 data is structured as 257 bits and is stored in 33 bytes, so we must append a leading 0u8 which is ignored in the modulo
+    let hash_bytes_33: [u8] = &[0].append(hash_bytes_slice);
+    let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
 
     //Clamp to Baby Jubjub order
-    let l_bignum = U256::U256::from(library::L);
+    let l_bignum = U256::from(library::L);
 
-    let hash_bignum = U256::U256::from(hash_scalar);
     let mod_bignum = hash_bignum.umod(l_bignum);
     let mod_field = bignum::bignum::to_field(mod_bignum);
     assert_lt(mod_field, library::L); //TODO: Is this necessary since the function has already been calculated?
     // Ensure the witness matches the reduced hash
     assert_eq(mod_field, witness_0);
-
-    //Produce statement point
-    let t_0_calc: Curve<BabyJubJubParams> = library::field_scalar_to_point(mod_field);
-    assert_eq(t_0_calc, T_0);
 }
 
 /// Verify protocol conformance of using the Feldman 2-of-2 Verifiable Secret Share on `witness_0` and encryption of shares to peer and KES [given VerifyWitness0()]
