@@ -41,7 +41,7 @@
 //!
 //! ## Properties
 //! - **Sequential Dependence**: Each pre-signature \(\hat{\sigma}_i\) depends on its predecessor \
-//! (\hat{\sigma}_{i-1}\).
+//!   (\hat{\sigma}_{i-1}\).
 //! - **Forward Security**: Compromising \(y_i\) does not expose earlier secrets \(y_0, \dots, y_{i-1}\).
 //! - **Batch Verification**: Multiple pre-signatures can be verified efficiently using VCOF proofs.
 
@@ -160,7 +160,7 @@ pub trait ConsecutiveAdaptorSignature {
         let (r, pub_r) = self.generate_keypair();
         let r_sign = pub_r.as_point() + statement.as_public_key().as_point();
         let r_sign = Curve25519PublicKey::from(r_sign);
-        let public_key = pubkey.cloned().unwrap_or_else(|| Curve25519PublicKey::from_secret(&sk));
+        let public_key = pubkey.cloned().unwrap_or_else(|| Curve25519PublicKey::from_secret(sk));
         let challenge = self.hash_to_scalar(message, &r_sign, &public_key);
         // Schnorr signature scheme for partial signature
         let s = r.as_scalar() + challenge * sk.as_scalar();
@@ -182,7 +182,7 @@ pub trait ConsecutiveAdaptorSignature {
         let r_pre = &pre_sig.s * ED25519_BASEPOINT_TABLE - pre_sig.challenge * pubkey.as_point();
         let r_sign = r_pre + statement.as_public_key().as_point();
         let r_sign = Curve25519PublicKey::from(r_sign);
-        let challenge = self.hash_to_scalar(message, &r_sign, &pubkey);
+        let challenge = self.hash_to_scalar(message, &r_sign, pubkey);
         pre_sig.challenge == challenge
     }
 
@@ -197,7 +197,7 @@ pub trait ConsecutiveAdaptorSignature {
     /// Converts pre-signature to full signature using the given witness/secret
     fn adapt_pre_signature(&self, pre_sig: &PreSignature, witness: &Self::W) -> Signature {
         let s = pre_sig.s + witness.as_scalar();
-        let challenge = pre_sig.challenge.clone();
+        let challenge = pre_sig.challenge;
         Signature { s, challenge }
     }
 

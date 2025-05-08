@@ -1,136 +1,102 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::{ContactInfo, ConversationIdentity};
+use grease_p2p::{ConversationIdentity, DummyDelegate, KeyManager, OutOfBandMerchantInfo, PaymentChannels};
 use std::fmt::Display;
 
 pub mod formatting;
 pub mod menus;
-use crate::channel_management::OutOfBandMerchantInfo;
-use crate::config::GlobalOptions;
+use crate::channel_management::{
+    MoneroChannelBuilder, MoneroLifeCycle, MoneroNetworkServer, MoneroOutOfBandMerchantInfo, MoneroPaymentChannel,
+};
+use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
-    create_identity, default_config_path, delete_identity, list_identities, load_or_create_identities, KeyManager,
-    LocalIdentitySet,
+    assign_identity, create_identity, delete_identity, list_identities, load_or_create_identities, MoneroKeyManager,
 };
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
-use dialoguer::theme::Theme;
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
+use grease_p2p::message_types::{ChannelProposalResult, NewChannelProposal};
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::keys::Curve25519Secret;
+use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::state_machine::{Balances, ChannelSeedBuilder};
-use log::{info, warn};
+use log::*;
 use menus::*;
-use rand::Rng;
+use rand::{Rng, RngCore};
 
 pub struct InteractiveApp {
-    identity: Option<ConversationIdentity>,
+    identity: ConversationIdentity,
     config: GlobalOptions,
-    identities: Option<LocalIdentitySet>,
     current_menu: &'static Menu,
     breadcrumbs: Vec<&'static Menu>,
-    key_manager: KeyManager,
+    current_channel: Option<String>,
+    server: MoneroNetworkServer,
 }
 
 impl InteractiveApp {
     /// Creates a new `InteractiveApp` instance with the provided configuration.
     ///
     /// Initializes the key manager with a secret from the configuration or generates a random one if absent. Loads identities from the configured file if available, sets up the initial menu state, and attempts to auto-login using a preferred identity if specified.
-    pub fn new(config: GlobalOptions) -> Self {
-        let identity = None;
+    pub fn new(config: GlobalOptions) -> Result<Self, anyhow::Error> {
         let current_menu = top_menu();
         let breadcrumbs = vec![top_menu()];
-        let secret = config.initial_secret().unwrap_or_else(|| {
-            warn!("No `initial_secret` found in config file. Generating a random one.");
-            Curve25519Secret::random(&mut rand::rng())
-        });
-        let key_manager = KeyManager::new(secret);
-        let identities = config.identities_file.as_ref().map(|p| load_or_create_identities(&p).ok()).flatten();
-        let mut app = Self { identity, current_menu, breadcrumbs, config, identities, key_manager };
-        if let Some(id) = app.config.preferred_identity.clone() {
-            app.login_as(&id);
+        let Some(secret) = config.initial_secret() else {
+            error!("No `initial_secret` found in config file.");
+            return Err(anyhow!("No `initial_secret` found in config file."));
+        };
+        let key_manager = MoneroKeyManager::new(secret);
+        let id_path = config.identities_file.clone().unwrap_or_else(|| config.base_path().join("identities.yml"));
+        let identity = assign_identity(&id_path, config.preferred_identity.as_ref())?;
+        let delegate = DummyDelegate;
+        let channels = PaymentChannels::load(&config.channel_directory())?;
+        let server = MoneroNetworkServer::new(identity.clone(), channels, delegate, key_manager)?;
+        let app = Self { identity, current_menu, breadcrumbs, config, current_channel: None, server };
+        Ok(app)
+    }
+
+    pub async fn save_channels(&self) -> Result<()> {
+        self.server.save_channels(&self.config.channel_directory()).await?;
+        Ok(())
+    }
+
+    async fn select_channel(&mut self) -> Result<String> {
+        let channels = self.server.list_channels().await;
+        if channels.is_empty() {
+            return Err(anyhow!("No channels found"));
         }
-        app
-    }
-
-    /// Returns `true` if a user identity is currently logged in, otherwise `false`.
-    pub fn is_logged_in(&self) -> bool {
-        self.identity.is_some()
-    }
-
-    /// Prompts the user to select and log in as an identity.
-    ///
-    /// If already logged in, returns immediately. Otherwise, displays a selection menu for available identities and logs in as the chosen one.
-    ///
-    /// # Returns
-    ///
-    /// A message indicating the login status or the name of the logged-in identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if no identity is selected or found.
-    pub fn login(&mut self) -> Result<String> {
-        if self.is_logged_in() {
-            return Ok("Logged In".to_string());
-        }
-        let theme = ColorfulTheme { values_style: Style::new().yellow().dim(), ..ColorfulTheme::default() };
-        let (name, id) = self.select_identity(&theme)?;
-        self.login_as(&name).ok_or_else(|| anyhow!("Identity not found"))?;
-        Ok(format!("Logged in as {name}"))
-    }
-
-    /// Attempts to log in as the identity with the given name.
-    ///
-    /// If the identity exists, sets it as the current identity. If the identity does not have an address but a server address is specified in the configuration, assigns the server address to the identity before logging in.
-    ///
-    /// # Parameters
-    /// - `name`: The name of the identity to log in as.
-    ///
-    /// # Returns
-    /// The name of the identity if login is successful, or `None` if the identity is not found.
-    pub fn login_as<'a>(&mut self, name: &'a str) -> Option<&'a str> {
-        self.identities
-            .as_ref()
-            .and_then(|ids| ids.get(name).cloned())
-            .and_then(|mut id| match (id.address(), self.config.server_address()) {
-                (None, Some(config_addr)) => {
-                    info!("Setting identity address from config file");
-                    id.set_address(config_addr);
-                    Some(id)
-                }
-                _ => Some(id),
-            })
-            .map(|id| {
-                self.identity = Some(id);
-                name
-            })
+        let theme = ColorfulTheme { prompt_style: Style::new().magenta().bold(), ..ColorfulTheme::default() };
+        let i = FuzzySelect::with_theme(&theme).with_prompt("Select channel").items(&channels).interact()?;
+        let name = &channels[i];
+        Ok(name.clone())
     }
 
     /// Constructs a formatted prompt string displaying the current menu navigation path and login status.
     ///
     /// The prompt shows the breadcrumb trail of menus and either the current identity's ID or a "Not logged in" message.
-    pub fn menu_prompt(&self) -> String {
+    fn menu_prompt(&self) -> String {
         let breadcrumbs = self.breadcrumbs.iter().map(|m| m.0).collect::<Vec<&str>>().join(" » ");
-        let status = if self.is_logged_in() {
-            self.identity.as_ref().map(|identity| identity.id()).unwrap_or("Unknown")
-        } else {
-            "Not logged in"
+        let p2p_identity = format!("{}@{}", self.identity.id(), self.identity.peer_id());
+        let status = match self.current_channel {
+            Some(ref channel) => channel.as_str(),
+            None => "No active channel",
         };
-        format!("{breadcrumbs:-30}{status:50}")
+        format!("\n{breadcrumbs:-30}{status:50}{p2p_identity:70}\n[Ready]")
     }
 
-    pub fn pop_menu(&mut self) {
+    fn pop_menu(&mut self) {
         if self.breadcrumbs.len() > 1 {
             self.breadcrumbs.pop();
             self.current_menu = self.breadcrumbs.last().unwrap_or(&top_menu());
         }
     }
 
-    pub fn select_menu(&mut self, menu: &'static Menu) {
+    fn select_menu(&mut self, menu: &'static Menu) {
         self.breadcrumbs.push(menu);
         self.current_menu = menu;
     }
 
     pub async fn run(&mut self) -> Result<()> {
         print_logo();
+        let at = self.identity.dial_address();
+        self.server.start_listening(at).await?;
         loop {
             let theme = ColorfulTheme { prompt_style: Style::new().magenta().bold(), ..ColorfulTheme::default() };
             let i = FuzzySelect::with_theme(&theme)
@@ -138,7 +104,6 @@ impl InteractiveApp {
                 .items(self.current_menu.1)
                 .interact()?;
             match self.current_menu.1[i] {
-                LOGOUT => self.logout(),
                 NAV_BACK => self.pop_menu(),
                 NAV_TO_CUSTOMER_MENU => self.select_menu(customer_menu()),
                 NAV_TO_MERCHANT_MENU => self.select_menu(merchant_menu()),
@@ -148,23 +113,17 @@ impl InteractiveApp {
                 REMOVE_IDENTITY => handle_response(self.delete_identity()),
                 LIST_IDENTITIES => handle_response(self.list_identities()),
                 SHARE_MERCHANT_INFO => handle_response(self.share_merchant_info()),
+                PROPOSE_CHANNEL => handle_response(self.initiate_new_channel().await),
                 CLOSE_CHANNEL => println!("Coming soon"),
-                CONNECT_TO_CHANNEL => println!("Coming soon"),
                 DISPUTE_CHANNEL_CLOSE => println!("Coming soon"),
                 FORCE_CLOSE_CHANNEL => println!("Coming soon"),
-                LIST_CHANNELS => println!("Coming soon"),
+                LIST_CHANNELS => self.print_channel_names().await,
                 PAYMENT_REQUEST => println!("Coming soon"),
                 PAYMENT_SEND => println!("Coming soon"),
-                PROPOSE_CHANNEL => println!("Coming soon"),
                 _ => continue,
             }
         }
         Ok(())
-    }
-
-    fn logout(&mut self) {
-        self.identity = None;
-        println!("Logged out");
     }
 
     fn create_identity(&mut self) -> Result<String> {
@@ -173,40 +132,99 @@ impl InteractiveApp {
         Ok(id.to_string())
     }
 
+    async fn print_channel_names(&self) {
+        let channels = self.server.list_channels().await;
+        if channels.is_empty() {
+            return println!("No channels found.");
+        }
+        let names = channels.join("\n");
+        println!("Found {} channels:\n{}", channels.len(), names);
+    }
+
+    /// Propose a new channel
+    ///
+    /// One peer, usually the customer, will propose a new channel by connecting to the merchant over the P2P network.
+    /// and submitting the channel proposal. The information, such as pubkeys, initial balances, etc., is partially
+    /// from the customer, but some will have been provided by the merchant  out-of-band (see
+    /// [`Self::share_merchant_info`]).
+    ///
+    /// If the merchant accepts the proposal, they will send a message back to the customer with the channel ID, and
+    /// we can progress to the Establishing state.
+    async fn initiate_new_channel(&mut self) -> Result<String> {
+        let oob_info = dialoguer::Input::<String>::new().with_prompt("Paste merchant info").interact()?;
+        let oob_info = serde_json::from_str::<MoneroOutOfBandMerchantInfo>(&oob_info)?;
+        let (secret, proposal) = self.create_channel_proposal(oob_info)?;
+        trace!("Generated new proposal");
+        let result = self.server.send_proposal(proposal.clone()).await?;
+        match result {
+            ChannelProposalResult::Accepted(final_proposal) => {
+                info!("🥂 Channel proposal accepted!");
+                let channel = self.create_channel(secret, final_proposal, proposal)?;
+                let name = channel.name();
+                self.server.add_channel(channel).await;
+                self.current_channel = Some(name.clone());
+                Ok(format!("Channel proposal accepted! Channel ID: {name}"))
+            }
+            ChannelProposalResult::Rejected(rej) => {
+                warn!("Channel proposal rejected: {}", rej.reason);
+                // todo: handle the rejection based on retry options
+                Err(anyhow!("Channel proposal rejected"))
+            }
+        }
+    }
+
+    pub fn create_channel_proposal(
+        &self,
+        oob_info: MoneroOutOfBandMerchantInfo,
+    ) -> Result<(Curve25519Secret, NewChannelProposal<Curve25519PublicKey>), anyhow::Error> {
+        let my_contact_info = self.identity.contact_info();
+        let peer_info = oob_info.contact;
+        let seed_info = oob_info.seed;
+        let key_index = rand::rng().next_u64();
+        let (my_secret, my_pubkey) = self.server.key_manager().new_keypair(key_index);
+        let user_label = self.identity.id();
+        let my_user_label = format!("{user_label}-{key_index}");
+        let proposal = NewChannelProposal::new(seed_info, my_pubkey, my_user_label, my_contact_info, peer_info);
+        Ok((my_secret, proposal))
+    }
+
+    pub fn create_channel(
+        &mut self,
+        secret: Curve25519Secret,
+        final_prop: NewChannelProposal<Curve25519PublicKey>,
+        original: NewChannelProposal<Curve25519PublicKey>,
+    ) -> Result<MoneroPaymentChannel, anyhow::Error> {
+        self.compare_proposals(&final_prop, &original)?;
+        let peer_info = final_prop.contact_info_proposee;
+        let new_state = MoneroChannelBuilder::new(final_prop.seed.role, final_prop.proposer_pubkey, secret)
+            .with_my_user_label(&final_prop.proposer_label)
+            .with_peer_label(&final_prop.seed.user_label)
+            .with_merchant_initial_balance(final_prop.seed.initial_balances.merchant)
+            .with_customer_initial_balance(final_prop.seed.initial_balances.customer)
+            .with_peer_public_key(final_prop.seed.pubkey)
+            .with_kes_public_key(final_prop.seed.kes_public_key)
+            .build::<blake2::Blake2b512>()
+            .ok_or_else(|| anyhow!("Missing new channel state data"))?;
+        let state = MoneroLifeCycle::New(Box::new(new_state));
+        let channel = MoneroPaymentChannel::new(peer_info, state);
+        Ok(channel)
+    }
+
+    fn compare_proposals(
+        &self,
+        _final_proposal: &NewChannelProposal<Curve25519PublicKey>,
+        _original: &NewChannelProposal<Curve25519PublicKey>,
+    ) -> Result<(), anyhow::Error> {
+        // todo: Check that we're happy with the final terms sent by the merchant
+        Ok(())
+    }
+
     /// Lists all available identities from the configuration.
     ///
     /// Returns a formatted string containing the number of identities found and their names.
     fn list_identities(&mut self) -> Result<String> {
         let id = list_identities(&self.config)?;
         Ok(format!("Found {} identities:\n{}", id.len(), id.join("\n")))
-    }
-
-    /// Prompts the user to select an identity from the available list, loading identities from file if necessary.
-    ///
-    /// Returns the selected identity's name and a reference to its `ConversationIdentity`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the identities file location is not specified in the configuration or if loading identities fails.
-    fn select_identity(&mut self, theme: &dyn Theme) -> Result<(String, &ConversationIdentity)> {
-        let ids = match self.identities {
-            Some(ref identities) => identities,
-            None => {
-                let path = self
-                    .config
-                    .identities_file
-                    .as_ref()
-                    .cloned()
-                    .ok_or_else(|| anyhow!("Identity file location not specified in config file"))?;
-                let local_identities = load_or_create_identities(&path)?;
-                self.identities = Some(local_identities);
-                self.identities.as_ref().expect("Should never be None")
-            }
-        };
-        let names = ids.ids().cloned().collect::<Vec<String>>();
-        let i = FuzzySelect::with_theme(theme).with_prompt("Select identity").items(&names).interact()?;
-        let name = &names[i];
-        Ok((name.to_string(), ids.get(name).expect("Identity should exist")))
     }
 
     /// Deletes a selected identity from the local identities file.
@@ -223,18 +241,13 @@ impl InteractiveApp {
     }
 
     /// Prompts for initial balances and generates merchant channel info as a QR code and JSON string.
-    ///
-    /// Prompts the user for customer and merchant initial balances, validates them as Monero amounts, and constructs a channel info object using the current identity, configuration, and a newly generated keypair. The resulting merchant info is serialized to JSON and rendered as a QR code for sharing.
-    ///
     /// # Returns
     /// A formatted string containing the QR code and the JSON-encoded merchant channel information.
     ///
     /// # Errors
-    /// Returns an error if the user is not logged in, required configuration fields are missing, balances are invalid, or serialization fails.
+    /// Returns an error if the user is not logged in, required configuration fields are missing, balances are
+    /// invalid, or serialization fails.
     fn share_merchant_info(&mut self) -> Result<String> {
-        if !self.is_logged_in() {
-            let _ = self.login()?;
-        }
         let valid_xmr = |v: &String| -> Result<(), &str> {
             match MoneroAmount::from_xmr(v) {
                 Some(_) => Ok(()),
@@ -253,10 +266,7 @@ impl InteractiveApp {
             MoneroAmount::from_xmr(&merchant_balance).ok_or_else(|| anyhow!("Invalid merchant balance"))?,
             MoneroAmount::from_xmr(&customer_balance).ok_or_else(|| anyhow!("Invalid customer balance"))?,
         );
-        let contact_info =
-            self.identity.as_ref().map(|id| id.contact_info()).flatten().ok_or_else(|| {
-                anyhow!("No contact info found. Is the server address is configured in the config file?")
-            })?;
+        let contact_info = self.identity.contact_info();
         let kes = self
             .config
             .kes_public_key()
@@ -266,11 +276,11 @@ impl InteractiveApp {
             .user_label()
             .ok_or_else(|| anyhow!("No user label found. Is `user_label` configured in the config file?"))?;
         let index = rand::rng().random();
-        // Definitely not the way to do this in production, but hacking this in for now
         let channel_id = format!("{label}-{index}");
-        let (_secret, channel_pubkey) = self.key_manager.new_keypair(index);
+        let (_secret, channel_pubkey) = self.server.key_manager().new_keypair(index);
         let seed_info = ChannelSeedBuilder::default()
             .with_pubkey(channel_pubkey)
+            .with_key_id(index)
             .with_kes_public_key(kes)
             .with_initial_balances(balances)
             .with_user_label(channel_id)

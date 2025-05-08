@@ -1,11 +1,19 @@
 mod behaviour;
+mod delegate;
 pub mod errors;
 mod event_loop;
 mod identity;
+mod key_manager;
 pub mod message_types;
 mod network_client;
+mod payment_channel;
+mod server;
 
+pub use delegate::{DummyDelegate, GreaseChannelDelegate, KeyDelegate};
 pub use event_loop::EventLoop;
 pub use identity::{ContactInfo, ConversationIdentity, IdentityError};
+pub use key_manager::KeyManager;
 pub use message_types::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnectionEvent};
-pub use network_client::{new_connection, Client, PeerConnection};
+pub use network_client::{new_network, Client, PeerConnection};
+pub use payment_channel::{OutOfBandMerchantInfo, PaymentChannel, PaymentChannels};
+pub use server::{NetworkServer, WritableState};

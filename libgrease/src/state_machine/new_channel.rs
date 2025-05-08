@@ -22,9 +22,9 @@ pub struct NewChannelBuilder<P: PublicKey> {
     my_public_key: P,
     my_secret_key: P::SecretKey,
     kes_public_key: Option<P>,
-    my_partial_channel_id: Option<String>,
+    my_label: Option<String>,
     peer_public_key: Option<P>,
-    peer_partial_channel_id: Option<String>,
+    peer_label: Option<String>,
     merchant_amount: Option<MoneroAmount>,
     customer_amount: Option<MoneroAmount>,
 }
@@ -50,39 +50,39 @@ impl<P: PublicKey> NewChannelBuilder<P> {
             my_public_key,
             my_secret_key,
             kes_public_key: None,
-            my_partial_channel_id: None,
+            my_label: None,
             peer_public_key: None,
-            peer_partial_channel_id: None,
+            peer_label: None,
             merchant_amount: None,
             customer_amount: None,
         }
     }
 
     pub fn build<D: Digest>(&self) -> Option<NewChannelState<P>> {
-        if self.my_partial_channel_id.is_none()
-            || self.peer_partial_channel_id.is_none()
+        if self.my_label.is_none()
+            || self.peer_label.is_none()
             || (self.merchant_amount.is_none() && self.customer_amount.is_none())
             || self.peer_public_key.is_none()
             || self.kes_public_key.is_none()
         {
             return None;
         }
-        let my_salt = self.my_partial_channel_id.clone().unwrap();
-        let their_salt = self.peer_partial_channel_id.clone().unwrap();
+        let my_salt = self.my_label.clone().unwrap();
+        let their_salt = self.peer_label.clone().unwrap();
 
         let salt = match self.channel_role {
             ChannelRole::Merchant => [my_salt, their_salt].concat(),
             ChannelRole::Customer => [their_salt, my_salt].concat(),
         };
-        let merchant_initial = self.merchant_amount.clone().unwrap_or_default();
-        let customer_initial = self.customer_amount.clone().unwrap_or_default();
+        let merchant_initial = self.merchant_amount.unwrap_or_default();
+        let customer_initial = self.customer_amount.unwrap_or_default();
         let initial_balances = Balances::new(merchant_initial, customer_initial);
-        let channel_id = ChannelId::new::<D, _, _, _>(
-            self.my_partial_channel_id.clone().unwrap(),
-            self.peer_partial_channel_id.clone().unwrap(),
-            salt,
-            initial_balances,
-        );
+
+        let (merchant_label, customer_label) = match self.channel_role {
+            ChannelRole::Merchant => (self.my_label.clone().unwrap(), self.peer_label.clone().unwrap()),
+            ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
+        };
+        let channel_id = ChannelId::new::<D, _, _, _>(merchant_label, customer_label, salt, initial_balances);
         let (merchant_pubkey, customer_pubkey) = match self.channel_role {
             ChannelRole::Merchant => (self.my_public_key.clone(), self.peer_public_key.clone().unwrap()),
             ChannelRole::Customer => (self.peer_public_key.clone().unwrap(), self.my_public_key.clone()),
@@ -94,8 +94,8 @@ impl<P: PublicKey> NewChannelBuilder<P> {
             kes_public_key: self.kes_public_key.clone().unwrap(),
             secret_key: self.my_secret_key.clone(),
             initial_balances,
-            customer_partial_channel_id: self.my_partial_channel_id.clone().unwrap(),
-            merchant_partial_channel_id: self.peer_partial_channel_id.clone().unwrap(),
+            customer_label: self.my_label.clone().unwrap(),
+            merchant_label: self.peer_label.clone().unwrap(),
             channel_id,
         })
     }
@@ -105,13 +105,13 @@ impl<P: PublicKey> NewChannelBuilder<P> {
         self
     }
 
-    pub fn with_peer_partial_channel_id(mut self, peer_partial_channel_id: &str) -> Self {
-        self.peer_partial_channel_id = Some(peer_partial_channel_id.to_string());
+    pub fn with_peer_label(mut self, peer_label: &str) -> Self {
+        self.peer_label = Some(peer_label.to_string());
         self
     }
 
-    pub fn with_my_partial_channel_id(mut self, my_partial_channel_id: &str) -> Self {
-        self.my_partial_channel_id = Some(my_partial_channel_id.to_string());
+    pub fn with_my_user_label(mut self, my_user_label: &str) -> Self {
+        self.my_label = Some(my_user_label.to_string());
         self
     }
 
@@ -151,9 +151,9 @@ where
     /// The amount of money in the channel
     pub initial_balances: Balances,
     /// Salt used to derive the channel ID - customer portion
-    pub customer_partial_channel_id: String,
+    pub customer_label: String,
     /// Salt used to derive the channel ID - merchant portion
-    pub merchant_partial_channel_id: String,
+    pub merchant_label: String,
     /// The channel ID
     pub channel_id: ChannelId,
 }
@@ -181,6 +181,20 @@ impl<P: PublicKey> NewChannelState<P> {
             return Err(InvalidProposal::MismatchedChannelId);
         }
         Ok(())
+    }
+
+    /// Convert this state (which contains a secret key) into a proposal (which does not).
+    pub fn for_proposal(&self) -> ProposedChannelInfo<P> {
+        ProposedChannelInfo {
+            role: self.role,
+            merchant_pubkey: self.merchant_pubkey.clone(),
+            customer_pubkey: self.customer_pubkey.clone(),
+            kes_public_key: self.kes_public_key.clone(),
+            initial_balances: self.initial_balances,
+            customer_label: self.customer_label.clone(),
+            merchant_label: self.merchant_label.clone(),
+            channel_id: self.channel_id.clone(),
+        }
     }
 }
 
@@ -236,7 +250,7 @@ impl TimeoutReason {
 
 /// A record that (usually) the merchant will send offline to the customer to give them the seed information they
 /// need to complete a new channel proposal.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub struct ChannelSeedInfo<P>
 where
@@ -246,10 +260,13 @@ where
     pub role: ChannelRole,
     /// The public key of the merchant, for use in adaptor signatures
     pub pubkey: P,
+    /// The key id for the merchant, to help them identify this proposal.
+    pub key_id: u64,
     /// The proposed KES public key. May or may not be accepted by the peer.
     pub kes_public_key: P,
     /// The proposed initial set of channel balances
     pub initial_balances: Balances,
+    /// The user label for the (usually) merchant.
     pub user_label: String,
 }
 
@@ -261,6 +278,7 @@ where
 {
     role: ChannelRole,
     pubkey: Option<P>,
+    key_id: Option<u64>,
     kes_public_key: Option<P>,
     initial_balances: Option<Balances>,
     user_label: Option<String>,
@@ -271,6 +289,7 @@ impl<P: PublicKey> ChannelSeedBuilder<P> {
         ChannelSeedBuilder {
             role: peer_role,
             pubkey: None,
+            key_id: None,
             kes_public_key: None,
             initial_balances: None,
             user_label: None,
@@ -297,13 +316,19 @@ impl<P: PublicKey> ChannelSeedBuilder<P> {
         self
     }
 
+    pub fn with_key_id(mut self, key_id: u64) -> Self {
+        self.key_id = Some(key_id);
+        self
+    }
+
     pub fn build(self) -> Result<ChannelSeedInfo<P>, MissingSeedInfo> {
         let pubkey = self.pubkey.ok_or(MissingSeedInfo::MissingPublicKey)?;
+        let key_id = self.key_id.ok_or(MissingSeedInfo::MissingKeyId)?;
         let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::MissingKesPublicKey)?;
         let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::MissingInitialBalances)?;
         let user_label = self.user_label.ok_or(MissingSeedInfo::MissingPartialChannelId)?;
 
-        Ok(ChannelSeedInfo { role: self.role, pubkey, kes_public_key, initial_balances, user_label })
+        Ok(ChannelSeedInfo { role: self.role, pubkey, key_id, kes_public_key, initial_balances, user_label })
     }
 }
 
@@ -317,6 +342,8 @@ impl<P: PublicKey> Default for ChannelSeedBuilder<P> {
 pub enum MissingSeedInfo {
     #[error("Missing public key")]
     MissingPublicKey,
+    #[error("Missing merchant key id")]
+    MissingKeyId,
     #[error("Missing KES public key")]
     MissingKesPublicKey,
     #[error("Missing initial balances")]

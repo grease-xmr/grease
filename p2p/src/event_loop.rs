@@ -4,13 +4,14 @@
 
 use crate::behaviour::ConnectionBehaviorEvent as Event;
 use crate::errors::PeerConnectionError;
-use crate::message_types::{AckChannelProposal, RejectChannelProposal, RejectReason, RetryOptions};
+use crate::message_types::{ChannelProposalResult, RejectChannelProposal, RejectReason, RetryOptions};
 use crate::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnection, PeerConnectionEvent};
 use futures::channel::{
     mpsc::{Receiver, Sender},
     oneshot,
 };
 use futures::{SinkExt, StreamExt};
+use libgrease::crypto::traits::PublicKey;
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
@@ -20,14 +21,15 @@ use libp2p::request_response::{InboundFailure, InboundRequestId, Message, Outbou
 use libp2p::swarm::{ConnectionError, ConnectionId, DialError, ListenError, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, TransportError};
 use log::*;
+use std::any::Any;
 use std::collections::{hash_map, HashMap, HashSet};
 use std::io;
 use std::num::NonZeroU32;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-pub type ReqResEvent = BehaviourEvent<GreaseRequest, GreaseResponse>;
-pub type EventMessage = Message<GreaseRequest, GreaseResponse>;
+pub type ReqResEvent<P> = BehaviourEvent<GreaseRequest<P>, GreaseResponse<P>>;
+pub type EventMessage<P> = Message<GreaseRequest<P>, GreaseResponse<P>>;
 
 const RUNNING: usize = 0;
 const SHUTTING_DOWN: usize = 1;
@@ -49,7 +51,7 @@ const SHUTDOWN: usize = 2;
 /// delegate a task to a peer on the network, the event loop:
 ///  * creates a new Request record via `self.swarm.behaviour_mut().json.send_request(&peer_id, cmd)`
 ///  * and stores the resulting request_id and one-shot sender channel in the appropriate data structure.
-/// It can then return.
+///    It can then return.
 ///
 /// When the appropriate response is received from a peer, via a `Response` event, the event loop can then
 /// * retrieve the stored return channel by using the request_id as a key,
@@ -65,23 +67,22 @@ const SHUTDOWN: usize = 2;
 /// The application layer carries out all the business logic and once it is done, it calls a suitable method on the
 /// [`Client`] instance, which will handle the creation of the correct [`ClientCommand`], packaging the result
 /// data and the `ResponseChannel` instance, and sending it to the event loop.
-pub struct EventLoop {
-    swarm: PeerConnection,
-    command_receiver: Receiver<ClientCommand>,
-    event_sender: Sender<PeerConnectionEvent>,
+pub struct EventLoop<P: PublicKey + 'static> {
+    swarm: PeerConnection<P>,
+    command_receiver: Receiver<ClientCommand<P>>,
+    event_sender: Sender<PeerConnectionEvent<P>>,
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
-    pending_new_channel_proposals:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>>,
+    pending_new_channel_proposals: HashMap<OutboundRequestId, oneshot::Sender<ChannelProposalResult<P>>>,
     pending_shutdown: Option<oneshot::Sender<bool>>,
     status: AtomicUsize,
     connections: HashSet<ConnectionId>,
 }
 
-impl EventLoop {
+impl<P: PublicKey + Send> EventLoop<P> {
     pub fn new(
-        swarm: PeerConnection,
-        command_receiver: Receiver<ClientCommand>,
-        event_sender: Sender<PeerConnectionEvent>,
+        swarm: PeerConnection<P>,
+        command_receiver: Receiver<ClientCommand<P>>,
+        event_sender: Sender<PeerConnectionEvent<P>>,
     ) -> Self {
         Self {
             swarm,
@@ -124,7 +125,7 @@ impl EventLoop {
     /// This function is called whenever a new event is received from the network.
     /// Both general network events ([SwarmEvent]) and specific events triggered by the payment channel state machine
     /// ([ReqResEvent]) are handled here.
-    async fn handle_event(&mut self, event: SwarmEvent<Event>) {
+    async fn handle_event(&mut self, event: SwarmEvent<Event<P>>) {
         match event {
             SwarmEvent::Behaviour(Event::Json(event)) => {
                 self.handle_request_response_event(event).await;
@@ -190,12 +191,12 @@ impl EventLoop {
                 debug!("EVENT: New external address of peer: {peer_id} {address}");
             }
             ev => {
-                debug!("Unknown and unhandled event: {:?}", ev);
+                debug!("Unknown and unhandled event: {:?}", ev.type_id());
             }
         }
     }
 
-    async fn handle_request_response_event(&mut self, event: ReqResEvent) {
+    async fn handle_request_response_event(&mut self, event: ReqResEvent<P>) {
         match event {
             ReqResEvent::Message { peer, connection_id, message } => {
                 self.on_channel_message(peer, connection_id, message).await;
@@ -233,7 +234,7 @@ impl EventLoop {
     /// Respond to a new Request-Response Grease Channel message from the peer.
     ///
     /// TODO: The message is delegated to the attached state machine
-    async fn on_channel_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: EventMessage) {
+    async fn on_channel_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: EventMessage<P>) {
         trace!("EVENT: Payment channel message received from {peer}. Connection id: {connection_id}.");
         match message {
             EventMessage::Request { request_id, request, channel } => {
@@ -241,25 +242,28 @@ impl EventLoop {
                     "EVENT: Request received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}"
                 );
                 self.event_sender
-                    .send(PeerConnectionEvent::InboundRequest { request, channel })
+                    .send(PeerConnectionEvent::InboundRequest { request, response: channel })
                     .await
                     .expect("Event receiver not to be dropped.");
             }
             EventMessage::Response { request_id, response } => {
-                debug!("EVENT: Response received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}, {response:?}");
+                debug!(
+                    "EVENT: Response received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}"
+                );
                 match response {
-                    GreaseResponse::ChannelProposalResult(open_channel_result) => {
+                    GreaseResponse::ChannelProposalResult(result) => {
                         let pending = self.pending_new_channel_proposals.remove(&request_id);
                         let Some(sender) = pending else {
                             error!("Received response for unknown open channel request. Request id: {request_id}");
                             return;
                         };
-                        let _ = sender.send(open_channel_result);
+                        let _ = sender.send(result);
                     }
                     GreaseResponse::MoneySent => {}
                     GreaseResponse::MoneyRequested => {}
                     GreaseResponse::ChannelClosed => {}
                     GreaseResponse::Error(_) => {}
+                    GreaseResponse::ChannelNotFound => {}
                 }
             }
         }
@@ -284,7 +288,9 @@ impl EventLoop {
             debug!("Removing pending channel proposal for request id: {request_id}");
             let reason = RejectReason::NotSent(format!("Outbound request failed. Error: {error}"));
             let response = RejectChannelProposal::new(reason, RetryOptions::close_only());
-            sender.send(Err(response)).unwrap()
+            if sender.send(ChannelProposalResult::Rejected(response)).is_err() {
+                error!("Failed to send rejection response for request id: {request_id}.");
+            }
         }
     }
 
@@ -462,7 +468,7 @@ impl EventLoop {
     /// * `listener_id` - Identifier of the listener that is now listening on the address.
     /// * `address` - Address that is now being listened on.
     fn on_new_listen_addr(&self, listener_id: ListenerId, address: Multiaddr) {
-        let local_peer_id = self.swarm.local_peer_id().clone();
+        let local_peer_id = *self.swarm.local_peer_id();
         info!(
             "Local node is listening on {:?} with id: {listener_id}",
             address.with(Protocol::P2p(local_peer_id))
@@ -527,7 +533,7 @@ impl EventLoop {
         debug!("EVENT: Non-fatal listener error: {listener_id} Error: {error}");
     }
 
-    async fn handle_command(&mut self, command: ClientCommand) {
+    async fn handle_command(&mut self, command: ClientCommand<P>) {
         match command {
             ClientCommand::StartListening { addr, sender } => {
                 if !self.is_running() {
@@ -559,24 +565,23 @@ impl EventLoop {
                     debug!("Dialing already in progress for peer {peer_id}. Ignoring additional dial attempt.");
                 }
             }
+            ClientCommand::ResponseToRequest { res, return_chute } => {
+                if let Err(response) = self.swarm.behaviour_mut().json.send_response(return_chute, res) {
+                    error!("Failed to send response to request. {response}");
+                    // todo: retry logic
+                }
+            }
             ClientCommand::ProposeChannelRequest { peer_id, data, sender } => {
                 if !self.is_running() {
                     info!("Event loop is shutting down. I'm not going to start opening channels.");
                     let reason = RejectReason::NotSent("Event loop is shutting down.".to_string());
                     let rejection = RejectChannelProposal::new(reason, RetryOptions::close_only());
-                    let _ = sender.send(Err(rejection));
+                    let _ = sender.send(ChannelProposalResult::Rejected(rejection));
                     return;
                 }
                 let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ProposeNewChannel(data));
                 self.pending_new_channel_proposals.insert(id, sender);
                 info!("New channel proposal sent to {peer_id}");
-            }
-            ClientCommand::ResponseToProposeChannel { res, channel } => {
-                let response = GreaseResponse::ChannelProposalResult(res);
-                if let Err(_err) = self.swarm.behaviour_mut().json.send_response(channel, response) {
-                    error!("Failed to send channel open response to peer.");
-                    // todo: retry logic
-                }
             }
             ClientCommand::ConnectedPeers { sender } => {
                 debug!("Connected peers requested.");
@@ -593,13 +598,10 @@ impl EventLoop {
                 }
             }
             ClientCommand::MultiSigSetupRequest { .. } => {}
-            ClientCommand::ResponseToMultiSigSetup { .. } => {}
             ClientCommand::KesReadyNotification { .. } => {}
             ClientCommand::AckKesReadyNotification { .. } => {}
             ClientCommand::FundingTxRequestStart { .. } => {}
-            ClientCommand::ResponseToFundingTxRequestStart { .. } => {}
             ClientCommand::FundingTxFinalizeRequest { .. } => {}
-            ClientCommand::ResponseToFundingTxFinalizeRequest { .. } => {}
             ClientCommand::FundingTxBroadcastNotification { .. } => {}
             ClientCommand::AckFundingTxBroadcastNotification { .. } => {}
         }

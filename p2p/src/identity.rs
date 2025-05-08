@@ -1,4 +1,3 @@
-use futures::TryStreamExt;
 use libp2p::identity::Keypair;
 use libp2p::{Multiaddr, PeerId};
 use ron::ser::PrettyConfig;
@@ -21,26 +20,30 @@ pub struct ConversationIdentity {
     /// The peer id derived from the public key. This is used to identify this identity in network communications.
     #[serde(serialize_with = "serialize_peer", deserialize_with = "deserialize_peer")]
     peer_id: PeerId,
-    /// If given, is the address other parties can use to dial this identity.
-    address: Option<Multiaddr>,
+    /// The address other parties can use to dial this identity.
+    address: Multiaddr,
 }
 
 impl ConversationIdentity {
     /// Create a new identity with the given id and keypair.
     /// The peer id is derived from the public key.
-    pub fn random_with_id<S: Into<String>>(id: S) -> Self {
+    pub fn random_with_id(id: impl Into<String>, addr: impl Into<Multiaddr>) -> Self {
         let keypair = Keypair::generate_ed25519();
         let peer_id = keypair.public().to_peer_id();
-        ConversationIdentity { id: id.into(), keypair, peer_id, address: None }
+        ConversationIdentity { id: id.into(), keypair, peer_id, address: addr.into() }
     }
 
     /// Create a new identity with a random id and keypair.
-    pub fn random() -> Self {
-        Self::random_with_id(random_name())
+    pub fn random(addr: impl Into<Multiaddr>) -> Self {
+        Self::random_with_id(random_name(), addr)
     }
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub fn dial_address(&self) -> Multiaddr {
+        self.address.clone().with_p2p(self.peer_id).unwrap_or_else(|e| e)
     }
 
     pub fn keypair(&self) -> &Keypair {
@@ -52,11 +55,11 @@ impl ConversationIdentity {
     }
 
     pub fn set_address(&mut self, address: Multiaddr) {
-        self.address = Some(address);
+        self.address = address;
     }
 
-    pub fn address(&self) -> Option<&Multiaddr> {
-        self.address.as_ref()
+    pub fn address(&self) -> &Multiaddr {
+        &self.address
     }
 
     pub fn take_keypair(self) -> Keypair {
@@ -101,12 +104,8 @@ impl ConversationIdentity {
     /// Return this identity as a contact info sheet. Other parties can use this to contact you.
     ///
     /// The address must be set for this to return a contact sheet.
-    pub fn contact_info(&self) -> Option<ContactInfo> {
-        self.address.as_ref().map(|addr| ContactInfo {
-            name: self.id.clone(),
-            peer_id: self.peer_id.clone(),
-            address: addr.clone(),
-        })
+    pub fn contact_info(&self) -> ContactInfo {
+        ContactInfo { name: self.id.clone(), peer_id: self.peer_id, address: self.dial_address() }
     }
 
     /// Return an internal consistency check, that the Peer Id corresponds to the public key.
@@ -135,12 +134,18 @@ impl PartialEq for ConversationIdentity {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContactInfo {
     pub name: String,
     #[serde(serialize_with = "serialize_peer", deserialize_with = "deserialize_peer")]
     pub peer_id: PeerId,
     pub address: Multiaddr,
+}
+
+impl ContactInfo {
+    pub fn dial_address(&self) -> Multiaddr {
+        self.address.clone().with_p2p(self.peer_id).unwrap_or_else(|e| e)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -285,12 +290,14 @@ where
 mod test {
     use super::*;
     use log::info;
+    use std::str::FromStr;
     use tempfile::TempPath;
 
     #[test]
     fn test_identity_save_load_yml() {
         env_logger::try_init().ok();
-        let identity = ConversationIdentity::random();
+        let addr = Multiaddr::from_str("/ip4/127.0.0.1/tcp/23001").expect("invalid valid address");
+        let identity = ConversationIdentity::random(addr);
         let tmp = TempPath::from_path("test_id.yml");
         let s = identity.to_yml().expect("serialize identity");
         info!("serialized YAML identity:\n{s}");
@@ -303,7 +310,8 @@ mod test {
     #[test]
     fn test_identity_save_load_ron() {
         env_logger::try_init().ok();
-        let identity = ConversationIdentity::random();
+        let addr = Multiaddr::from_str("/ip4/127.0.0.1/tcp/23001").expect("invalid valid address");
+        let identity = ConversationIdentity::random(addr);
         let tmp = TempPath::from_path("test_id.ron");
         let s = identity.to_ron().expect("serialize identity");
         info!("serialized RON identity:\n{s}");

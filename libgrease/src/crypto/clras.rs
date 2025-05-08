@@ -73,7 +73,7 @@ pub trait Clras2P {
             return Err(Clras2PError::invalid_pre_signature("The peer pre-signature is invalid"));
         }
         let s = pre_signature.s + peer_pre_signature.s;
-        Ok(Signature { challenge: pre_signature.challenge.clone(), s })
+        Ok(Signature { challenge: pre_signature.challenge, s })
     }
 
     fn pre_signature_verify<B: AsRef<[u8]>>(

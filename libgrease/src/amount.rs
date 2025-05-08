@@ -69,7 +69,7 @@ impl MoneroAmount {
 
 impl PartialOrd for MoneroAmount {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.amount.partial_cmp(&other.amount)
+        Some(self.amount.cmp(&other.amount))
     }
 }
 

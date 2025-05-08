@@ -7,7 +7,7 @@ use crate::state_machine::traits::ChannelState;
 use crate::state_machine::EstablishedChannelState;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct ClosingChannelState<P, C, W, KES>
 where
@@ -48,7 +48,7 @@ where
     KES: KeyEscrowService,
 {
     fn channel_id(&self) -> &ChannelId {
-        &self.payment_channel.channel_id()
+        self.payment_channel.channel_id()
     }
 
     fn role(&self) -> ChannelRole {

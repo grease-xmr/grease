@@ -8,7 +8,7 @@ use crate::state_machine::{ClosingChannelState, EstablishedChannelState};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct DisputingChannelState<P, C, W, KES>
 where

@@ -3,7 +3,7 @@ use crate::crypto::hashes::{Blake512, HashToScalar};
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::crypto::monero_impl::{MoneroStatement, MoneroWitness, SchnorrProof};
 use crate::crypto::traits::PublicKey;
-use blake::Blake;
+use blake2::{Blake2b512, Digest};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::Scalar;
 
@@ -15,14 +15,14 @@ impl Vcof25519 {
         statement_prev: &Curve25519PublicKey,
         statement: &Curve25519PublicKey,
     ) -> Scalar {
-        let mut hasher = Blake::new(256).expect("Should be able to create Blake instance");
+        let mut hasher = Blake2b512::new();
         hasher.update(public_nonce.as_compressed().as_bytes());
         hasher.update(statement_prev.as_compressed().as_bytes());
         hasher.update(statement.as_compressed().as_bytes());
-        let mut challenge = [0u8; 32];
-        hasher.finalise(&mut challenge);
-        let challenge = Scalar::from_bytes_mod_order(challenge);
-        challenge
+        let challenge = hasher.finalize();
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&challenge[0..32]);
+        Scalar::from_bytes_mod_order(bytes)
     }
 }
 

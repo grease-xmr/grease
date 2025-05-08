@@ -305,16 +305,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blake"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee55e9ca33be1f257d8356cfb29b10b1c8f86dc38cf1344ca01525464356cd0c"
-dependencies = [
- "cc",
- "libc",
-]
-
-[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1099,6 +1089,7 @@ name = "grease-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake2",
  "clap",
  "dialoguer",
  "env_logger",
@@ -1110,6 +1101,7 @@ dependencies = [
  "prettytable-rs",
  "qrcode",
  "rand 0.9.1",
+ "ron",
  "serde",
  "serde_json",
  "serde_yml",
@@ -1121,6 +1113,7 @@ dependencies = [
 name = "grease-p2p"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "env_logger",
  "futures",
  "hex",
@@ -1667,7 +1660,6 @@ name = "libgrease"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "blake",
  "blake2",
  "curve25519-dalek",
  "digest",
@@ -1677,7 +1669,6 @@ dependencies = [
  "rand 0.9.1",
  "ron",
  "serde",
- "serde_yml",
  "thiserror 2.0.12",
 ]
 

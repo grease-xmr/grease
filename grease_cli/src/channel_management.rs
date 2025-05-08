@@ -1,49 +1,16 @@
-use grease_p2p::{ContactInfo, ConversationIdentity};
-use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::KeyEscrowService;
-use libgrease::monero::MultiSigWallet;
-use libgrease::payment_channel::ActivePaymentChannel;
-use libgrease::state_machine::{ChannelLifeCycle, ChannelSeedInfo};
-use serde::{Deserialize, Serialize};
+use crate::id_management::MoneroKeyManager;
+use grease_p2p::{DummyDelegate, NetworkServer, OutOfBandMerchantInfo, PaymentChannel, PaymentChannels};
+use libgrease::crypto::keys::Curve25519PublicKey;
+use libgrease::kes::dummy_impl::DummyKes;
+use libgrease::monero::dummy_impl::DummyWallet;
+use libgrease::payment_channel::dummy_impl::DummyActiveChannel;
+use libgrease::state_machine::{ChannelLifeCycle, NewChannelBuilder, NewChannelState};
 
-#[derive(Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct OutOfBandMerchantInfo<P>
-where
-    P: PublicKey,
-{
-    pub contact: ContactInfo,
-    pub seed: ChannelSeedInfo<P>,
-}
-
-impl<P> OutOfBandMerchantInfo<P>
-where
-    P: PublicKey,
-{
-    /// Creates a new `OutOfBandMerchantInfo` with the given contact and channel seed information.
-    pub fn new(contact: ContactInfo, seed: ChannelSeedInfo<P>) -> Self {
-        OutOfBandMerchantInfo { contact, seed }
-    }
-}
-
-/// A payments channel
-///
-/// A payment channel comprises
-/// - the details of the peer (i.e. a way to connect to them over the internet)
-/// - the current state of the Monero payment channel
-///
-/// Again, the word channel is overloaded
-#[derive(Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct PaymentChannel<P, C, W, KES>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-    KES: KeyEscrowService,
-{
-    pub identity: ConversationIdentity,
-    pub peer_info: ContactInfo,
-    pub seed_info: ChannelSeedInfo<P>,
-    pub state: ChannelLifeCycle<P, C, W, KES>,
-}
+pub type MoneroPaymentChannel = PaymentChannel<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
+pub type MoneroPaymentChannels = PaymentChannels<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
+pub type MoneroOutOfBandMerchantInfo = OutOfBandMerchantInfo<Curve25519PublicKey>;
+pub type MoneroLifeCycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
+pub type MoneroNewState = NewChannelState<Curve25519PublicKey>;
+pub type MoneroChannelBuilder = NewChannelBuilder<Curve25519PublicKey>;
+pub type MoneroNetworkServer =
+    NetworkServer<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes, DummyDelegate, MoneroKeyManager>;

@@ -6,7 +6,7 @@ use crate::crypto::cas::{
 use crate::crypto::clras::Clras2P;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::crypto::traits::PublicKey;
-use blake::Blake;
+use blake2::{Blake2b512, Digest};
 use curve25519_dalek::Scalar;
 
 /// The Monero witness is used in payment channels to reconstruct the spending key for the commitment transaction. It
@@ -128,7 +128,7 @@ fn hash_to_scalar<B: AsRef<[u8]>>(
     nonce: &Curve25519PublicKey,
     keys: &[Curve25519PublicKey],
 ) -> Scalar {
-    let mut hasher = Blake::new(512).expect("Should be able to create Blake instance");
+    let mut hasher = Blake2b512::new();
     hasher.update(domain);
     hasher.update(nonce.as_compressed().as_bytes());
     assert!(
@@ -136,13 +136,14 @@ fn hash_to_scalar<B: AsRef<[u8]>>(
         "The ring size should be less than 256. Larger rings are not supported."
     );
     if keys.len() > 1 {
-        hasher.update(&[keys.len() as u8])
+        hasher.update([keys.len() as u8])
     }
     for key in keys {
         hasher.update(key.as_compressed().as_bytes());
     }
     hasher.update(message.as_ref());
     let mut hash = [0u8; 64];
-    hasher.finalise(&mut hash);
+    let challenge = hasher.finalize();
+    hash.copy_from_slice(&challenge[0..64]);
     Scalar::from_bytes_mod_order_wide(&hash)
 }

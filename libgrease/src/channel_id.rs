@@ -29,8 +29,8 @@ impl ChannelId {
         hasher.update(b"ChannelId");
         hasher.update(&merchant_id);
         hasher.update(&customer_id);
-        hasher.update(&amount_mer);
-        hasher.update(&amount_cust);
+        hasher.update(amount_mer);
+        hasher.update(amount_cust);
         hasher.update(&salt);
         let hashed_id = hasher.finalize().to_vec();
         ChannelId { merchant_id, customer_id, initial_balance, salt, hashed_id }
