@@ -1,9 +1,6 @@
-use std::fmt::Write;
-
-use anyhow::Result;
 use prettytable::{
     format::{LinePosition, LineSeparator, TableFormat},
-    row, Cell, Row, Table,
+    Table,
 };
 use qrcode::{render::unicode, QrCode};
 

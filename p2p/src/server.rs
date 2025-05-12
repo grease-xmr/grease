@@ -1,0 +1,285 @@
+use crate::errors::{PaymentChannelError, PeerConnectionError};
+use crate::message_types::{
+    ChannelProposalResult, NewChannelProposal, RejectChannelProposal, RejectReason, RetryOptions,
+};
+use crate::payment_channel::PaymentChannels;
+use crate::{
+    new_network, Client, ContactInfo, ConversationIdentity, GreaseChannelDelegate, GreaseRequest, GreaseResponse,
+    KeyManager, PaymentChannel, PeerConnectionEvent,
+};
+use futures::future::join;
+use futures::StreamExt;
+use libgrease::crypto::traits::PublicKey;
+use libgrease::kes::KeyEscrowService;
+use libgrease::monero::MultiSigWallet;
+use libgrease::payment_channel::ActivePaymentChannel;
+use libgrease::state_machine::error::InvalidProposal;
+use libgrease::state_machine::{ChannelLifeCycle, NewChannelBuilder};
+use libp2p::request_response::ResponseChannel;
+use libp2p::Multiaddr;
+use log::*;
+use std::path::Path;
+use tokio::sync::OwnedRwLockWriteGuard;
+use tokio::task::JoinHandle;
+
+pub type WritableState<P, C, W, KES> = OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>;
+
+pub struct NetworkServer<P, C, W, KES, D, K>
+where
+    P: PublicKey,
+    C: ActivePaymentChannel,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+    D: GreaseChannelDelegate<P, C, W, KES>,
+    K: KeyManager,
+{
+    id: ConversationIdentity,
+    inner: InnerEventHandler<P, C, W, KES, D, K>,
+    event_loop_handle: JoinHandle<()>,
+    event_handler_handle: JoinHandle<()>,
+}
+
+impl<P, C, W, KES, D, K> NetworkServer<P, C, W, KES, D, K>
+where
+    P: PublicKey + 'static,
+    C: ActivePaymentChannel + 'static,
+    W: MultiSigWallet + 'static,
+    KES: KeyEscrowService + 'static,
+    D: GreaseChannelDelegate<P, C, W, KES> + 'static,
+    K: KeyManager<PublicKey = P> + Send + Sync + 'static,
+{
+    pub fn new(
+        id: ConversationIdentity,
+        channels: PaymentChannels<P, C, W, KES>,
+        delegate: D,
+        key_delegate: K,
+    ) -> Result<Self, PeerConnectionError> {
+        let keypair = id.keypair().clone();
+        // Create a new network client and event loop.
+        let (network_client, mut network_events, network_event_loop) = new_network::<P>(keypair)?;
+        // Spawn the network task for it to run in the background.
+        let event_loop_handle = tokio::spawn(network_event_loop.run());
+        let inner = InnerEventHandler { network_client, channels, delegate, key_manager: key_delegate };
+        let inner_clone = inner.clone();
+        let event_handler_handle = tokio::spawn(async move {
+            while let Some(ev) = network_events.next().await {
+                trace!("libp2p network event received.");
+                match ev {
+                    PeerConnectionEvent::InboundRequest { request, response } => {
+                        debug!("Inbound grease request received");
+                        inner_clone.handle_incoming_grease_request(request, response).await;
+                    }
+                }
+            }
+        });
+        Ok(Self { id, inner, event_loop_handle, event_handler_handle })
+    }
+
+    pub fn key_manager(&self) -> &K {
+        &self.inner.key_manager
+    }
+
+    pub fn contact_info(&self) -> ContactInfo {
+        self.id.contact_info()
+    }
+
+    pub async fn start_listening(&mut self, at: Multiaddr) -> Result<(), PeerConnectionError> {
+        self.inner.start_listening(at).await
+    }
+
+    /// Provides a cheap clone of the network client. It is thread-safe.
+    pub fn client(&self) -> Client<P> {
+        self.inner.network_client.clone()
+    }
+
+    pub async fn list_channels(&self) -> Vec<String> {
+        self.inner.channels.list_channels().await
+    }
+
+    pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
+        self.inner.channels.save_channels(path).await
+    }
+
+    pub async fn add_channel(&self, channel: PaymentChannel<P, C, W, KES>) {
+        self.inner.channels.add(channel).await
+    }
+
+    pub async fn shutdown(self) -> Result<bool, PeerConnectionError> {
+        let res_client = self.inner.network_client.shutdown().await;
+        let (res_loop, res_events) = join(self.event_loop_handle, self.event_handler_handle).await;
+        if let Err(err) = res_loop.and(res_events) {
+            error!("Error waiting on event threads: {err}");
+        }
+        res_client
+    }
+
+    pub async fn send_proposal(
+        &self,
+        proposal: NewChannelProposal<P>,
+    ) -> Result<ChannelProposalResult<P>, PeerConnectionError> {
+        let mut client = self.client();
+        let address = proposal.contact_info_proposee.dial_address();
+        // todo: check what happens if there's already a connection?
+        client.dial(address).await?;
+        debug!("Sending channel proposal to peer.");
+        let res = client.new_channel_proposal(proposal).await?;
+        match &res {
+            ChannelProposalResult::Accepted(ack) => {
+                self.check_proposal_ack(ack).await?;
+            }
+            ChannelProposalResult::Rejected(rej) => {
+                self.handle_proposal_rejection(rej).await;
+            }
+        }
+        Ok(res)
+    }
+
+    async fn check_proposal_ack(&self, _ack: &NewChannelProposal<P>) -> Result<(), PeerConnectionError> {
+        // TODO - check that ack data matches what we expect
+        debug!("Channel proposal was accepted by peer");
+        Ok(())
+    }
+
+    async fn handle_proposal_rejection(&self, _rejection: &RejectChannelProposal) {
+        // TODO - handle the rejection
+        error!("Channel proposal was rejected");
+    }
+}
+
+struct InnerEventHandler<P, C, W, KES, D, K>
+where
+    P: PublicKey,
+    C: ActivePaymentChannel,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+    D: GreaseChannelDelegate<P, C, W, KES>,
+    K: KeyManager,
+{
+    network_client: Client<P>,
+    channels: PaymentChannels<P, C, W, KES>,
+    delegate: D,
+    key_manager: K,
+}
+
+impl<P, C, W, KES, D, K> Clone for InnerEventHandler<P, C, W, KES, D, K>
+where
+    P: PublicKey,
+    C: ActivePaymentChannel,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+    D: GreaseChannelDelegate<P, C, W, KES>,
+    K: KeyManager,
+{
+    fn clone(&self) -> Self {
+        Self {
+            network_client: self.network_client.clone(),
+            channels: self.channels.clone(),
+            delegate: self.delegate.clone(),
+            key_manager: self.key_manager.clone(),
+        }
+    }
+}
+
+impl<P, C, W, KES, D, K> InnerEventHandler<P, C, W, KES, D, K>
+where
+    P: PublicKey,
+    C: ActivePaymentChannel,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+    D: GreaseChannelDelegate<P, C, W, KES>,
+    K: KeyManager<PublicKey = P>,
+{
+    async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
+        self.network_client.start_listening(addr).await?;
+        Ok(())
+    }
+
+    /// Business logic handling for payment channel requests.
+    ///
+    /// This function is called by the network event loop when a new inbound request is received.
+    /// It takes the request, performs the relevant work, and then calls the appropriate method on the network client
+    /// to respond.
+    async fn handle_incoming_grease_request(
+        &self,
+        request: GreaseRequest<P>,
+        return_chute: ResponseChannel<GreaseResponse<P>>,
+    ) {
+        let name = request.channel_name();
+        let response = if self.channels.exists(&name).await {
+            match self.channels.checkout(&name).await {
+                Some(channel) => self.handle_pertinent_grease_request(request, channel).await,
+                None => {
+                    warn!("Channel exists, but we could not get a write lock: {name}");
+                    GreaseResponse::Error("Could not get write lock".into())
+                }
+            }
+        } else {
+            // Channel doesn't exist, so this must be a new proposal, or we can´t do anything about it
+            match &request {
+                GreaseRequest::ProposeNewChannel(proposal) => self.handle_open_channel_request(proposal).await,
+                _ => {
+                    warn!("Request made for unknown channel: {name}");
+                    GreaseResponse::ChannelNotFound
+                }
+            }
+        };
+        let mut client = self.network_client.clone();
+        if let Err(err) = client.send_response_to_peer(response, return_chute).await {
+            error!("Request was handled, but could not send response to peer: {err}");
+        }
+    }
+
+    async fn handle_pertinent_grease_request(
+        &self,
+        request: GreaseRequest<P>,
+        _channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>,
+    ) -> GreaseResponse<P> {
+        match request {
+            GreaseRequest::ProposeNewChannel(_) => {
+                GreaseResponse::Error("Cannot create a new channel. Channel already exists.".into())
+            }
+            GreaseRequest::SendMoney => todo!("SendMoney"),
+            GreaseRequest::RequestMoney => todo!("RequestMoney"),
+            GreaseRequest::CloseChannel => todo!("CloseChannel"),
+        }
+    }
+
+    /// Handle an incoming request to open a payment channel.
+    async fn handle_open_channel_request(&self, data: &NewChannelProposal<P>) -> GreaseResponse<P> {
+        let delegate = self.delegate.clone();
+        if let Err(invalid) = delegate.verify_proposal(data) {
+            let retry = RetryOptions::close_only();
+            let rej = ChannelProposalResult::reject(RejectReason::InvalidProposal(invalid), retry);
+            return GreaseResponse::ChannelProposalResult(rej);
+        }
+        // Data has been verified, so accept the info in data as correct
+        let role = data.seed.role.other();
+        // Check that the public key passed in the proposal matches our keypair
+        let my_pubkey = data.seed.pubkey.clone();
+        let key_index = data.seed.key_id;
+        let (my_secret, my_pubkey2) = self.key_manager.new_keypair(key_index);
+        if my_pubkey != my_pubkey2 {
+            warn!("Public key in proposal does not match our keypair");
+            return GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
+                RejectReason::InvalidProposal(InvalidProposal::MismatchedMerchantPublicKey),
+                RetryOptions::close_only(),
+            ));
+        }
+        // Reconstruct the new channel state from our point of view
+        let new_state = NewChannelBuilder::new(role, my_pubkey, my_secret)
+            .with_my_user_label(&data.seed.user_label)
+            .with_peer_public_key(data.proposer_pubkey.clone())
+            .with_customer_initial_balance(data.seed.initial_balances.customer)
+            .with_merchant_initial_balance(data.seed.initial_balances.merchant)
+            .with_peer_label(&data.proposer_label)
+            .with_kes_public_key(data.seed.kes_public_key.clone())
+            .build::<blake2::Blake2b512>()
+            .expect("You've forgotten a field i the new state machine builder, dev");
+        let state = ChannelLifeCycle::New(Box::new(new_state));
+        let peer_info = data.contact_info_proposer.clone();
+        let channel = PaymentChannel::new(peer_info, state);
+        self.channels.add(channel).await;
+        let ack = ChannelProposalResult::accept(data.clone());
+        GreaseResponse::ChannelProposalResult(ack)
+    }
+}

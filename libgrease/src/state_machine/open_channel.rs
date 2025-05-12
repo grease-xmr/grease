@@ -25,7 +25,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct EstablishedChannelState<P, C, W, KES>
 where
@@ -85,7 +85,7 @@ where
     KES: KeyEscrowService,
 {
     fn channel_id(&self) -> &ChannelId {
-        &self.payment_channel.channel_id()
+        self.payment_channel.channel_id()
     }
 
     fn role(&self) -> ChannelRole {

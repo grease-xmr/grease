@@ -1,7 +1,9 @@
 use clap::Parser;
 use grease_cli::config::{CliCommand, CliOptions, GlobalOptions};
 use grease_cli::id_management::exec_id_command;
-use grease_cli::server::start_server;
+use grease_cli::other_commands::print_random_keypair;
+use grease_cli::server::start;
+use libgrease::crypto::keys::Curve25519PublicKey;
 
 #[tokio::main]
 /// Entry point for the CLI application.
@@ -20,7 +22,8 @@ async fn main() {
 
     let result = match options.command {
         CliCommand::Id(id_command) => exec_id_command(id_command, config),
-        CliCommand::Serve(serve_command) => start_server(serve_command, config).await,
+        CliCommand::Serve => start(config).await,
+        CliCommand::Keypair => print_random_keypair(),
     };
 
     match result {

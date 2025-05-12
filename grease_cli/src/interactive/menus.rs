@@ -14,14 +14,13 @@ pub mod commands {
     pub const FORCE_CLOSE_CHANNEL: &str = "Force Close the channel";
     pub const LIST_CHANNELS: &str = "List channels";
     pub const LIST_IDENTITIES: &str = "List identities";
-    pub const LOGOUT: &str = "Logout";
     pub const NAV_BACK: &str = "Back";
     pub const NAV_TO_CUSTOMER_MENU: &str = "For Customers";
     pub const NAV_TO_IDENTITY_MENU: &str = "Manage Identities";
     pub const NAV_TO_MERCHANT_MENU: &str = "For Merchants";
     pub const PAYMENT_REQUEST: &str = "Request payment";
     pub const PAYMENT_SEND: &str = "Send payment";
-    pub const PROPOSE_CHANNEL: &str = "Create New channel";
+    pub const PROPOSE_CHANNEL: &str = "Initiate new channel";
     pub const REMOVE_IDENTITY: &str = "Remove identity";
     pub const SHARE_MERCHANT_INFO: &str = "Display new channel QR code";
 }
@@ -30,14 +29,13 @@ pub use commands::*;
 
 pub const TOP_MENU: [&str; 4] = [NAV_TO_CUSTOMER_MENU, NAV_TO_MERCHANT_MENU, NAV_TO_IDENTITY_MENU, EXIT];
 
-pub const IDENTITY_MENU: [&str; 8] = [
+pub const IDENTITY_MENU: [&str; 7] = [
     LIST_IDENTITIES,
     ADD_IDENTITY,
     REMOVE_IDENTITY,
     NAV_TO_CUSTOMER_MENU,
     NAV_TO_MERCHANT_MENU,
     NAV_BACK,
-    LOGOUT,
     EXIT,
 ];
 

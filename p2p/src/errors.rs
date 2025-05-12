@@ -21,4 +21,18 @@ pub enum PeerConnectionError {
     EventLoopShuttingDown,
     #[error("Will never happen, but required for the error trait")]
     Infallible(#[from] Infallible),
+    #[error("The channel {0} does not exist.")]
+    ChannelNotFound(String),
+    #[error("An established channel cannot make a new proposal")]
+    NotANewChannel,
+}
+
+#[derive(Error, Debug)]
+pub enum PaymentChannelError {
+    #[error("Error loading channel. {0}")]
+    LoadingError(String),
+    #[error("I/O error. {0}")]
+    IOError(#[from] std::io::Error),
+    #[error("Error serializing channel. {0}")]
+    SerializationError(#[from] ron::Error),
 }

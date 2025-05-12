@@ -11,9 +11,9 @@ pub trait ChannelPayment: Sized {
     fn get_sender_signature(&self) -> String;
 }
 
-pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> {
+pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> + Send + Sync {
     type UpdateInfo;
-    type Finalized: ClosedPaymentChannel;
+    type Finalized: ClosedPaymentChannel + Send + Sync;
 
     fn role(&self) -> ChannelRole;
     fn channel_id(&self) -> &ChannelId;
@@ -30,7 +30,7 @@ pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> {
     fn finalize(self) -> Self::Finalized;
 }
 
-pub trait ClosedPaymentChannel: Serialize + for<'d> Deserialize<'d> {
+pub trait ClosedPaymentChannel: Clone + Serialize + for<'d> Deserialize<'d> + Send {
     fn channel_id(&self) -> &ChannelId;
     fn role(&self) -> ChannelRole;
     fn final_balance(&self) -> Balances;

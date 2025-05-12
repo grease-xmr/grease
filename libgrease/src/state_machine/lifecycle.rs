@@ -1,7 +1,7 @@
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
-use crate::payment_channel::ActivePaymentChannel;
+use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::closed_channel::ClosedChannelState;
 use crate::state_machine::closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};
 use crate::state_machine::disputing_channel::{DisputeResolvedInfo, DisputingChannelState, ForceCloseInfo};
@@ -12,7 +12,6 @@ use crate::state_machine::open_channel::{ChannelUpdateInfo, EstablishedChannelSt
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::ChannelClosedReason;
 use log::*;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -86,7 +85,7 @@ impl Display for LifecycleStage {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum ChannelLifeCycle<P, C, W, KES>
 where
@@ -129,6 +128,10 @@ where
         }
     }
 
+    pub fn role(&self) -> ChannelRole {
+        self.current_state().role()
+    }
+
     pub fn current_state(&self) -> &dyn ChannelState {
         match self {
             ChannelLifeCycle::New(state) => state.as_ref(),
@@ -145,9 +148,7 @@ where
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
         match new_state.review_proposal(&proposal) {
-            Err(err) => {
-                return Err((Self::New(new_state), err.into()));
-            }
+            Err(err) => Err((Self::New(new_state), err.into())),
             Ok(()) => {
                 let establishing_state = EstablishingChannelState {
                     role: new_state.role,
@@ -200,7 +201,7 @@ where
         Ok(updated_state)
     }
 
-    fn open_to_closing(self, info: StartCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
+    fn open_to_closing(self, _info: StartCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
         let Self::Open(open_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
@@ -210,7 +211,7 @@ where
         Ok(new_state)
     }
 
-    fn closing_to_closed(self, info: SuccessfulCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
+    fn closing_to_closed(self, _info: SuccessfulCloseInfo) -> Result<Self, (Self, LifeCycleError)> {
         let Self::Closing(closing_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
@@ -391,8 +392,8 @@ pub mod test {
             .with_customer_initial_balance(initial_customer_amount)
             .with_merchant_initial_balance(initial_merchant_amount)
             .with_peer_public_key(merchant_pubkey.clone())
-            .with_my_partial_channel_id("me")
-            .with_peer_partial_channel_id("you")
+            .with_my_user_label("me")
+            .with_peer_label("you")
             .build::<Blake2b512>()
             .expect("Failed to build initial state");
         // Create a new channel state machine
@@ -414,8 +415,8 @@ pub mod test {
             customer_pubkey: initial_state.customer_pubkey.clone(),
             kes_public_key: initial_state.kes_public_key.clone(),
             initial_balances: initial_state.initial_balances,
-            customer_label: initial_state.customer_partial_channel_id.clone(),
-            merchant_label: initial_state.merchant_partial_channel_id.clone(),
+            customer_label: initial_state.customer_label.clone(),
+            merchant_label: initial_state.merchant_label.clone(),
         };
         let event = LifeCycleEvent::OnAckNewChannel(Box::new(proposal));
         lc = lc.handle_event(event);

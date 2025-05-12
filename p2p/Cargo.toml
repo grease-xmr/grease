@@ -15,6 +15,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_yml = {  workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+blake2 = "0.10.6"
 
 [dev-dependencies]
 env_logger = { workspace = true }

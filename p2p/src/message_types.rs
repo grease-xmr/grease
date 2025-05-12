@@ -1,17 +1,20 @@
 use crate::errors::PeerConnectionError;
+use crate::ContactInfo;
 use futures::channel::oneshot;
-use libgrease::payment_channel::ChannelRole;
+use libgrease::crypto::traits::PublicKey;
 use libgrease::state_machine::error::InvalidProposal;
-use libgrease::state_machine::Balances;
+use libgrease::state_machine::ChannelSeedInfo;
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 /// Requests that one peer can make to another peer in the Grease p2p network to create, update or close a payment
 /// channel.
 #[derive(Debug, Serialize, Deserialize)]
-pub enum GreaseRequest {
-    ProposeNewChannel(NewChannelProposal),
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
+pub enum GreaseRequest<P: PublicKey> {
+    ProposeNewChannel(NewChannelProposal<P>),
     SendMoney,
     RequestMoney,
     CloseChannel,
@@ -19,19 +22,60 @@ pub enum GreaseRequest {
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
 #[derive(Debug, Serialize, Deserialize)]
-pub enum GreaseResponse {
-    ChannelProposalResult(Result<AckChannelProposal, RejectChannelProposal>),
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
+pub enum GreaseResponse<P: PublicKey> {
+    ChannelProposalResult(ChannelProposalResult<P>),
     MoneySent,
     MoneyRequested,
     ChannelClosed,
+    ChannelNotFound,
     Error(String),
+}
+
+impl<P: PublicKey> From<ChannelProposalResult<P>> for GreaseResponse<P> {
+    fn from(res: ChannelProposalResult<P>) -> Self {
+        GreaseResponse::ChannelProposalResult(res)
+    }
+}
+
+impl<P> Display for GreaseResponse<P>
+where
+    P: PublicKey,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GreaseResponse::ChannelProposalResult(ChannelProposalResult::Accepted(_)) => {
+                write!(f, "Channel Proposal accepted")
+            }
+            GreaseResponse::ChannelProposalResult(ChannelProposalResult::Rejected(ref _rej)) => {
+                write!(f, "Channel Proposal REJECTED.")
+            }
+            GreaseResponse::MoneySent => write!(f, "Money sent"),
+            GreaseResponse::MoneyRequested => write!(f, "Money requested"),
+            GreaseResponse::ChannelClosed => write!(f, "Channel closed"),
+            GreaseResponse::Error(err) => write!(f, "Error: {}", err),
+            GreaseResponse::ChannelNotFound => write!(f, "Channel not found"),
+        }
+    }
+}
+
+impl<P> GreaseRequest<P>
+where
+    P: PublicKey,
+{
+    pub fn channel_name(&self) -> String {
+        match self {
+            GreaseRequest::ProposeNewChannel(ref proposal) => proposal.channel_name(),
+            _ => todo!(),
+        }
+    }
 }
 
 /// The set of commands that can be initiated by the user (via the `Client`) to the network event loop.
 ///
 /// There is typically one method in the `Client` for each of these commands.
 #[derive(Debug)]
-pub enum ClientCommand {
+pub enum ClientCommand<P: PublicKey> {
     /// Start listening on a given address. Executed via [`crate::Client::start_listening`].
     StartListening {
         addr: Multiaddr,
@@ -43,25 +87,21 @@ pub enum ClientCommand {
         peer_addr: Multiaddr,
         sender: oneshot::Sender<Result<(), PeerConnectionError>>,
     },
+    /// Generalised response message to peers for all requests.
+    ResponseToRequest {
+        res: GreaseResponse<P>,
+        return_chute: ResponseChannel<GreaseResponse<P>>,
+    },
     /// Request with a proposal to open a payment channel with a peer. Executed via [`crate::Client::new_channel_proposal`].
     ProposeChannelRequest {
         peer_id: PeerId,
-        data: NewChannelProposal,
-        sender: oneshot::Sender<Result<AckChannelProposal, RejectChannelProposal>>,
-    },
-    /// Response to a channel opening request. It is either an [`AckChannelProposal`] or a [`RejectChannel`].
-    ResponseToProposeChannel {
-        res: Result<AckChannelProposal, RejectChannelProposal>,
-        channel: ResponseChannel<GreaseResponse>,
+        data: NewChannelProposal<P>,
+        sender: oneshot::Sender<ChannelProposalResult<P>>,
     },
     MultiSigSetupRequest {
         peer_id: PeerId,
         multi_sig_setup: usize, // todo
         sender: oneshot::Sender<MultiSigSetupResponse>,
-    },
-    ResponseToMultiSigSetup {
-        res: MultiSigSetupResponse,
-        channel: ResponseChannel<GreaseResponse>,
     },
     KesReadyNotification {
         peer_id: PeerId,
@@ -70,25 +110,17 @@ pub enum ClientCommand {
     },
     AckKesReadyNotification {
         res: AckKesNotification,
-        channel: ResponseChannel<GreaseResponse>,
+        channel: ResponseChannel<GreaseResponse<P>>,
     },
     FundingTxRequestStart {
         peer_id: PeerId,
         funding_tx: usize, // todo
         sender: oneshot::Sender<FundingTxStartResponse>,
     },
-    ResponseToFundingTxRequestStart {
-        res: FundingTxStartResponse,
-        channel: ResponseChannel<GreaseResponse>,
-    },
     FundingTxFinalizeRequest {
         peer_id: PeerId,
         funding_tx: usize, // todo
         sender: oneshot::Sender<FundingTxFinalizeResponse>,
-    },
-    ResponseToFundingTxFinalizeRequest {
-        res: FundingTxFinalizeResponse,
-        channel: ResponseChannel<GreaseResponse>,
     },
     FundingTxBroadcastNotification {
         peer_id: PeerId,
@@ -97,7 +129,7 @@ pub enum ClientCommand {
     },
     AckFundingTxBroadcastNotification {
         res: AckFundingTxBroadcast,
-        channel: ResponseChannel<GreaseResponse>,
+        channel: ResponseChannel<GreaseResponse<P>>,
     },
     /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
     ConnectedPeers {
@@ -123,35 +155,61 @@ pub struct AckFundingTxBroadcast;
 pub struct AckKesNotification;
 
 #[derive(Debug)]
-pub enum PeerConnectionEvent {
-    InboundRequest { request: GreaseRequest, channel: ResponseChannel<GreaseResponse> },
+pub enum PeerConnectionEvent<P: PublicKey> {
+    InboundRequest { request: GreaseRequest<P>, response: ResponseChannel<GreaseResponse<P>> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
+pub struct NewChannelProposal<P: PublicKey> {
+    /// The seed info that the (usually) merchant provided initially.
+    pub seed: ChannelSeedInfo<P>,
+    /// The contact info for the customer (usually).
+    pub contact_info_proposer: ContactInfo,
+    /// The contact info for the merchant (usually).
+    pub contact_info_proposee: ContactInfo,
+    /// Hexadecimal string representation of the public key of the peer that will be the customer (usually).
+    pub proposer_pubkey: P,
+    /// Salt used to derive the channel ID - customer (usually) portion
+    pub proposer_label: String,
+}
+
+impl<P: PublicKey> NewChannelProposal<P> {
+    pub fn new<S: Into<String>>(
+        seed: ChannelSeedInfo<P>,
+        my_pubkey: P,
+        my_label: S,
+        my_contact_info: ContactInfo,
+        their_contact_info: ContactInfo,
+    ) -> Self {
+        Self {
+            seed,
+            contact_info_proposer: my_contact_info,
+            contact_info_proposee: their_contact_info,
+            proposer_pubkey: my_pubkey,
+            proposer_label: my_label.into(),
+        }
+    }
+
+    pub fn channel_name(&self) -> String {
+        format!("{}-{}", self.proposer_label, self.seed.user_label)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NewChannelProposal {
-    /// The role the proposer will take in the new payment channel. Is usually [`ChannelRole::Customer`].
-    pub role: ChannelRole,
-    /// Hexadecimal string representation of the public key of the peer that will be the merchant.
-    pub merchant_pubkey: String,
-    /// Hexadecimal string representation of the public key of the peer that will be the customer.
-    pub customer_pubkey: String,
-    /// Hexadecimal string representation of the public key of the Key Escrow Service.
-    pub kes_public_key: String,
-    /// The initial balances of the channel, in picoMonero.
-    pub initial_balances: Balances,
-    /// Salt used to derive the channel ID - customer portion
-    pub customer_partial_channel_id: Vec<u8>,
-    /// Salt used to derive the channel ID - merchant portion
-    pub merchant_partial_channel_id: Vec<u8>,
-    /// The deterministic name for the new channel. Also serves as a checksum for the information presented in this
-    /// struct.
-    pub channel_name: String,
+#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
+pub enum ChannelProposalResult<P: PublicKey> {
+    Accepted(NewChannelProposal<P>),
+    Rejected(RejectChannelProposal),
 }
 
-/// The result of a channel opening request.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AckChannelProposal {
-    pub data: NewChannelProposal,
+impl<P: PublicKey> ChannelProposalResult<P> {
+    pub fn accept(proposal: NewChannelProposal<P>) -> Self {
+        ChannelProposalResult::Accepted(proposal)
+    }
+    pub fn reject(reason: RejectReason, retry: RetryOptions) -> Self {
+        ChannelProposalResult::Rejected(RejectChannelProposal::new(reason, retry))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -176,6 +234,17 @@ pub enum RejectReason {
     AtCapacity,
     /// The proposal was not sent to the peer due to a local constraint.
     NotSent(String),
+}
+
+impl Display for RejectReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RejectReason::InvalidProposal(err) => write!(f, "Invalid proposal: {}", err),
+            RejectReason::PeerUnavailable => write!(f, "Peer unavailable"),
+            RejectReason::AtCapacity => write!(f, "At capacity"),
+            RejectReason::NotSent(err) => write!(f, "Not sent: {}", err),
+        }
+    }
 }
 
 const RETRY: u64 = 1;

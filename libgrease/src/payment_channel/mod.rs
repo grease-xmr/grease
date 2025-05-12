@@ -15,3 +15,12 @@ pub enum ChannelRole {
     Merchant,
     Customer,
 }
+
+impl ChannelRole {
+    pub fn other(&self) -> Self {
+        match self {
+            ChannelRole::Merchant => ChannelRole::Customer,
+            ChannelRole::Customer => ChannelRole::Merchant,
+        }
+    }
+}

@@ -1,12 +1,20 @@
 #![doc = include_str!("../README.md")]
 
-use crate::id_management::default_config_path;
 use anyhow::anyhow;
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+const DEFAULT_LISTEN_ADDRESS: &str = "/ip4/127.0.0.1/tcp/";
+
+//------------------------------------  DEFAULTS ------------------------------------
+pub fn default_listen_address(index: u8) -> Multiaddr {
+    Multiaddr::from_str(&format!("{DEFAULT_LISTEN_ADDRESS}{}", 21_000 + index as u16))
+        .expect("Invalid default listen address")
+}
 
 /// Grease Monero Payment Channels.
 ///
@@ -29,9 +37,12 @@ pub enum CliCommand {
     /// Add, list or delete local peer identities.
     #[command(subcommand, name = "id")]
     Id(IdCommand),
+    /// Print a random keypair and quit. The secret key can be used in the `initial_secret` field of the config file.
+    #[command(name = "keypair")]
+    Keypair,
     /// Run the server.
     #[command(name = "serve", alias = "start")]
-    Serve(ServerCommand),
+    Serve,
 }
 
 #[derive(Debug, Subcommand)]
@@ -53,26 +64,26 @@ pub enum IdCommand {
     },
 }
 
-#[derive(Debug, Args)]
-pub struct ServerCommand {
-    /// The address to listen to. The default is `/ip4/127.0.0.1/tcp/7740`.
-    #[arg(long = "listen-address", short = 'a', default_value = "/ip4/127.0.0.1/tcp/7740")]
-    pub listen_address: Multiaddr,
-    /// Disable the server's interactive user interface.
-    #[arg(long = "quiet", short = 'q', default_value_t = false)]
-    pub quiet: bool,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GlobalOptions {
+    /// The path to the configuration file. If not set, defaults to `$HOME/.grease/config.yml`.
+    pub base_path: Option<PathBuf>,
+    /// The path to the identity database. If not set, defaults to `$HOME/.grease/identities.yml`.
     pub identities_file: Option<PathBuf>,
+    /// The default identity to use when creating new channels.
     pub preferred_identity: Option<String>,
+    /// The address other parties can use to contact this identity on the internet.
     pub server_address: Option<Multiaddr>,
+    /// The public key of the Key Escrow Service (KES).
     pub kes_public_key: Option<Curve25519PublicKey>,
     /// A name, or label that will be inserted into every channel you are part of.
-    /// Make it descriptive and somewhat unique.
+    /// Make it descriptive and unique.
     pub user_label: Option<String>,
     pub initial_secret: Option<Curve25519Secret>,
+    /// The folder where channels are stored.
+    /// `channel_storage_directory` can be a relative or absolute path. If relative, it is a subdirectory of the
+    /// `base_path`.
+    pub channel_storage_directory: Option<PathBuf>,
 }
 
 impl GlobalOptions {
@@ -106,8 +117,43 @@ impl GlobalOptions {
         self.user_label.clone()
     }
 
+    /// The base path for grease configuration files and stored state, such as identities and channels.
+    pub fn base_path(&self) -> PathBuf {
+        self.base_path.clone().unwrap_or_else(|| {
+            let mut path = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            path.push(".grease");
+            path
+        })
+    }
+
+    /// Returns the absolute path to the channel storage directory.
+    ///
+    /// It is derived from `base_path` and `channel_storage_directory`.
+    /// If `channel_storage_directory` is relative, it is joined with `base_path`.
+    /// If `channel_storage_directory` is absolute, it is returned as is.
+    ///
+    /// If `channel_storage_directory` is not set, it defaults to `{base_path}/channels`.
+    pub fn channel_directory(&self) -> PathBuf {
+        let channel_dir = self.channel_storage_directory.as_ref().cloned().unwrap_or_else(|| "channels".into());
+        if channel_dir.is_relative() {
+            self.base_path().join(channel_dir)
+        } else {
+            channel_dir
+        }
+    }
+
     /// Returns a clone of the initial Curve25519 secret key, if set in the configuration.
     pub fn initial_secret(&self) -> Option<Curve25519Secret> {
         self.initial_secret.clone()
     }
+}
+
+/// Returns the default path to the configuration file, typically `$HOME/.grease/config.yml`.
+///
+/// If the home directory cannot be determined, the path defaults to `./.grease/config.yml`.
+pub fn default_config_path() -> PathBuf {
+    let mut home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.push(".grease");
+    home.push("config.yml");
+    home
 }

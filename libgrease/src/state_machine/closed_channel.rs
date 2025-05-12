@@ -7,7 +7,7 @@ use crate::state_machine::new_channel::{RejectNewChannelReason, TimeoutReason};
 use crate::state_machine::traits::ChannelState;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ClosedPaymentChannel + for<'d> Deserialize<'d>"))]
 pub struct ClosedChannelState<P, W, C>
 where
@@ -20,7 +20,7 @@ where
     channel: CloseType<C>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ClosedPaymentChannel + for<'d> Deserialize<'d>"))]
 enum CloseType<C: ClosedPaymentChannel> {
     Channel(C),

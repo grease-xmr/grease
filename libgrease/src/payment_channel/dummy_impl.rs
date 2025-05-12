@@ -63,7 +63,7 @@ pub struct DummyUpdateInfo {
     pub new_balance: Balances,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DummyClosedChannel {
     channel_id: ChannelId,
     role: ChannelRole,

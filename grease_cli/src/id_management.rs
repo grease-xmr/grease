@@ -1,25 +1,27 @@
-use crate::config::{GlobalOptions, IdCommand};
+use crate::config::{default_config_path, GlobalOptions, IdCommand};
 use crate::error::ServerError;
 use anyhow::anyhow;
-use grease_p2p::ConversationIdentity;
+use grease_p2p::{ConversationIdentity, KeyManager};
 use libgrease::crypto::hashes::{Blake512, HashToScalar};
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::traits::PublicKey;
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub struct KeyManager {
+#[derive(Clone)]
+pub struct MoneroKeyManager {
     initial_key: Curve25519Secret,
     initial_public_key: Curve25519PublicKey,
 }
 
-impl KeyManager {
+impl KeyManager for MoneroKeyManager {
+    type PublicKey = Curve25519PublicKey;
     /// Creates a new `KeyManager` from the given Curve25519 secret key, deriving its corresponding public key.
-    pub fn new(initial_key: Curve25519Secret) -> Self {
+    fn new(initial_key: Curve25519Secret) -> Self {
         let initial_public_key = Curve25519PublicKey::from_secret(&initial_key);
-        KeyManager { initial_key, initial_public_key }
+        MoneroKeyManager { initial_key, initial_public_key }
     }
 
     /// Deterministically generates a Curve25519 keypair based on the initial secret key and a given index.
@@ -33,7 +35,7 @@ impl KeyManager {
     ///
     /// # Returns
     /// A tuple containing the derived secret key and its corresponding public key.
-    pub fn new_keypair(&self, index: u64) -> (Curve25519Secret, Curve25519PublicKey) {
+    fn new_keypair(&self, index: u64) -> (Curve25519Secret, Curve25519PublicKey) {
         let secret = self.initial_key.as_scalar().as_bytes();
         let mut buf = [0u8; 40];
         buf[0..32].copy_from_slice(secret);
@@ -42,6 +44,15 @@ impl KeyManager {
         let next_key = Curve25519Secret::from(scalar);
         let next_public_key = Curve25519PublicKey::from_secret(&next_key);
         (next_key, next_public_key)
+    }
+
+    fn initial_public_key(&self) -> &Curve25519PublicKey {
+        &self.initial_public_key
+    }
+
+    fn validate_keypair(&self, secret: &Curve25519Secret, public: &Curve25519PublicKey) -> bool {
+        let pub2 = Curve25519PublicKey::from_secret(secret);
+        &pub2 == public
     }
 }
 
@@ -102,9 +113,10 @@ pub fn delete_identity(config: &GlobalOptions, id: &String) -> Result<bool, anyh
 pub fn create_identity(config: &GlobalOptions, name: Option<String>) -> Result<ConversationIdentity, anyhow::Error> {
     let path = config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
     let mut local_identities = load_or_create_identities(&path)?;
+    let addr = config.server_address.as_ref().ok_or_else(|| anyhow!("The config file needs a listener address."))?;
     let identity = match name {
-        Some(name) => ConversationIdentity::random_with_id(name.clone()),
-        None => ConversationIdentity::random(),
+        Some(name) => ConversationIdentity::random_with_id(name.clone(), addr.clone()),
+        None => ConversationIdentity::random(addr.clone()),
     };
     if local_identities.contains(identity.id()) {
         return Err(anyhow!("Identity with id {} already exists.", identity.id()));
@@ -181,16 +193,6 @@ impl LocalIdentitySet {
     }
 }
 
-/// Returns the default path to the configuration file, typically `$HOME/.grease/config.yml`.
-///
-/// If the home directory cannot be determined, the path defaults to `./.grease/config.yml`.
-pub fn default_config_path() -> PathBuf {
-    let mut home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.push(".grease");
-    home.push("config.yml");
-    home
-}
-
 /// Loads a set of conversation identities from a YAML file.
 ///
 /// Attempts to open and deserialize the specified file into a `LocalIdentitySet`.
@@ -219,15 +221,12 @@ pub fn save_config_file<P: AsRef<Path>>(path: P, ids: &LocalIdentitySet) -> Resu
 /// Loads a set of local conversation identities from the specified path, or creates an empty set if the file does not exist.
 ///
 /// If the file at the given path is missing, returns a new, empty `LocalIdentitySet`. Other I/O or server errors are returned as `anyhow::Error`.
-pub fn load_or_create_identities(path: &PathBuf) -> Result<LocalIdentitySet, anyhow::Error> {
-    match LocalIdentitySet::try_load(path) {
+pub fn load_or_create_identities<P: AsRef<Path>>(path: P) -> Result<LocalIdentitySet, anyhow::Error> {
+    match LocalIdentitySet::try_load(&path) {
         Ok(local_identities) => Ok(local_identities),
         Err(ServerError::IoError(err)) => {
             if err.kind() == std::io::ErrorKind::NotFound {
-                println!(
-                    "No configuration file found at {}",
-                    path.to_str().unwrap_or("[invalid utf-8 path]")
-                );
+                println!("No configuration file found at {}", path.as_ref().display());
                 Ok(LocalIdentitySet::default())
             } else {
                 Err(anyhow!("Error reading configuration file: {err}"))
@@ -240,9 +239,13 @@ pub fn load_or_create_identities(path: &PathBuf) -> Result<LocalIdentitySet, any
 /// Selects and removes a conversation identity from the local identity set.
 ///
 /// Loads identities from the specified path and returns the identity matching the given name, or the first available identity if no name is provided. Returns an error if no identities exist or if the specified identity is not found.
-pub fn assign_identity(path: PathBuf, id_name: Option<&String>) -> Result<ConversationIdentity, anyhow::Error> {
-    info!("Loading identities from {}", path.to_str().unwrap_or("[invalid utf-8 path]"));
-    let mut local_identities = load_or_create_identities(&path)?;
+pub fn assign_identity<P: AsRef<Path>>(
+    path: P,
+    id_name: Option<&String>,
+) -> Result<ConversationIdentity, anyhow::Error> {
+    let path = path.as_ref();
+    info!("Loading identities from {}", path.display());
+    let mut local_identities = load_or_create_identities(path)?;
     if local_identities.is_empty() {
         return Err(anyhow!("No identities found. Use `grease id new` to create one."));
     }
