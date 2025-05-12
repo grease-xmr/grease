@@ -26,7 +26,7 @@ async fn run_interactive(global_options: GlobalOptions) {
         Ok(app) => app,
         Err(err) => {
             eprintln!("** Error ** \n {err}");
-            std::process::exit(1);
+            return;
         }
     };
     let result = app.run().await;

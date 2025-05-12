@@ -1,5 +1,6 @@
 use libp2p::identity::Keypair;
 use libp2p::{Multiaddr, PeerId};
+use log::*;
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
@@ -43,7 +44,10 @@ impl ConversationIdentity {
     }
 
     pub fn dial_address(&self) -> Multiaddr {
-        self.address.clone().with_p2p(self.peer_id).unwrap_or_else(|e| e)
+        self.address.clone().with_p2p(self.peer_id).unwrap_or_else(|orig| {
+            warn!("Peer id and listen address don't match. Using original listen address, {orig}");
+            orig
+        })
     }
 
     pub fn keypair(&self) -> &Keypair {
