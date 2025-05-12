@@ -22,7 +22,7 @@ async fn main() {
 
     let result = match options.command {
         CliCommand::Id(id_command) => exec_id_command(id_command, config),
-        CliCommand::Serve => start::<Curve25519PublicKey>(config).await,
+        CliCommand::Serve => start(config).await,
         CliCommand::Keypair => print_random_keypair(),
     };
 

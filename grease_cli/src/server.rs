@@ -6,7 +6,7 @@ use log::*;
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 /// Starts the peer-to-peer payment channel server and runs the interactive application.
-pub async fn start<P: PublicKey + 'static>(config: GlobalOptions) -> Result<(), anyhow::Error> {
+pub async fn start(config: GlobalOptions) -> Result<(), anyhow::Error> {
     info!("Starting interactive server");
     run_interactive(config).await;
     info!("Server has shut down.");
