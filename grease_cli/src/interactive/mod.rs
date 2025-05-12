@@ -162,6 +162,8 @@ impl InteractiveApp {
                 let channel = self.create_channel(secret, final_proposal, proposal)?;
                 let name = channel.name();
                 self.server.add_channel(channel).await;
+                self.save_channels().await?;
+                info!("Channels saved.");
                 self.current_channel = Some(name.clone());
                 Ok(format!("Channel proposal accepted! Channel ID: {name}"))
             }

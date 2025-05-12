@@ -5,15 +5,7 @@ use log::*;
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
-/// Starts the peer-to-peer payment channel server or runs the interactive application.
-///
-/// If the `quiet` flag is set in the server command, initializes the server with the specified identity and  
-/// configuration, establishes a network connection, listens for incoming peer requests, and handles them asynchronously.
-/// Otherwise, launches the interactive command-line application.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the server or interactive application completes successfully, or an error if initialization or network operations fail.
+/// Starts the peer-to-peer payment channel server and runs the interactive application.
 pub async fn start<P: PublicKey + 'static>(config: GlobalOptions) -> Result<(), anyhow::Error> {
     info!("Starting interactive server");
     run_interactive(config).await;
