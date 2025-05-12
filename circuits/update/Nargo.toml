@@ -1,0 +1,9 @@
+[package]
+name = "GreaseUpdate"
+version = "0.1.0"
+type = "bin"
+
+[dependencies]
+library = { path = "../library" }
+bignum = { tag = "v0.7.1", git = "https://github.com/noir-lang/noir-bignum" }
+edwards = { tag = "v0.2.1", git = "https://github.com/noir-lang/noir-edwards" }
