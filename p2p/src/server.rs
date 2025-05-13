@@ -13,8 +13,8 @@ use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::MultiSigWallet;
 use libgrease::payment_channel::ActivePaymentChannel;
-use libgrease::state_machine::error::InvalidProposal;
-use libgrease::state_machine::{ChannelLifeCycle, NewChannelBuilder};
+use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
+use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
 use libp2p::request_response::ResponseChannel;
 use libp2p::Multiaddr;
 use log::*;
@@ -96,6 +96,10 @@ where
         self.inner.channels.list_channels().await
     }
 
+    pub async fn channel_status(&self, name: &str) -> Option<LifecycleStage> {
+        self.inner.channels.try_peek(name).await.map(|channel| channel.state().stage())
+    }
+
     pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
         self.inner.channels.save_channels(path).await
     }
@@ -123,26 +127,7 @@ where
         client.dial(address).await?;
         debug!("Sending channel proposal to peer.");
         let res = client.new_channel_proposal(proposal).await?;
-        match &res {
-            ChannelProposalResult::Accepted(ack) => {
-                self.check_proposal_ack(ack).await?;
-            }
-            ChannelProposalResult::Rejected(rej) => {
-                self.handle_proposal_rejection(rej).await;
-            }
-        }
         Ok(res)
-    }
-
-    async fn check_proposal_ack(&self, _ack: &NewChannelProposal<P>) -> Result<(), PeerConnectionError> {
-        // TODO - check that ack data matches what we expect
-        debug!("Channel proposal was accepted by peer");
-        Ok(())
-    }
-
-    async fn handle_proposal_rejection(&self, _rejection: &RejectChannelProposal) {
-        // TODO - handle the rejection
-        error!("Channel proposal was rejected");
     }
 }
 
@@ -246,14 +231,6 @@ where
 
     /// Handle an incoming request to open a payment channel.
     async fn handle_open_channel_request(&self, data: &NewChannelProposal<P>) -> GreaseResponse<P> {
-        let delegate = self.delegate.clone();
-        if let Err(invalid) = delegate.verify_proposal(data) {
-            let retry = RetryOptions::close_only();
-            let rej = ChannelProposalResult::reject(RejectReason::InvalidProposal(invalid), retry);
-            return GreaseResponse::ChannelProposalResult(rej);
-        }
-        // Data has been verified, so accept the info in data as correct
-        let role = data.seed.role.other();
         // Check that the public key passed in the proposal matches our keypair
         let my_pubkey = data.seed.pubkey.clone();
         let key_index = data.seed.key_id;
@@ -265,6 +242,15 @@ where
                 RetryOptions::close_only(),
             ));
         }
+        // Let the delegate do their checks
+        let delegate = self.delegate.clone();
+        if let Err(invalid) = delegate.verify_proposal(data) {
+            let retry = RetryOptions::close_only();
+            let rej = ChannelProposalResult::reject(RejectReason::InvalidProposal(invalid), retry);
+            return GreaseResponse::ChannelProposalResult(rej);
+        }
+        // Construct the new channel
+        let role = data.seed.role.other();
         // Reconstruct the new channel state from our point of view
         let new_state = NewChannelBuilder::new(role, my_pubkey, my_secret)
             .with_my_user_label(&data.seed.user_label)
@@ -274,10 +260,22 @@ where
             .with_peer_label(&data.proposer_label)
             .with_kes_public_key(data.seed.kes_public_key.clone())
             .build::<blake2::Blake2b512>()
-            .expect("You've forgotten a field i the new state machine builder, dev");
+            .expect("You've forgotten a field in the new state machine builder, dev");
+
         let state = ChannelLifeCycle::New(Box::new(new_state));
         let peer_info = data.contact_info_proposer.clone();
-        let channel = PaymentChannel::new(peer_info, state);
+        let mut channel = PaymentChannel::new(peer_info, state);
+        if let Err(err) = channel.receive_proposal() {
+            warn!("Channel proposal was not accepted by the state machine");
+            let reason = match err {
+                LifeCycleError::InvalidStateTransition => RejectReason::NotANewChannel,
+                LifeCycleError::Proposal(invalid) => RejectReason::InvalidProposal(invalid),
+            };
+            return GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
+                reason,
+                RetryOptions::close_only(),
+            ));
+        }
         self.channels.add(channel).await;
         let ack = ChannelProposalResult::accept(data.clone());
         GreaseResponse::ChannelProposalResult(ack)

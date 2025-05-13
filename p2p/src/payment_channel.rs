@@ -1,12 +1,15 @@
 use crate::errors::PaymentChannelError;
+use crate::message_types::NewChannelProposal;
 use crate::ContactInfo;
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::MultiSigWallet;
 use libgrease::payment_channel::ActivePaymentChannel;
-use libgrease::state_machine::{ChannelLifeCycle, ChannelSeedInfo};
+use libgrease::state_machine::error::LifeCycleError;
+use libgrease::state_machine::lifecycle::LifeCycleEvent;
+use libgrease::state_machine::{ChannelLifeCycle, ChannelSeedInfo, NewChannelState, ProposedChannelInfo};
 use libp2p::{Multiaddr, PeerId};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -50,8 +53,8 @@ where
     W: MultiSigWallet,
     KES: KeyEscrowService,
 {
-    pub peer_info: ContactInfo,
-    pub state: ChannelLifeCycle<P, C, W, KES>,
+    peer_info: ContactInfo,
+    state: Option<ChannelLifeCycle<P, C, W, KES>>,
 }
 
 impl<P, C, W, KES> PaymentChannel<P, C, W, KES>
@@ -63,7 +66,7 @@ where
 {
     /// Creates a new `PaymentChannel` with the given identity and peer information.
     pub fn new(peer_info: ContactInfo, state: ChannelLifeCycle<P, C, W, KES>) -> Self {
-        PaymentChannel { peer_info, state }
+        PaymentChannel { peer_info, state: Some(state) }
     }
 
     pub fn try_load_from_file<PATH: AsRef<Path>>(path: PATH) -> Result<Self, PaymentChannelError> {
@@ -100,9 +103,48 @@ where
         self.peer_info.peer_id
     }
 
+    pub fn state(&self) -> &ChannelLifeCycle<P, C, W, KES> {
+        self.state.as_ref().expect("State should be present")
+    }
+
     /// Returns the channel name, which is identical to `channel_id.name()`
     pub fn name(&self) -> String {
-        self.state.current_state().name()
+        self.state().current_state().name()
+    }
+
+    fn handle_event(&mut self, event: LifeCycleEvent<P, C, W, KES>) -> Result<(), LifeCycleError> {
+        let state = self.state.take().expect("State should be present");
+        let (state, result) = match state.handle_event(event) {
+            Ok(new_state) => (new_state, Ok(())),
+            Err((new_state, err)) => {
+                debug!("Error handling event: {err}");
+                (new_state, Err(err))
+            }
+        };
+        self.state = Some(state);
+        result
+    }
+
+    /// Drive the state transition from New -> Establishing for merchants/proposees accepting a proposal
+    pub(crate) fn receive_proposal(&mut self) -> Result<(), LifeCycleError> {
+        let proposal = {
+            let state = self.state();
+            if let ChannelLifeCycle::New(new_state) = state {
+                new_state.for_proposal()
+            } else {
+                warn!("Receive proposal called, but we're not in a New state");
+                return Err(LifeCycleError::InvalidStateTransition);
+            }
+        };
+        let event = LifeCycleEvent::OnAckNewChannel(Box::new(proposal));
+        self.handle_event(event)
+    }
+
+    /// Drive the state transition from New -> Establishing for customers/proposers handling an ACK on a proposal
+    pub fn receive_proposal_ack(&mut self, ack: NewChannelProposal<P>) -> Result<(), LifeCycleError> {
+        let info = ack.proposed_channel_info();
+        let event = LifeCycleEvent::OnAckNewChannel(Box::new(info));
+        self.handle_event(event)
     }
 }
 

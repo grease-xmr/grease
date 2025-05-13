@@ -159,6 +159,7 @@ where
                     initial_balances: new_state.initial_balances,
                     channel_id: new_state.channel_id.clone(),
                 };
+                debug!("Transitioning from New to Establishing state");
                 let new_state = ChannelLifeCycle::Establishing(Box::new(establishing_state));
                 Ok(new_state)
             }
@@ -250,7 +251,7 @@ where
         Ok(ChannelLifeCycle::Disputing(Box::new(dispute_state)))
     }
 
-    fn timeout(self, reason: TimeoutReason) -> Self {
+    fn timeout(self, reason: TimeoutReason) -> Result<Self, (Self, LifeCycleError)> {
         warn!(
             "Channel in stage ´{}´ timed out and is now closed. Reason: {}",
             reason.stage(),
@@ -260,7 +261,7 @@ where
         let channel_id = self.current_state().channel_id().clone();
         let channel_role = self.current_state().role();
         let state = ClosedChannelState::empty(timeout, channel_id, channel_role);
-        ChannelLifeCycle::Closed(Box::new(state))
+        Ok(ChannelLifeCycle::Closed(Box::new(state)))
     }
 
     fn disputing_to_closed(self, info: DisputeResolvedInfo<P>) -> Result<Self, (Self, LifeCycleError)> {
@@ -276,7 +277,7 @@ where
     }
 
     // Converts Result<Self, Self+> to Self, logging the error in the process
-    fn log_and_consolidate(prev_stage: LifecycleStage, result: Result<Self, (Self, LifeCycleError)>) -> Self {
+    pub fn log_and_consolidate(prev_stage: LifecycleStage, result: Result<Self, (Self, LifeCycleError)>) -> Self {
         match result {
             Ok(new_state) => {
                 debug!("State transition from {prev_stage} to {} was successful", new_state.stage());
@@ -289,27 +290,23 @@ where
         }
     }
 
-    pub fn handle_event(self, event: LifeCycleEvent<P, C, W, KES>) -> Self {
+    pub fn handle_event(self, event: LifeCycleEvent<P, C, W, KES>) -> Result<Self, (Self, LifeCycleError)> {
         use LifeCycleEvent::*;
         use LifecycleStage::*;
         match (self.stage(), event) {
-            (New, OnAckNewChannel(prop)) => Self::log_and_consolidate(New, self.new_to_establishing(*prop)),
-            (New, OnRejectNewChannel(reason)) => Self::log_and_consolidate(New, self.reject_new_channel(*reason)),
+            (New, OnAckNewChannel(prop)) => self.new_to_establishing(*prop),
+            (New, OnRejectNewChannel(reason)) => self.reject_new_channel(*reason),
             (New | Establishing, OnTimeout(reason)) => self.timeout(*reason),
-            (Establishing, OnChannelEstablished(info)) => {
-                Self::log_and_consolidate(Establishing, self.establishing_to_open(*info))
-            }
-            (Open, OnUpdateChannel(info)) => Self::log_and_consolidate(Open, self.update_channel(*info)),
-            (Open, OnStartClose(info)) => Self::log_and_consolidate(Open, self.open_to_closing(*info)),
-            (Open, OnForceClose(info)) => Self::log_and_consolidate(Open, self.open_to_dispute(*info)),
-            (Closing, OnSuccessfulClose(info)) => Self::log_and_consolidate(Closing, self.closing_to_closed(*info)),
-            (Closing, OnForceClose(info)) => Self::log_and_consolidate(Closing, self.closing_to_dispute(*info)),
-            (Disputing, OnDisputeResolved(info)) => {
-                Self::log_and_consolidate(Disputing, self.disputing_to_closed(*info))
-            }
+            (Establishing, OnChannelEstablished(info)) => self.establishing_to_open(*info),
+            (Open, OnUpdateChannel(info)) => self.update_channel(*info),
+            (Open, OnStartClose(info)) => self.open_to_closing(*info),
+            (Open, OnForceClose(info)) => self.open_to_dispute(*info),
+            (Closing, OnSuccessfulClose(info)) => self.closing_to_closed(*info),
+            (Closing, OnForceClose(info)) => self.closing_to_dispute(*info),
+            (Disputing, OnDisputeResolved(info)) => self.disputing_to_closed(*info),
             (_, ev) => {
                 error!("Unhandled event / state combination: {ev} in {}", self.stage());
-                self
+                Err((self, LifeCycleError::InvalidStateTransition))
             }
         }
     }
@@ -366,7 +363,8 @@ pub mod test {
     };
     use crate::state_machine::open_channel::ChannelUpdateInfo;
     use crate::state_machine::{
-        ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage, NewChannelBuilder,
+        ChannelClosedReason, ChannelLifeCycle, ChannelSeedInfo, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
+        NewChannelBuilder,
     };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};
     use blake2::Blake2b512;
@@ -407,9 +405,10 @@ pub mod test {
         mut lc: DummyLifecycle,
         initial_state: &NewChannelState<Curve25519PublicKey>,
     ) -> DummyLifecycle {
-        // Data gets sent to merchant. They respond with an ack and a proposal
+        // Data gets sent to merchant. They respond with an ack and a proposal. Note that the role is role they want
+        // me to play.
         let proposal = ProposedChannelInfo {
-            role: ChannelRole::Merchant,
+            role: ChannelRole::Customer,
             channel_id: initial_state.channel_id.clone(),
             merchant_pubkey: initial_state.merchant_pubkey.clone(),
             customer_pubkey: initial_state.customer_pubkey.clone(),
@@ -419,7 +418,7 @@ pub mod test {
             merchant_label: initial_state.merchant_label.clone(),
         };
         let event = LifeCycleEvent::OnAckNewChannel(Box::new(proposal));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event));
         // The channel is now in the establishing phase
         assert_eq!(lc.stage(), LifecycleStage::Establishing);
         lc
@@ -437,7 +436,7 @@ pub mod test {
         let kes = DummyKes;
         let established = ChannelEstablishedInfo { wallet, kes, channel };
         let event = LifeCycleEvent::OnChannelEstablished(Box::new(established));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Establishing, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Open);
         lc
     }
@@ -450,7 +449,7 @@ pub mod test {
         let channel_name = lc.current_state().name();
         let info = ChannelUpdateInfo::new(channel_name, update);
         let update = DummyEvent::OnUpdateChannel(Box::new(info));
-        lc = lc.handle_event(update);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(update));
         assert_eq!(lc.stage(), LifecycleStage::Open);
         lc
     }
@@ -459,7 +458,7 @@ pub mod test {
         // A co-operative close channel request has been fired
         let close_info = StartCloseInfo {};
         let close_event = DummyEvent::OnStartClose(Box::new(close_info));
-        lc = lc.handle_event(close_event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(close_event));
         lc
     }
 
@@ -467,7 +466,7 @@ pub mod test {
         // We are triggering a force close
         let close_info = ForceCloseInfo::trigger("Some people want the world to burn");
         let close_event = DummyEvent::OnForceClose(Box::new(close_info));
-        lc = lc.handle_event(close_event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(close_event));
         assert_eq!(lc.stage(), LifecycleStage::Disputing);
         lc
     }
@@ -476,7 +475,7 @@ pub mod test {
         // The channel closure was successfully negotiated
         let info = SuccessfulCloseInfo {};
         let event = DummyEvent::OnSuccessfulClose(Box::new(info));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Closing, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Normal)));
         lc
@@ -486,7 +485,7 @@ pub mod test {
         // The force close was successful
         let info = DisputeResolvedInfo::uncontested();
         let event = DummyEvent::OnDisputeResolved(Box::new(info));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Closing, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(
             lc.closed_reason(),
@@ -499,7 +498,7 @@ pub mod test {
         // The force close was successful
         let info = DisputeResolvedInfo::lost("Provided more recent state to KES");
         let event = DummyEvent::OnDisputeResolved(Box::new(info));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Disputing, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(
             lc.closed_reason(),
@@ -533,7 +532,7 @@ pub mod test {
         let (mut lc, _) = new_channel_state();
         // Merchant never responds
         let event = LifeCycleEvent::OnTimeout(Box::new(TimeoutReason::new("Merchant timeout", lc.stage())));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Timeout(_))));
     }
@@ -548,7 +547,7 @@ pub mod test {
             "Merchant timeout during channel negotiation",
             lc.stage(),
         )));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Establishing, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Timeout(_))));
     }
@@ -560,7 +559,7 @@ pub mod test {
         // Merchant rejects the channel proposal
         let reason = RejectNewChannelReason::new("At capacity");
         let event = LifeCycleEvent::OnRejectNewChannel(Box::new(reason));
-        lc = lc.handle_event(event);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event));
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Rejected(_))));
     }
@@ -575,7 +574,7 @@ pub mod test {
         let channel_name = lc.current_state().name();
         let info = ChannelUpdateInfo::new(channel_name, update);
         let update = DummyEvent::OnUpdateChannel(Box::new(info));
-        lc = lc.handle_event(update);
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(update));
         assert_eq!(lc.stage(), LifecycleStage::New);
     }
 
