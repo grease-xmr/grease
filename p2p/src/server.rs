@@ -9,13 +9,12 @@ use crate::{
 };
 use futures::future::join;
 use futures::StreamExt;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::MultiSigWallet;
 use libgrease::payment_channel::ActivePaymentChannel;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
-use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder, NewChannelState};
+use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
 use libp2p::request_response::ResponseChannel;
 use libp2p::Multiaddr;
 use log::*;
@@ -141,6 +140,8 @@ where
                     Err(err) => warn!("😢 We cannot accept the channel creation terms: {err}"),
                 }
                 let name = channel.name();
+                // We add the channel evn if we're rejecting it, because the merchant may want to send messages related
+                // to it, and we need to be able to remind ourselves of what happened.
                 self.add_channel(channel).await;
                 Ok(name)
             }
@@ -288,7 +289,7 @@ where
     async fn handle_open_channel_request(&self, data: &NewChannelProposal<P>) -> GreaseResponse<P> {
         // Check that the public key passed in the proposal matches our keypair
         let (my_secret, my_pubkey) = match self.check_pubkey_matches(data) {
-            Ok(my_secret) => my_secret,
+            Ok(keys) => keys,
             Err(err) => return err,
         };
         // Let the delegate do their checks

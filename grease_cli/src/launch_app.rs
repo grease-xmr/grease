@@ -1,6 +1,5 @@
 use crate::config::GlobalOptions;
 use crate::interactive::InteractiveApp;
-use libgrease::crypto::traits::PublicKey;
 use log::*;
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");

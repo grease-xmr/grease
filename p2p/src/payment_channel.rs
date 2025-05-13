@@ -7,7 +7,7 @@ use libgrease::monero::MultiSigWallet;
 use libgrease::payment_channel::ActivePaymentChannel;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::LifeCycleEvent;
-use libgrease::state_machine::{ChannelLifeCycle, ChannelSeedInfo, NewChannelState, ProposedChannelInfo};
+use libgrease::state_machine::{ChannelLifeCycle, ChannelSeedInfo};
 use libp2p::{Multiaddr, PeerId};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};

@@ -5,7 +5,7 @@ use std::fmt::Display;
 pub mod formatting;
 pub mod menus;
 use crate::channel_management::{
-    MoneroChannelBuilder, MoneroLifeCycle, MoneroNetworkServer, MoneroOutOfBandMerchantInfo, MoneroPaymentChannel,
+    MoneroNetworkServer, MoneroOutOfBandMerchantInfo,
 };
 use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
@@ -14,11 +14,10 @@ use crate::id_management::{
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
-use grease_p2p::message_types::{ChannelProposalResult, NewChannelProposal};
+use grease_p2p::message_types::NewChannelProposal;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::state_machine::error::LifeCycleError;
-use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage, NewChannelState};
+use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage};
 use log::*;
 use menus::*;
 use rand::{Rng, RngCore};

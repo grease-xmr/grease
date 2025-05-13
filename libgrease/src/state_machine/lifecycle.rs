@@ -363,7 +363,7 @@ pub mod test {
     };
     use crate::state_machine::open_channel::ChannelUpdateInfo;
     use crate::state_machine::{
-        ChannelClosedReason, ChannelLifeCycle, ChannelSeedInfo, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
+        ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
         NewChannelBuilder,
     };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};

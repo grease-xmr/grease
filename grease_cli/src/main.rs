@@ -3,7 +3,6 @@ use grease_cli::config::{CliCommand, CliOptions, GlobalOptions};
 use grease_cli::id_management::exec_id_command;
 use grease_cli::launch_app::start;
 use grease_cli::other_commands::print_random_keypair;
-use libgrease::crypto::keys::Curve25519PublicKey;
 
 #[tokio::main]
 /// Entry point for the CLI application.
