@@ -54,6 +54,7 @@ where
     KES: KeyEscrowService,
 {
     peer_info: ContactInfo,
+    // Invariant: `state` is `None` only transiently inside `handle_event`.
     state: Option<ChannelLifeCycle<P, C, W, KES>>,
 }
 

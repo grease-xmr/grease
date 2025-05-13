@@ -109,6 +109,8 @@ impl InteractiveApp {
         let at = self.identity.dial_address();
         self.server.start_listening(at).await?;
         loop {
+            // Refresh channel lifecycle stage before showing the menu
+            self.update_status().await;
             let theme = ColorfulTheme { prompt_style: Style::new().magenta().bold(), ..ColorfulTheme::default() };
             let i = FuzzySelect::with_theme(&theme)
                 .with_prompt(self.menu_prompt())
