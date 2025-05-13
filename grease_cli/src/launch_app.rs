@@ -27,7 +27,7 @@ async fn run_interactive(global_options: GlobalOptions) {
         Err(e) => error!("Error saving channels: {}", e),
     }
     match result {
-        Ok(_) => println!("Bye!"),
+        Ok(_) => println!("Server shut down successfully."),
         Err(e) => error!("Session ended with error: {}", e),
     }
 }
