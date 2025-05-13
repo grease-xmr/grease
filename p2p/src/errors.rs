@@ -23,8 +23,6 @@ pub enum PeerConnectionError {
     Infallible(#[from] Infallible),
     #[error("The channel {0} does not exist.")]
     ChannelNotFound(String),
-    #[error("An established channel cannot make a new proposal")]
-    NotANewChannel,
 }
 
 #[derive(Error, Debug)]

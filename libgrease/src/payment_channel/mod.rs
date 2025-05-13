@@ -23,4 +23,12 @@ impl ChannelRole {
             ChannelRole::Customer => ChannelRole::Merchant,
         }
     }
+
+    pub fn is_merchant(&self) -> bool {
+        matches!(self, ChannelRole::Merchant)
+    }
+
+    pub fn is_customer(&self) -> bool {
+        matches!(self, ChannelRole::Customer)
+    }
 }

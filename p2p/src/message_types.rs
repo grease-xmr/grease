@@ -1,9 +1,11 @@
 use crate::errors::PeerConnectionError;
 use crate::ContactInfo;
 use futures::channel::oneshot;
+use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
+use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::InvalidProposal;
-use libgrease::state_machine::ChannelSeedInfo;
+use libgrease::state_machine::{ChannelSeedInfo, ProposedChannelInfo};
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
@@ -194,6 +196,35 @@ impl<P: PublicKey> NewChannelProposal<P> {
     pub fn channel_name(&self) -> String {
         format!("{}-{}", self.proposer_label, self.seed.user_label)
     }
+
+    /// Produce a struct that contains the information needed to create a new channel.
+    /// The information is from the point of view of the *proposer* of the channel, usually the customer.
+    pub fn proposed_channel_info(&self) -> ProposedChannelInfo<P> {
+        let (merchant_pubkey, customer_pubkey) = match self.seed.role {
+            ChannelRole::Merchant => (self.proposer_pubkey.clone(), self.seed.pubkey.clone()),
+            ChannelRole::Customer => (self.seed.pubkey.clone(), self.proposer_pubkey.clone()),
+        };
+        let (merchant_label, customer_label) = match self.seed.role {
+            ChannelRole::Merchant => (self.proposer_label.clone(), self.seed.user_label.clone()),
+            ChannelRole::Customer => (self.seed.user_label.clone(), self.proposer_label.clone()),
+        };
+        let channel_id = ChannelId::new::<blake2::Blake2b512, _, _, _>(
+            &merchant_label,
+            &customer_label,
+            "",
+            self.seed.initial_balances,
+        );
+        ProposedChannelInfo {
+            role: self.seed.role,
+            merchant_pubkey,
+            customer_pubkey,
+            kes_public_key: self.seed.kes_public_key.clone(),
+            initial_balances: self.seed.initial_balances,
+            customer_label,
+            merchant_label,
+            channel_id,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -234,6 +265,8 @@ pub enum RejectReason {
     AtCapacity,
     /// The proposal was not sent to the peer due to a local constraint.
     NotSent(String),
+    /// The channel was not newly created, and so cannot accept a proposal.
+    NotANewChannel,
 }
 
 impl Display for RejectReason {
@@ -243,6 +276,9 @@ impl Display for RejectReason {
             RejectReason::PeerUnavailable => write!(f, "Peer unavailable"),
             RejectReason::AtCapacity => write!(f, "At capacity"),
             RejectReason::NotSent(err) => write!(f, "Not sent: {}", err),
+            RejectReason::NotANewChannel => {
+                write!(f, "The channel was not newly created, and so cannot accept a proposal.")
+            }
         }
     }
 }

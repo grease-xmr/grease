@@ -7,6 +7,7 @@ use crate::state_machine::establishing_channel::Balances;
 use crate::state_machine::traits::ChannelState;
 use crate::state_machine::LifecycleStage;
 use digest::Digest;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -67,13 +68,8 @@ impl<P: PublicKey> NewChannelBuilder<P> {
         {
             return None;
         }
-        let my_salt = self.my_label.clone().unwrap();
-        let their_salt = self.peer_label.clone().unwrap();
 
-        let salt = match self.channel_role {
-            ChannelRole::Merchant => [my_salt, their_salt].concat(),
-            ChannelRole::Customer => [their_salt, my_salt].concat(),
-        };
+        let salt = String::default();
         let merchant_initial = self.merchant_amount.unwrap_or_default();
         let customer_initial = self.customer_amount.unwrap_or_default();
         let initial_balances = Balances::new(merchant_initial, customer_initial);
@@ -162,7 +158,8 @@ impl<P: PublicKey> NewChannelState<P> {
     /// A sanity check to make sure that information coming from the peer in the proposal matches what I shared with
     /// her initially.
     pub fn review_proposal(&self, proposal: &ProposedChannelInfo<P>) -> Result<(), InvalidProposal> {
-        if self.role == proposal.role {
+        debug!("Internal sanity check on proposal info");
+        if self.role != proposal.role {
             return Err(InvalidProposal::IncompatibleRoles);
         }
         if self.initial_balances != proposal.initial_balances {

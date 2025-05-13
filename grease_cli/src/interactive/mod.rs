@@ -17,7 +17,8 @@ use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use grease_p2p::message_types::{ChannelProposalResult, NewChannelProposal};
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::state_machine::{Balances, ChannelSeedBuilder};
+use libgrease::state_machine::error::LifeCycleError;
+use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage, NewChannelState};
 use log::*;
 use menus::*;
 use rand::{Rng, RngCore};
@@ -28,6 +29,7 @@ pub struct InteractiveApp {
     current_menu: &'static Menu,
     breadcrumbs: Vec<&'static Menu>,
     current_channel: Option<String>,
+    channel_status: Option<LifecycleStage>,
     server: MoneroNetworkServer,
 }
 
@@ -48,13 +50,21 @@ impl InteractiveApp {
         let delegate = DummyDelegate;
         let channels = PaymentChannels::load(&config.channel_directory())?;
         let server = MoneroNetworkServer::new(identity.clone(), channels, delegate, key_manager)?;
-        let app = Self { identity, current_menu, breadcrumbs, config, current_channel: None, server };
+        let app =
+            Self { identity, current_menu, breadcrumbs, config, current_channel: None, channel_status: None, server };
         Ok(app)
     }
 
     pub async fn save_channels(&self) -> Result<()> {
         self.server.save_channels(&self.config.channel_directory()).await?;
         Ok(())
+    }
+
+    async fn update_status(&mut self) {
+        if let Some(name) = self.current_channel.as_ref() {
+            let status = self.server.channel_status(name.as_str()).await;
+            self.channel_status = status;
+        }
     }
 
     async fn select_channel(&mut self) -> Result<String> {
@@ -74,11 +84,12 @@ impl InteractiveApp {
     fn menu_prompt(&self) -> String {
         let breadcrumbs = self.breadcrumbs.iter().map(|m| m.0).collect::<Vec<&str>>().join(" » ");
         let p2p_identity = format!("{}@{}", self.identity.id(), self.identity.peer_id());
-        let status = match self.current_channel {
-            Some(ref channel) => channel.as_str(),
-            None => "No active channel",
+        let status = match (self.current_channel.as_ref(), self.channel_status) {
+            (Some(channel), Some(stage)) => &format!("{channel} ({stage})"),
+            (Some(channel), None) => &format!("{channel} (No status)"),
+            (None, _) => "No active channel",
         };
-        format!("\n{breadcrumbs:-30}{status:50}{p2p_identity:70}\n[Ready]")
+        format!("\n{breadcrumbs:-30}{status:60}{p2p_identity:60}\n[Ready]")
     }
 
     fn pop_menu(&mut self) {
@@ -98,6 +109,8 @@ impl InteractiveApp {
         let at = self.identity.dial_address();
         self.server.start_listening(at).await?;
         loop {
+            // Refresh channel lifecycle stage before showing the menu
+            self.update_status().await;
             let theme = ColorfulTheme { prompt_style: Style::new().magenta().bold(), ..ColorfulTheme::default() };
             let i = FuzzySelect::with_theme(&theme)
                 .with_prompt(self.menu_prompt())
@@ -113,7 +126,7 @@ impl InteractiveApp {
                 REMOVE_IDENTITY => handle_response(self.delete_identity()),
                 LIST_IDENTITIES => handle_response(self.list_identities()),
                 SHARE_MERCHANT_INFO => handle_response(self.share_merchant_info()),
-                PROPOSE_CHANNEL => handle_response(self.initiate_new_channel().await),
+                PROPOSE_CHANNEL => handle_response(self.propose_new_channel().await),
                 CLOSE_CHANNEL => println!("Coming soon"),
                 DISPUTE_CHANNEL_CLOSE => println!("Coming soon"),
                 FORCE_CLOSE_CHANNEL => println!("Coming soon"),
@@ -141,31 +154,38 @@ impl InteractiveApp {
         println!("Found {} channels:\n{}", channels.len(), names);
     }
 
-    /// Propose a new channel
-    ///
-    /// One peer, usually the customer, will propose a new channel by connecting to the merchant over the P2P network.
-    /// and submitting the channel proposal. The information, such as pubkeys, initial balances, etc., is partially
-    /// from the customer, but some will have been provided by the merchant  out-of-band (see
-    /// [`Self::share_merchant_info`]).
-    ///
-    /// If the merchant accepts the proposal, they will send a message back to the customer with the channel ID, and
-    /// we can progress to the Establishing state.
-    async fn initiate_new_channel(&mut self) -> Result<String> {
+    async fn propose_new_channel(&mut self) -> Result<String> {
+        // Get the merchant details and add our info
         let oob_info = dialoguer::Input::<String>::new().with_prompt("Paste merchant info").interact()?;
         let oob_info = serde_json::from_str::<MoneroOutOfBandMerchantInfo>(&oob_info)?;
         let (secret, proposal) = self.create_channel_proposal(oob_info)?;
         trace!("Generated new proposal");
+        // Send the proposal to the merchant and wait for reply
         let result = self.server.send_proposal(proposal.clone()).await?;
         match result {
+            // We got an ack, but the merchant may have changed the proposal, so we need to check.
             ChannelProposalResult::Accepted(final_proposal) => {
-                info!("🥂 Channel proposal accepted!");
-                let channel = self.create_channel(secret, final_proposal, proposal)?;
+                debug!("Channel proposal ACK received.");
+                info!("Received channel proposal response. Validating results...");
+                let state = self.create_new_state(secret, proposal)?;
+                let (channel, result) = self.create_channel(state, final_proposal);
+                let msg = match result {
+                    Ok(_) => {
+                        info!("🥂 Channel proposal accepted.");
+                        "🥂 Channel proposal accepted"
+                    }
+                    Err(err) => {
+                        warn!("😢 We cannot accept the channel creation terms: {err}");
+                        "😢 We cannot accept the channel creation terms"
+                    }
+                };
                 let name = channel.name();
+                self.channel_status = Some(channel.state().stage());
                 self.server.add_channel(channel).await;
                 self.save_channels().await?;
                 info!("Channels saved.");
                 self.current_channel = Some(name.clone());
-                Ok(format!("Channel proposal accepted! Channel ID: {name}"))
+                Ok(format!("{msg} for {name}"))
             }
             ChannelProposalResult::Rejected(rej) => {
                 warn!("Channel proposal rejected: {}", rej.reason);
@@ -190,35 +210,38 @@ impl InteractiveApp {
         Ok((my_secret, proposal))
     }
 
-    pub fn create_channel(
-        &mut self,
+    fn create_new_state(
+        &self,
         secret: Curve25519Secret,
-        final_prop: NewChannelProposal<Curve25519PublicKey>,
-        original: NewChannelProposal<Curve25519PublicKey>,
-    ) -> Result<MoneroPaymentChannel, anyhow::Error> {
-        self.compare_proposals(&final_prop, &original)?;
-        let peer_info = final_prop.contact_info_proposee;
-        let new_state = MoneroChannelBuilder::new(final_prop.seed.role, final_prop.proposer_pubkey, secret)
-            .with_my_user_label(&final_prop.proposer_label)
-            .with_peer_label(&final_prop.seed.user_label)
-            .with_merchant_initial_balance(final_prop.seed.initial_balances.merchant)
-            .with_customer_initial_balance(final_prop.seed.initial_balances.customer)
-            .with_peer_public_key(final_prop.seed.pubkey)
-            .with_kes_public_key(final_prop.seed.kes_public_key)
+        prop: NewChannelProposal<Curve25519PublicKey>,
+    ) -> Result<NewChannelState<Curve25519PublicKey>> {
+        let new_state = MoneroChannelBuilder::new(prop.seed.role, prop.proposer_pubkey, secret)
+            .with_my_user_label(&prop.proposer_label)
+            .with_peer_label(&prop.seed.user_label)
+            .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
+            .with_customer_initial_balance(prop.seed.initial_balances.customer)
+            .with_peer_public_key(prop.seed.pubkey)
+            .with_kes_public_key(prop.seed.kes_public_key)
             .build::<blake2::Blake2b512>()
             .ok_or_else(|| anyhow!("Missing new channel state data"))?;
-        let state = MoneroLifeCycle::New(Box::new(new_state));
-        let channel = MoneroPaymentChannel::new(peer_info, state);
-        Ok(channel)
+        Ok(new_state)
     }
 
-    fn compare_proposals(
-        &self,
-        _final_proposal: &NewChannelProposal<Curve25519PublicKey>,
-        _original: &NewChannelProposal<Curve25519PublicKey>,
-    ) -> Result<(), anyhow::Error> {
-        // todo: Check that we're happy with the final terms sent by the merchant
-        Ok(())
+    /// Creates a new channel, given the initial `NewChannelState` and then emits `AckNewChannel` event, which
+    /// verifies that everything is correct and the channel can be created.
+    ///
+    /// If we exit here successfully, the channel will be in the `Establishing` phase.
+    /// Otherwise, something has gone wrong and the channel should be `Closed`.
+    pub fn create_channel(
+        &mut self,
+        new_state: NewChannelState<Curve25519PublicKey>,
+        final_prop: NewChannelProposal<Curve25519PublicKey>,
+    ) -> (MoneroPaymentChannel, Result<(), LifeCycleError>) {
+        let peer_info = final_prop.contact_info_proposee.clone();
+        let state = MoneroLifeCycle::New(Box::new(new_state));
+        let mut channel = MoneroPaymentChannel::new(peer_info, state);
+        let result = channel.receive_proposal_ack(final_prop);
+        (channel, result)
     }
 
     /// Lists all available identities from the configuration.
