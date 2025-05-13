@@ -119,15 +119,51 @@ where
 
     pub async fn send_proposal(
         &self,
+        secret: P::SecretKey,
         proposal: NewChannelProposal<P>,
-    ) -> Result<ChannelProposalResult<P>, PeerConnectionError> {
+    ) -> Result<Result<String, RejectChannelProposal>, PeerConnectionError> {
         let mut client = self.client();
         let address = proposal.contact_info_proposee.dial_address();
         // todo: check what happens if there's already a connection?
         client.dial(address).await?;
         debug!("Sending channel proposal to peer.");
+        let state = self.create_new_state(secret, proposal.clone());
         let res = client.new_channel_proposal(proposal).await?;
-        Ok(res)
+        let result = match res {
+            ChannelProposalResult::Accepted(final_proposal) => {
+                // We got an ack, but the merchant may have changed the proposal, so we need to check.
+                debug!("Channel proposal ACK received. Validating response.");
+                let peer_info = final_proposal.contact_info_proposee.clone();
+                let mut channel = PaymentChannel::new(peer_info, state);
+                match channel.receive_proposal_ack(final_proposal.clone()) {
+                    Ok(_) => info!("🥂 Channel proposal accepted."),
+                    Err(err) => warn!("😢 We cannot accept the channel creation terms: {err}"),
+                }
+                let name = channel.name();
+                // We add the channel evn if we're rejecting it, because the merchant may want to send messages related
+                // to it, and we need to be able to remind ourselves of what happened.
+                self.add_channel(channel).await;
+                Ok(name)
+            }
+            ChannelProposalResult::Rejected(rej) => {
+                warn!("Channel proposal rejected: {}", rej.reason);
+                Err(rej)
+            }
+        };
+        Ok(result)
+    }
+
+    fn create_new_state(&self, secret: P::SecretKey, prop: NewChannelProposal<P>) -> ChannelLifeCycle<P, C, W, KES> {
+        let new_state = NewChannelBuilder::new(prop.seed.role, prop.proposer_pubkey, secret)
+            .with_my_user_label(&prop.proposer_label)
+            .with_peer_label(&prop.seed.user_label)
+            .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
+            .with_customer_initial_balance(prop.seed.initial_balances.customer)
+            .with_peer_public_key(prop.seed.pubkey)
+            .with_kes_public_key(prop.seed.kes_public_key)
+            .build::<blake2::Blake2b512>()
+            .expect("Missing new channel state data");
+        ChannelLifeCycle::New(Box::new(new_state))
     }
 }
 
@@ -212,6 +248,8 @@ where
         if let Err(err) = client.send_response_to_peer(response, return_chute).await {
             error!("Request was handled, but could not send response to peer: {err}");
         }
+        // Response has been sent, now check to see if there's any work to do on the channel
+        self.drive_channel_forward(name).await;
     }
 
     async fn handle_pertinent_grease_request(
@@ -229,19 +267,31 @@ where
         }
     }
 
+    async fn drive_channel_forward(&self, name: String) {
+        if let Some(channel) = self.channels.checkout(&name).await {
+            let stage = channel.state().stage();
+            match stage {
+                LifecycleStage::Establishing => {
+                    self.establish_channel(name, channel).await;
+                }
+                _ => {
+                    debug!("Nothing to do for channel {name} in state {stage}");
+                }
+            }
+        } else {
+            warn!("Channel does not exist: {name}");
+        }
+    }
+
+    //---------------------------------------- State machine handling functions --------------------------------------//
+
     /// Handle an incoming request to open a payment channel.
     async fn handle_open_channel_request(&self, data: &NewChannelProposal<P>) -> GreaseResponse<P> {
         // Check that the public key passed in the proposal matches our keypair
-        let my_pubkey = data.seed.pubkey.clone();
-        let key_index = data.seed.key_id;
-        let (my_secret, my_pubkey2) = self.key_manager.new_keypair(key_index);
-        if my_pubkey != my_pubkey2 {
-            warn!("Public key in proposal does not match our keypair");
-            return GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
-                RejectReason::InvalidProposal(InvalidProposal::MismatchedMerchantPublicKey),
-                RetryOptions::close_only(),
-            ));
-        }
+        let (my_secret, my_pubkey) = match self.check_pubkey_matches(data) {
+            Ok(keys) => keys,
+            Err(err) => return err,
+        };
         // Let the delegate do their checks
         let delegate = self.delegate.clone();
         if let Err(invalid) = delegate.verify_proposal(data) {
@@ -265,6 +315,7 @@ where
         let state = ChannelLifeCycle::New(Box::new(new_state));
         let peer_info = data.contact_info_proposer.clone();
         let mut channel = PaymentChannel::new(peer_info, state);
+        // Emit an `AckProposal` event on the channel
         if let Err(err) = channel.receive_proposal() {
             warn!("Channel proposal was not accepted by the state machine");
             let reason = match err {
@@ -279,5 +330,26 @@ where
         self.channels.add(channel).await;
         let ack = ChannelProposalResult::accept(data.clone());
         GreaseResponse::ChannelProposalResult(ack)
+    }
+
+    async fn establish_channel(&self, name: String, channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>) {
+        info!("Establishing channel {name}");
+    }
+
+    //------------------------------------------- Minor helper functions ---------------------------------------------//
+    /// Check that the public key passed in the proposal matches our keypair
+    fn check_pubkey_matches(&self, data: &NewChannelProposal<P>) -> Result<(P::SecretKey, P), GreaseResponse<P>> {
+        let my_pubkey = data.seed.pubkey.clone();
+        let key_index = data.seed.key_id;
+        let (my_secret, my_pubkey2) = self.key_manager.new_keypair(key_index);
+        if my_pubkey == my_pubkey2 {
+            Ok((my_secret, my_pubkey))
+        } else {
+            warn!("Public key in proposal does not match our keypair");
+            Err(GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
+                RejectReason::InvalidProposal(InvalidProposal::MismatchedMerchantPublicKey),
+                RetryOptions::close_only(),
+            )))
+        }
     }
 }

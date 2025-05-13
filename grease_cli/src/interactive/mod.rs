@@ -5,7 +5,7 @@ use std::fmt::Display;
 pub mod formatting;
 pub mod menus;
 use crate::channel_management::{
-    MoneroChannelBuilder, MoneroLifeCycle, MoneroNetworkServer, MoneroOutOfBandMerchantInfo, MoneroPaymentChannel,
+    MoneroNetworkServer, MoneroOutOfBandMerchantInfo,
 };
 use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
@@ -14,11 +14,10 @@ use crate::id_management::{
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
-use grease_p2p::message_types::{ChannelProposalResult, NewChannelProposal};
+use grease_p2p::message_types::NewChannelProposal;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::state_machine::error::LifeCycleError;
-use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage, NewChannelState};
+use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage};
 use log::*;
 use menus::*;
 use rand::{Rng, RngCore};
@@ -161,33 +160,18 @@ impl InteractiveApp {
         let (secret, proposal) = self.create_channel_proposal(oob_info)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
-        let result = self.server.send_proposal(proposal.clone()).await?;
+        let result = self.server.send_proposal(secret, proposal.clone()).await?;
         match result {
             // We got an ack, but the merchant may have changed the proposal, so we need to check.
-            ChannelProposalResult::Accepted(final_proposal) => {
-                debug!("Channel proposal ACK received.");
-                info!("Received channel proposal response. Validating results...");
-                let state = self.create_new_state(secret, proposal)?;
-                let (channel, result) = self.create_channel(state, final_proposal);
-                let msg = match result {
-                    Ok(_) => {
-                        info!("🥂 Channel proposal accepted.");
-                        "🥂 Channel proposal accepted"
-                    }
-                    Err(err) => {
-                        warn!("😢 We cannot accept the channel creation terms: {err}");
-                        "😢 We cannot accept the channel creation terms"
-                    }
-                };
-                let name = channel.name();
-                self.channel_status = Some(channel.state().stage());
-                self.server.add_channel(channel).await;
+            Ok(name) => {
                 self.save_channels().await?;
                 info!("Channels saved.");
                 self.current_channel = Some(name.clone());
-                Ok(format!("{msg} for {name}"))
+                let status = self.server.channel_status(&name).await;
+                self.channel_status = status;
+                Ok(format!("New channel created: {name}"))
             }
-            ChannelProposalResult::Rejected(rej) => {
+            Err(rej) => {
                 warn!("Channel proposal rejected: {}", rej.reason);
                 // todo: handle the rejection based on retry options
                 Err(anyhow!("Channel proposal rejected"))
@@ -208,40 +192,6 @@ impl InteractiveApp {
         let my_user_label = format!("{user_label}-{key_index}");
         let proposal = NewChannelProposal::new(seed_info, my_pubkey, my_user_label, my_contact_info, peer_info);
         Ok((my_secret, proposal))
-    }
-
-    fn create_new_state(
-        &self,
-        secret: Curve25519Secret,
-        prop: NewChannelProposal<Curve25519PublicKey>,
-    ) -> Result<NewChannelState<Curve25519PublicKey>> {
-        let new_state = MoneroChannelBuilder::new(prop.seed.role, prop.proposer_pubkey, secret)
-            .with_my_user_label(&prop.proposer_label)
-            .with_peer_label(&prop.seed.user_label)
-            .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
-            .with_customer_initial_balance(prop.seed.initial_balances.customer)
-            .with_peer_public_key(prop.seed.pubkey)
-            .with_kes_public_key(prop.seed.kes_public_key)
-            .build::<blake2::Blake2b512>()
-            .ok_or_else(|| anyhow!("Missing new channel state data"))?;
-        Ok(new_state)
-    }
-
-    /// Creates a new channel, given the initial `NewChannelState` and then emits `AckNewChannel` event, which
-    /// verifies that everything is correct and the channel can be created.
-    ///
-    /// If we exit here successfully, the channel will be in the `Establishing` phase.
-    /// Otherwise, something has gone wrong and the channel should be `Closed`.
-    pub fn create_channel(
-        &mut self,
-        new_state: NewChannelState<Curve25519PublicKey>,
-        final_prop: NewChannelProposal<Curve25519PublicKey>,
-    ) -> (MoneroPaymentChannel, Result<(), LifeCycleError>) {
-        let peer_info = final_prop.contact_info_proposee.clone();
-        let state = MoneroLifeCycle::New(Box::new(new_state));
-        let mut channel = MoneroPaymentChannel::new(peer_info, state);
-        let result = channel.receive_proposal_ack(final_prop);
-        (channel, result)
     }
 
     /// Lists all available identities from the configuration.
