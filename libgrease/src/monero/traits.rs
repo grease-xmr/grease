@@ -61,7 +61,7 @@ pub trait MultiSigWallet: Serialize + for<'de> Deserialize<'de> + Send + Sync {
     async fn get_balance(&self) -> Result<WalletBalance, MoneroWalletError>;
 
     async fn get_seed(&self) -> Result<MultiSigSeed, MoneroWalletError>;
-    async fn restore_from_seed(&mut self, seed: MultiSigSeed) -> Result<(), MoneroWalletError>;
+    async fn restore_from_seed(seed: MultiSigSeed) -> Result<Self, MoneroWalletError>;
 }
 
 /// Interface for a service that is able to orchestrate multi-sig transactions between wallets on the Monero network.

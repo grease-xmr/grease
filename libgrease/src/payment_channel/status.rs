@@ -25,22 +25,22 @@ pub struct PaymentResponse {
 }
 
 impl PaymentResponse {
-    fn get_status(&self) -> ChannelUpdateStatus {
+    pub fn get_status(&self) -> ChannelUpdateStatus {
         self.status
     }
 
-    fn get_amount(&self) -> MoneroAmount {
+    pub fn get_amount(&self) -> MoneroAmount {
         self.amount
     }
 
-    fn get_new_balances(&self) -> Balances {
+    pub fn get_new_balances(&self) -> Balances {
         self.new_balances
     }
-    fn get_merchant_signature(&self) -> &str {
+    pub fn get_merchant_signature(&self) -> &str {
         &self.merchant_signature
     }
 
-    fn get_customer_signature(&self) -> &str {
+    pub fn get_customer_signature(&self) -> &str {
         &self.customer_signature
     }
 }

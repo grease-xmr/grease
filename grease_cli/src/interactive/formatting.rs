@@ -13,7 +13,7 @@ fn markdown_format() -> TableFormat {
         .build()
 }
 
-fn markdown_style(table: &mut Table) {
+pub fn markdown_style(table: &mut Table) {
     table.set_format(markdown_format());
 }
 

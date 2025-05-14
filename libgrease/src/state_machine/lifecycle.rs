@@ -353,7 +353,6 @@ pub mod test {
     use crate::kes::dummy_impl::DummyKes;
     use crate::monero::dummy_impl::{DummyMultiSigWalletService, DummyWallet};
     use crate::monero::MultiSigService;
-    use crate::monero::MultiSigWallet;
     use crate::payment_channel::dummy_impl::{DummyActiveChannel, DummyUpdateInfo};
     use crate::payment_channel::{ActivePaymentChannel, ChannelRole, ClosedPaymentChannel};
     use crate::state_machine::disputing_channel::DisputeResult;
@@ -557,7 +556,7 @@ pub mod test {
     #[test]
     fn reject_new_channel() {
         env_logger::try_init().ok();
-        let (mut lc, initial_state) = new_channel_state();
+        let (mut lc, _initial_state) = new_channel_state();
         // Merchant rejects the channel proposal
         let reason = RejectNewChannelReason::new("At capacity");
         let event = LifeCycleEvent::OnRejectNewChannel(Box::new(reason));
