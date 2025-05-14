@@ -4,9 +4,7 @@ use std::fmt::Display;
 
 pub mod formatting;
 pub mod menus;
-use crate::channel_management::{
-    MoneroNetworkServer, MoneroOutOfBandMerchantInfo,
-};
+use crate::channel_management::{MoneroNetworkServer, MoneroOutOfBandMerchantInfo};
 use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
     assign_identity, create_identity, delete_identity, list_identities, load_or_create_identities, MoneroKeyManager,
