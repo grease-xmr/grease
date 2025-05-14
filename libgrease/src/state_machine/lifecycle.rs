@@ -351,7 +351,8 @@ pub mod test {
     use crate::amount::MoneroAmount;
     use crate::crypto::keys::Curve25519PublicKey;
     use crate::kes::dummy_impl::DummyKes;
-    use crate::monero::dummy_impl::DummyWallet;
+    use crate::monero::dummy_impl::{DummyMultiSigWalletService, DummyWallet};
+    use crate::monero::MultiSigService;
     use crate::monero::MultiSigWallet;
     use crate::payment_channel::dummy_impl::{DummyActiveChannel, DummyUpdateInfo};
     use crate::payment_channel::{ActivePaymentChannel, ChannelRole, ClosedPaymentChannel};
@@ -363,8 +364,7 @@ pub mod test {
     };
     use crate::state_machine::open_channel::ChannelUpdateInfo;
     use crate::state_machine::{
-        ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage,
-        NewChannelBuilder,
+        ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage, NewChannelBuilder,
     };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};
     use blake2::Blake2b512;
@@ -428,11 +428,13 @@ pub mod test {
         mut lc: DummyLifecycle,
         initial_state: &NewChannelState<Curve25519PublicKey>,
     ) -> DummyLifecycle {
+        let rt = tokio::runtime::Runtime::new().unwrap();
         // All the comms in the Establishing state machine are negotiated, and eventually are successful
         let channel_id = initial_state.channel_id.clone();
         let channel =
             DummyActiveChannel::new(channel_id.clone(), ChannelRole::Customer, initial_state.initial_balances);
-        let wallet = DummyWallet::create(2, 2);
+        let mut service = DummyMultiSigWalletService;
+        let wallet = rt.block_on(async { service.create_wallet(&channel_id).await.unwrap() });
         let kes = DummyKes;
         let established = ChannelEstablishedInfo { wallet, kes, channel };
         let event = LifeCycleEvent::OnChannelEstablished(Box::new(established));
