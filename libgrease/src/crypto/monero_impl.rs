@@ -97,27 +97,32 @@ impl Clras2P for MoneroClras2P {
 
     fn generate_public_nonce(
         &self,
-        secret_nonce: &Curve25519Secret,
-        ring: &[Curve25519PublicKey],
+        _secret_nonce: &Curve25519Secret,
+        _ring: &[Curve25519PublicKey],
     ) -> Curve25519PublicKey {
         todo!()
     }
 
-    fn pre_partial_sign(&self, secret_nonce: &Scalar, challenge: &Scalar, ring: &[Curve25519PublicKey]) -> Signature {
+    fn pre_partial_sign(
+        &self,
+        _secret_nonce: &Scalar,
+        _challenge: &Scalar,
+        _ring: &[Curve25519PublicKey],
+    ) -> Signature {
         todo!()
     }
 
     fn pre_signature_verify<B: AsRef<[u8]>>(
         &self,
-        pre_signature: &PreSignature,
-        message: B,
-        statement: &<<Self::Cas as ConsecutiveAdaptorSignature>::W as Witness>::S,
-        ring: &[Curve25519PublicKey],
+        _pre_signature: &PreSignature,
+        _message: B,
+        _statement: &<<Self::Cas as ConsecutiveAdaptorSignature>::W as Witness>::S,
+        _ring: &[Curve25519PublicKey],
     ) -> bool {
         todo!()
     }
 
-    fn verify<B: AsRef<[u8]>>(&self, signature: &Signature, message: B, ring: &[Curve25519PublicKey]) -> bool {
+    fn verify<B: AsRef<[u8]>>(&self, _signature: &Signature, _message: B, _ring: &[Curve25519PublicKey]) -> bool {
         todo!()
     }
 }

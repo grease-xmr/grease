@@ -106,7 +106,7 @@ mod test {
 
         let proof_2 = vcof.next_statement_witness(&y1, &Y1).unwrap();
         let StatementWitnessProof { pair, proof: proof_2 } = proof_2;
-        let y2 = pair.witness;
+        let _y2 = pair.witness;
         let Y2 = pair.statement;
         assert!(
             vcof.verify_consecutive(&Y1, &Y2, &proof_2),

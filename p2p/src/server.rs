@@ -332,7 +332,7 @@ where
         GreaseResponse::ChannelProposalResult(ack)
     }
 
-    async fn establish_channel(&self, name: String, channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>) {
+    async fn establish_channel(&self, name: String, _channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>) {
         info!("Establishing channel {name}");
     }
 

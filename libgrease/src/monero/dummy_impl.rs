@@ -17,7 +17,7 @@ impl MultiSigWallet for DummyWallet {
         Ok(MultisigInitInfo)
     }
 
-    async fn make_multisig(&mut self, peer_info: MultisigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError> {
+    async fn make_multisig(&mut self, _peer_info: MultisigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError> {
         Ok(MultisigKeyInfo)
     }
 
@@ -35,8 +35,8 @@ impl MultiSigWallet for DummyWallet {
 
     async fn create_unsigned_tx(
         &mut self,
-        to: MoneroAddress,
-        amount: MoneroAmount,
+        _to: MoneroAddress,
+        _amount: MoneroAmount,
     ) -> Result<PartiallySignedMoneroTransaction, MoneroWalletError> {
         Ok(PartiallySignedMoneroTransaction)
     }
@@ -64,8 +64,8 @@ impl MultiSigWallet for DummyWallet {
         Ok(MultiSigSeed)
     }
 
-    async fn restore_from_seed(&mut self, _seed: MultiSigSeed) -> Result<(), MoneroWalletError> {
-        Ok(())
+    async fn restore_from_seed(_seed: MultiSigSeed) -> Result<Self, MoneroWalletError> {
+        Ok(Self)
     }
 }
 
