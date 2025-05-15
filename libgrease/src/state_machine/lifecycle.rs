@@ -166,7 +166,7 @@ where
                             wallet_service,
                             wallet: WalletState::new(wallet),
                         };
-                        debug!("Transitioning from New to Establishing state");
+                        debug!("Transitioning from New to Establishing state. New Multisig wallet created.");
                         Ok(ChannelLifeCycle::Establishing(Box::new(establishing_state)))
                     }
                     Err(e) => Err((Self::New(new_state), LifeCycleError::WalletServiceError(e))),

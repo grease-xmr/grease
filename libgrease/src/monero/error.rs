@@ -9,9 +9,9 @@ pub enum MoneroWalletError {
     MakeMultisig,
     #[error("Wallet multisig key image import failed")]
     ImportMultisigKeyImage,
-    #[error("Exporting multisig key image export failed")]
+    #[error("Exporting partial spend key failed")]
     ExportSpendKey,
-    #[error("Importing multisig key image import failed")]
+    #[error("Importing partial spend key failed")]
     ImportSpendKey,
     #[error("Multisig wallet error: {0}")]
     Other(String),

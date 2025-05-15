@@ -356,10 +356,7 @@ where
     }
 
     async fn prepare_wallet(&self, channel: &mut PaymentChannel<P, C, WS, KES>) -> Result<(), LifeCycleError> {
-        if channel.state().role().is_merchant() {
-            debug!("Initiating multisig wallet creation..");
-            channel.create_fresh_wallet().await?
-        }
+        if channel.state().role().is_merchant() {}
         Ok(())
     }
 }

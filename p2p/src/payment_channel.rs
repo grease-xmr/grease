@@ -147,19 +147,6 @@ where
         let event = LifeCycleEvent::OnAckNewChannel(Box::new(info));
         self.handle_event(event).await
     }
-
-    /// When the merchant starts
-    pub async fn create_fresh_wallet(&mut self) -> Result<(), LifeCycleError> {
-        match &mut self.state {
-            Some(ChannelLifeCycle::Establishing(state)) => {
-                let id = &state.channel_id;
-                let wallet = state.wallet_service.create_wallet(id).await?;
-                state.wallet = WalletState::new(wallet);
-                Ok(())
-            }
-            _ => Err(LifeCycleError::InvalidStateTransition),
-        }
-    }
 }
 
 pub struct PaymentChannels<P, C, WS, KES>
