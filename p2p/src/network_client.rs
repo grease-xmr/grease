@@ -17,7 +17,6 @@ use libp2p::{
 use std::time::Duration;
 
 pub type PeerConnection<P> = libp2p::Swarm<ConnectionBehavior<P>>;
-
 /// Creates the network components, namely:
 ///
 /// - The network [`Client`] to interact with the event loop from anywhere within your application.

@@ -40,7 +40,7 @@ impl KeyManager for MoneroKeyManager {
         let mut buf = [0u8; 40];
         buf[0..32].copy_from_slice(secret);
         buf[32..40].copy_from_slice(&index.to_le_bytes());
-        let scalar = Blake512::default().hash_to_scalar(&buf);
+        let scalar = Blake512.hash_to_scalar(buf);
         let next_key = Curve25519Secret::from(scalar);
         let next_public_key = Curve25519PublicKey::from_secret(&next_key);
         (next_key, next_public_key)
@@ -90,7 +90,7 @@ pub fn exec_id_command(cmd: IdCommand, config: GlobalOptions) -> Result<(), anyh
 pub fn delete_identity(config: &GlobalOptions, id: &String) -> Result<bool, anyhow::Error> {
     let path = config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
     let mut local_identities = load_or_create_identities(&path)?;
-    match local_identities.remove(&id) {
+    match local_identities.remove(id) {
         Some(identity) => {
             info!("Identity deleted: {identity}");
             local_identities.save(&path)?;
@@ -134,7 +134,7 @@ pub fn list_identities(config: &GlobalOptions) -> Result<Vec<String>, anyhow::Er
     let path = config.identities_file.as_ref().cloned().unwrap_or_else(default_config_path);
     let local_identities = load_or_create_identities(&path)?;
     debug!("{} Local identities found.", local_identities.identities.len());
-    let ids = local_identities.identities.iter().map(|(_, id)| id.to_string()).collect::<Vec<String>>();
+    let ids = local_identities.identities.values().map(|id| id.to_string()).collect::<Vec<String>>();
     Ok(ids)
 }
 

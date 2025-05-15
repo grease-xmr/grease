@@ -1,6 +1,6 @@
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
-use crate::monero::MultiSigWallet;
+use crate::monero::{MultiSigService, WalletState};
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::closed_channel::ClosedChannelState;
 use crate::state_machine::closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};
@@ -32,16 +32,16 @@ pub enum LifecycleStage {
     Disputing,
 }
 
-pub enum LifeCycleEvent<P, C, W, KES>
+pub enum LifeCycleEvent<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
     OnAckNewChannel(Box<ProposedChannelInfo<P>>),
     OnTimeout(Box<TimeoutReason>),
-    OnChannelEstablished(Box<ChannelEstablishedInfo<C, W, KES>>),
+    OnChannelEstablished(Box<ChannelEstablishedInfo<C, WS, KES>>),
     OnUpdateChannel(Box<ChannelUpdateInfo<C>>),
     OnStartClose(Box<StartCloseInfo>),
     OnRejectNewChannel(Box<RejectNewChannelReason>),
@@ -50,11 +50,11 @@ where
     OnSuccessfulClose(Box<SuccessfulCloseInfo>),
 }
 
-impl<P, C, W, KES> Display for LifeCycleEvent<P, C, W, KES>
+impl<P, C, WS, KES> Display for LifeCycleEvent<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -86,30 +86,32 @@ impl Display for LifecycleStage {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub enum ChannelLifeCycle<P, C, W, KES>
+#[serde(bound(
+    deserialize = "P: PublicKey  + for<'d> Deserialize<'d>, WS: MultiSigService  + for<'d> Deserialize<'d>"
+))]
+pub enum ChannelLifeCycle<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
     New(Box<NewChannelState<P>>),
     /// The channel is in the process of being created.
-    Establishing(Box<EstablishingChannelState<P>>),
+    Establishing(Box<EstablishingChannelState<P, WS>>),
     /// The channel is open and ready to use.
-    Open(Box<EstablishedChannelState<P, C, W, KES>>),
+    Open(Box<EstablishedChannelState<P, C, WS, KES>>),
     /// The channel is closed and cannot be used anymore.
-    Closing(Box<ClosingChannelState<P, C, W, KES>>),
-    Closed(Box<ClosedChannelState<P, W, C::Finalized>>),
-    Disputing(Box<DisputingChannelState<P, C, W, KES>>),
+    Closing(Box<ClosingChannelState<P, C, WS, KES>>),
+    Closed(Box<ClosedChannelState<P, WS::Wallet, C::Finalized>>),
+    Disputing(Box<DisputingChannelState<P, C, WS, KES>>),
 }
 
-impl<P, C, W, KES> ChannelLifeCycle<P, C, W, KES>
+impl<P, C, WS, KES> ChannelLifeCycle<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
     pub fn new(state: NewChannelState<P>) -> Self {
@@ -143,25 +145,32 @@ where
         }
     }
 
-    fn new_to_establishing(self, proposal: ProposedChannelInfo<P>) -> Result<Self, (Self, LifeCycleError)> {
+    async fn new_to_establishing(self, proposal: ProposedChannelInfo<P>) -> Result<Self, (Self, LifeCycleError)> {
         let Self::New(new_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
         match new_state.review_proposal(&proposal) {
             Err(err) => Err((Self::New(new_state), err.into())),
             Ok(()) => {
-                let establishing_state = EstablishingChannelState {
-                    role: new_state.role,
-                    secret_key: new_state.secret_key,
-                    merchant_pubkey: new_state.merchant_pubkey,
-                    customer_pubkey: new_state.customer_pubkey,
-                    kes_public_key: new_state.kes_public_key,
-                    initial_balances: new_state.initial_balances,
-                    channel_id: new_state.channel_id.clone(),
-                };
-                debug!("Transitioning from New to Establishing state");
-                let new_state = ChannelLifeCycle::Establishing(Box::new(establishing_state));
-                Ok(new_state)
+                let mut wallet_service = WS::default();
+                match wallet_service.create_wallet(&proposal.channel_id).await {
+                    Ok(wallet) => {
+                        let establishing_state = EstablishingChannelState {
+                            role: new_state.role,
+                            secret_key: new_state.secret_key,
+                            merchant_pubkey: new_state.merchant_pubkey,
+                            customer_pubkey: new_state.customer_pubkey,
+                            kes_public_key: new_state.kes_public_key,
+                            initial_balances: new_state.initial_balances,
+                            channel_id: new_state.channel_id.clone(),
+                            wallet_service,
+                            wallet: WalletState::new(wallet),
+                        };
+                        debug!("Transitioning from New to Establishing state. New Multisig wallet created.");
+                        Ok(ChannelLifeCycle::Establishing(Box::new(establishing_state)))
+                    }
+                    Err(e) => Err((Self::New(new_state), LifeCycleError::WalletServiceError(e))),
+                }
             }
         }
     }
@@ -180,7 +189,7 @@ where
 
     /// Manage the transition from the Establishing state to the Open state. This is an elaborate process that involves
     /// multiple steps, and therefore makes use of a subordinate state machine.
-    fn establishing_to_open(self, info: ChannelEstablishedInfo<C, W, KES>) -> Result<Self, (Self, LifeCycleError)> {
+    fn establishing_to_open(self, info: ChannelEstablishedInfo<C, WS, KES>) -> Result<Self, (Self, LifeCycleError)> {
         let Self::Establishing(establishing_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
@@ -290,11 +299,11 @@ where
         }
     }
 
-    pub fn handle_event(self, event: LifeCycleEvent<P, C, W, KES>) -> Result<Self, (Self, LifeCycleError)> {
+    pub async fn handle_event(self, event: LifeCycleEvent<P, C, WS, KES>) -> Result<Self, (Self, LifeCycleError)> {
         use LifeCycleEvent::*;
         use LifecycleStage::*;
         match (self.stage(), event) {
-            (New, OnAckNewChannel(prop)) => self.new_to_establishing(*prop),
+            (New, OnAckNewChannel(prop)) => self.new_to_establishing(*prop).await,
             (New, OnRejectNewChannel(reason)) => self.reject_new_channel(*reason),
             (New | Establishing, OnTimeout(reason)) => self.timeout(*reason),
             (Establishing, OnChannelEstablished(info)) => self.establishing_to_open(*info),
@@ -336,7 +345,7 @@ where
     }
 
     /// Returns a reference to the 2-of-2 Monero multisig wallet, if available.
-    pub fn wallet(&self) -> Option<&W> {
+    pub fn wallet(&self) -> Option<&WS::Wallet> {
         match self {
             ChannelLifeCycle::Open(open_state) => Some(&open_state.wallet),
             ChannelLifeCycle::Closing(closing_state) => Some(&closing_state.wallet),
@@ -351,7 +360,7 @@ pub mod test {
     use crate::amount::MoneroAmount;
     use crate::crypto::keys::Curve25519PublicKey;
     use crate::kes::dummy_impl::DummyKes;
-    use crate::monero::dummy_impl::{DummyMultiSigWalletService, DummyWallet};
+    use crate::monero::dummy_impl::DummyMultiSigWalletService;
     use crate::monero::MultiSigService;
     use crate::payment_channel::dummy_impl::{DummyActiveChannel, DummyUpdateInfo};
     use crate::payment_channel::{ActivePaymentChannel, ChannelRole, ClosedPaymentChannel};
@@ -369,8 +378,9 @@ pub mod test {
     use blake2::Blake2b512;
     use log::*;
 
-    type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
-    type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
+    type DummyLifecycle =
+        ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyMultiSigWalletService, DummyKes>;
+    type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyMultiSigWalletService, DummyKes>;
 
     pub fn new_channel_state() -> (DummyLifecycle, NewChannelState<Curve25519PublicKey>) {
         // All this info is known, or can be scanned in from a QR code etc
@@ -400,7 +410,7 @@ pub mod test {
         (lc, initial_state)
     }
 
-    pub fn accept_proposal(
+    pub async fn accept_proposal(
         mut lc: DummyLifecycle,
         initial_state: &NewChannelState<Curve25519PublicKey>,
     ) -> DummyLifecycle {
@@ -417,32 +427,32 @@ pub mod test {
             merchant_label: initial_state.merchant_label.clone(),
         };
         let event = LifeCycleEvent::OnAckNewChannel(Box::new(proposal));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event).await);
         // The channel is now in the establishing phase
         assert_eq!(lc.stage(), LifecycleStage::Establishing);
         lc
     }
 
-    pub fn open_channel(
+    pub async fn open_channel(
         mut lc: DummyLifecycle,
         initial_state: &NewChannelState<Curve25519PublicKey>,
     ) -> DummyLifecycle {
-        let rt = tokio::runtime::Runtime::new().unwrap();
         // All the comms in the Establishing state machine are negotiated, and eventually are successful
         let channel_id = initial_state.channel_id.clone();
         let channel =
             DummyActiveChannel::new(channel_id.clone(), ChannelRole::Customer, initial_state.initial_balances);
         let mut service = DummyMultiSigWalletService;
-        let wallet = rt.block_on(async { service.create_wallet(&channel_id).await.unwrap() });
+        let wallet = service.create_wallet(&channel_id).await.unwrap();
         let kes = DummyKes;
-        let established = ChannelEstablishedInfo { wallet, kes, channel };
+        let wallet_service = DummyMultiSigWalletService;
+        let established = ChannelEstablishedInfo { wallet, kes, wallet_service, channel };
         let event = LifeCycleEvent::OnChannelEstablished(Box::new(established));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Establishing, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Establishing, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Open);
         lc
     }
 
-    pub fn payment(mut lc: DummyLifecycle, amount: MoneroAmount) -> DummyLifecycle {
+    pub async fn payment(mut lc: DummyLifecycle, amount: MoneroAmount) -> DummyLifecycle {
         // The channel can be used to send payments
         let balance = lc.payment_channel().unwrap().balances();
         let new_balance = balance.pay(amount).unwrap();
@@ -450,43 +460,43 @@ pub mod test {
         let channel_name = lc.current_state().name();
         let info = ChannelUpdateInfo::new(channel_name, update);
         let update = DummyEvent::OnUpdateChannel(Box::new(info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(update));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(update).await);
         assert_eq!(lc.stage(), LifecycleStage::Open);
         lc
     }
 
-    pub fn start_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    pub async fn start_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // A co-operative close channel request has been fired
         let close_info = StartCloseInfo {};
         let close_event = DummyEvent::OnStartClose(Box::new(close_info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(close_event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(close_event).await);
         lc
     }
 
-    pub fn trigger_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    pub async fn trigger_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // We are triggering a force close
         let close_info = ForceCloseInfo::trigger("Some people want the world to burn");
         let close_event = DummyEvent::OnForceClose(Box::new(close_info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(close_event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Open, lc.handle_event(close_event).await);
         assert_eq!(lc.stage(), LifecycleStage::Disputing);
         lc
     }
 
-    pub fn successful_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    pub async fn successful_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The channel closure was successfully negotiated
         let info = SuccessfulCloseInfo {};
         let event = DummyEvent::OnSuccessfulClose(Box::new(info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Closing, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Closing, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Normal)));
         lc
     }
 
-    fn uncontested_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
+    async fn uncontested_force_close(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The force close was successful
         let info = DisputeResolvedInfo::uncontested();
         let event = DummyEvent::OnDisputeResolved(Box::new(info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Closing, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Closing, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(
             lc.closed_reason(),
@@ -495,11 +505,11 @@ pub mod test {
         lc
     }
 
-    fn lose_dispute(mut lc: DummyLifecycle) -> DummyLifecycle {
+    async fn lose_dispute(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The force close was successful
         let info = DisputeResolvedInfo::lost("Provided more recent state to KES");
         let event = DummyEvent::OnDisputeResolved(Box::new(info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Disputing, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Disputing, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(
             lc.closed_reason(),
@@ -508,65 +518,65 @@ pub mod test {
         lc
     }
 
-    #[test]
-    fn happy_path() {
+    #[tokio::test]
+    async fn happy_path() {
         env_logger::try_init().ok();
         let (mut lc, initial_state) = new_channel_state();
-        lc = accept_proposal(lc, &initial_state);
-        lc = open_channel(lc, &initial_state);
-        lc = payment(lc, MoneroAmount::from_xmr("0.1").unwrap());
-        lc = payment(lc, MoneroAmount::from_xmr("0.2").unwrap());
-        lc = payment(lc, MoneroAmount::from_xmr("0.3").unwrap());
+        lc = accept_proposal(lc, &initial_state).await;
+        lc = open_channel(lc, &initial_state).await;
+        lc = payment(lc, MoneroAmount::from_xmr("0.1").unwrap()).await;
+        lc = payment(lc, MoneroAmount::from_xmr("0.2").unwrap()).await;
+        lc = payment(lc, MoneroAmount::from_xmr("0.3").unwrap()).await;
         let channel = lc.payment_channel().expect("Failed to get payment channel");
         assert_eq!(channel.transaction_count(), 3);
         assert_eq!(channel.my_balance(), MoneroAmount::from_xmr("0.65").unwrap());
-        lc = start_close(lc);
-        lc = successful_close(lc);
+        lc = start_close(lc).await;
+        lc = successful_close(lc).await;
         let final_balance = lc.closed_channel().unwrap().final_balance();
         assert_eq!(final_balance.customer, MoneroAmount::from_xmr("0.65").unwrap());
         assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.85").unwrap());
     }
 
-    #[test]
-    fn timeout_new() {
+    #[tokio::test]
+    async fn timeout_new() {
         env_logger::try_init().ok();
         let (mut lc, _) = new_channel_state();
         // Merchant never responds
         let event = LifeCycleEvent::OnTimeout(Box::new(TimeoutReason::new("Merchant timeout", lc.stage())));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Timeout(_))));
     }
 
-    #[test]
-    fn timeout_establishing() {
+    #[tokio::test]
+    async fn timeout_establishing() {
         env_logger::try_init().ok();
         let (mut lc, initial_state) = new_channel_state();
-        lc = accept_proposal(lc, &initial_state);
+        lc = accept_proposal(lc, &initial_state).await;
         // Merchant doesn't respond
         let event = LifeCycleEvent::OnTimeout(Box::new(TimeoutReason::new(
             "Merchant timeout during channel negotiation",
             lc.stage(),
         )));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Establishing, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::Establishing, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Timeout(_))));
     }
 
-    #[test]
-    fn reject_new_channel() {
+    #[tokio::test]
+    async fn reject_new_channel() {
         env_logger::try_init().ok();
         let (mut lc, _initial_state) = new_channel_state();
         // Merchant rejects the channel proposal
         let reason = RejectNewChannelReason::new("At capacity");
         let event = LifeCycleEvent::OnRejectNewChannel(Box::new(reason));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Closed);
         assert!(matches!(lc.closed_reason(), Some(ChannelClosedReason::Rejected(_))));
     }
 
-    #[test]
-    fn try_invalid_new_to_payment() {
+    #[tokio::test]
+    async fn try_invalid_new_to_payment() {
         // Test invalid state transition. You can´t make a payment (channel update) while still in the New state
         env_logger::try_init().ok();
         let (mut lc, initial_state) = new_channel_state();
@@ -575,36 +585,36 @@ pub mod test {
         let channel_name = lc.current_state().name();
         let info = ChannelUpdateInfo::new(channel_name, update);
         let update = DummyEvent::OnUpdateChannel(Box::new(info));
-        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(update));
+        lc = ChannelLifeCycle::log_and_consolidate(LifecycleStage::New, lc.handle_event(update).await);
         assert_eq!(lc.stage(), LifecycleStage::New);
     }
 
-    #[test]
-    fn dispute_via_force_close() {
+    #[tokio::test]
+    async fn dispute_via_force_close() {
         env_logger::try_init().ok();
         let (mut lc, initial_state) = new_channel_state();
-        lc = accept_proposal(lc, &initial_state);
-        lc = open_channel(lc, &initial_state);
-        lc = payment(lc, MoneroAmount::from_xmr("0.1").unwrap());
-        lc = payment(lc, MoneroAmount::from_xmr("0.2").unwrap());
-        lc = payment(lc, MoneroAmount::from_xmr("0.3").unwrap());
+        lc = accept_proposal(lc, &initial_state).await;
+        lc = open_channel(lc, &initial_state).await;
+        lc = payment(lc, MoneroAmount::from_xmr("0.1").unwrap()).await;
+        lc = payment(lc, MoneroAmount::from_xmr("0.2").unwrap()).await;
+        lc = payment(lc, MoneroAmount::from_xmr("0.3").unwrap()).await;
         let channel = lc.payment_channel().expect("Failed to get payment channel");
         assert_eq!(channel.transaction_count(), 3);
         assert_eq!(channel.my_balance(), MoneroAmount::from_xmr("0.65").unwrap());
-        lc = trigger_force_close(lc);
-        lc = uncontested_force_close(lc);
+        lc = trigger_force_close(lc).await;
+        lc = uncontested_force_close(lc).await;
         let final_balance = lc.closed_channel().unwrap().final_balance();
         assert_eq!(final_balance.customer, MoneroAmount::from_xmr("0.65").unwrap());
         assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.85").unwrap());
     }
 
-    #[test]
-    fn punished_via_dispute() {
+    #[tokio::test]
+    async fn punished_via_dispute() {
         env_logger::try_init().ok();
         let (mut lc, initial_state) = new_channel_state();
-        lc = accept_proposal(lc, &initial_state);
-        lc = open_channel(lc, &initial_state);
-        lc = trigger_force_close(lc);
-        lose_dispute(lc);
+        lc = accept_proposal(lc, &initial_state).await;
+        lc = open_channel(lc, &initial_state).await;
+        lc = trigger_force_close(lc).await;
+        lose_dispute(lc).await;
     }
 }

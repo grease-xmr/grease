@@ -12,7 +12,7 @@ pub trait ChannelPayment: Sized {
 }
 
 pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> + Send + Sync {
-    type UpdateInfo;
+    type UpdateInfo: Send;
     type Finalized: ClosedPaymentChannel + Send + Sync;
 
     fn role(&self) -> ChannelRole;

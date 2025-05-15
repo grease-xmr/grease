@@ -2,15 +2,19 @@ use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
-use crate::monero::MultiSigWallet;
+use crate::monero::{MultiSigService, WalletState};
 use crate::payment_channel::ActivePaymentChannel;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::traits::ChannelState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct EstablishingChannelState<P: PublicKey> {
+#[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>, WS: MultiSigService + for<'d> Deserialize<'d>"))]
+pub struct EstablishingChannelState<P, WS>
+where
+    P: PublicKey,
+    WS: MultiSigService,
+{
     pub role: ChannelRole,
     pub(crate) secret_key: P::SecretKey,
     pub merchant_pubkey: P,
@@ -20,6 +24,8 @@ pub struct EstablishingChannelState<P: PublicKey> {
     pub initial_balances: Balances,
     /// The channel ID
     pub channel_id: ChannelId,
+    pub wallet: WalletState<WS::Wallet>,
+    pub wallet_service: WS,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +62,11 @@ impl Balances {
     }
 }
 
-impl<P: PublicKey> EstablishingChannelState<P> {
+impl<P, WS> EstablishingChannelState<P, WS>
+where
+    P: PublicKey,
+    WS: MultiSigService,
+{
     pub fn channel_id(&self) -> &ChannelId {
         &self.channel_id
     }
@@ -70,7 +80,11 @@ impl<P: PublicKey> EstablishingChannelState<P> {
     }
 }
 
-impl<P: PublicKey> ChannelState for EstablishingChannelState<P> {
+impl<P, WS> ChannelState for EstablishingChannelState<P, WS>
+where
+    P: PublicKey,
+    WS: MultiSigService,
+{
     fn channel_id(&self) -> &ChannelId {
         &self.channel_id
     }
@@ -80,13 +94,14 @@ impl<P: PublicKey> ChannelState for EstablishingChannelState<P> {
     }
 }
 
-pub struct ChannelEstablishedInfo<C, W, KES>
+pub struct ChannelEstablishedInfo<C, WS, KES>
 where
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
-    pub(crate) wallet: W,
+    pub(crate) wallet_service: WS,
+    pub(crate) wallet: WS::Wallet,
     pub(crate) kes: KES,
     pub(crate) channel: C,
 }

@@ -232,15 +232,11 @@ impl<P: PublicKey + Send> EventLoop<P> {
     }
 
     /// Respond to a new Request-Response Grease Channel message from the peer.
-    ///
-    /// TODO: The message is delegated to the attached state machine
     async fn on_channel_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: EventMessage<P>) {
         trace!("EVENT: Payment channel message received from {peer}. Connection id: {connection_id}.");
         match message {
             EventMessage::Request { request_id, request, channel } => {
-                debug!(
-                    "EVENT: Request received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}"
-                );
+                debug!("Request received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}");
                 self.event_sender
                     .send(PeerConnectionEvent::InboundRequest { request, response: channel })
                     .await
@@ -259,11 +255,12 @@ impl<P: PublicKey + Send> EventLoop<P> {
                         };
                         let _ = sender.send(result);
                     }
-                    GreaseResponse::MoneySent => {}
-                    GreaseResponse::MoneyRequested => {}
+                    GreaseResponse::MsInit(_) => {}
+                    GreaseResponse::MsKeyExchange(_) => {}
+                    GreaseResponse::ConfirmMsAddress(_) => {}
                     GreaseResponse::ChannelClosed => {}
-                    GreaseResponse::Error(_) => {}
                     GreaseResponse::ChannelNotFound => {}
+                    GreaseResponse::Error(_) => {}
                 }
             }
         }

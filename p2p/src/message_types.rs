@@ -8,6 +8,7 @@ use libgrease::state_machine::error::InvalidProposal;
 use libgrease::state_machine::{ChannelSeedInfo, ProposedChannelInfo};
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
+use monero::Address as MoneroAddress;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -17,9 +18,24 @@ use std::fmt::{Display, Formatter};
 #[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum GreaseRequest<P: PublicKey> {
     ProposeNewChannel(NewChannelProposal<P>),
-    SendMoney,
-    RequestMoney,
-    CloseChannel,
+    /// A request from the merchant to begin initializing the commit transaction wallet (Prep phase).
+    MsInit(MultisigSetupInfo),
+    /// A request from the merchant to exchange multisig keys (Prep phase).
+    MsKeyExchange(MultisigKeyInfo),
+    /// A request from the merchant to confirm that the multisig address was set up correctly (Prep phase).
+    ConfirmMsAddress(MoneroAddress),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MultisigSetupInfo {
+    // Something like MultisigxV2R1C9Bd2LN...
+    pub init: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MultisigKeyInfo {
+    // Something like MultisigxV2Rn1LVYohry...
+    pub key: String,
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -27,11 +43,28 @@ pub enum GreaseRequest<P: PublicKey> {
 #[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum GreaseResponse<P: PublicKey> {
     ChannelProposalResult(ChannelProposalResult<P>),
-    MoneySent,
-    MoneyRequested,
+    /// The customer's response to the MS init request. The customer's Init info is included in the response.
+    MsInit(MultiSigInitResponse),
+    /// The customer's response to the MS key exchange request. The customer's key info is included in the response.
+    MsKeyExchange(MultisigKeyResponse),
+    /// The customer's response to the MS address confirmation request. The response is a boolean indicating
+    /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
+    ConfirmMsAddress(bool),
     ChannelClosed,
     ChannelNotFound,
     Error(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MultiSigInitResponse {
+    // Something like MultisigxV2R1C9Bd2LN...
+    pub init: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MultisigKeyResponse {
+    // Something like MultisigxV2Rn1LVYohry...
+    pub key: String,
 }
 
 impl<P: PublicKey> From<ChannelProposalResult<P>> for GreaseResponse<P> {
@@ -52,11 +85,14 @@ where
             GreaseResponse::ChannelProposalResult(ChannelProposalResult::Rejected(ref _rej)) => {
                 write!(f, "Channel Proposal REJECTED.")
             }
-            GreaseResponse::MoneySent => write!(f, "Money sent"),
-            GreaseResponse::MoneyRequested => write!(f, "Money requested"),
-            GreaseResponse::ChannelClosed => write!(f, "Channel closed"),
             GreaseResponse::Error(err) => write!(f, "Error: {}", err),
-            GreaseResponse::ChannelNotFound => write!(f, "Channel not found"),
+            GreaseResponse::MsInit(info) => write!(f, "MultisigInit({})", info.init),
+            GreaseResponse::MsKeyExchange(_) => write!(f, "MultisigKeyExchange(***)"),
+            GreaseResponse::ConfirmMsAddress(ok) => {
+                write!(f, "Multisig address confirmation: {}", if *ok { "OK" } else { "NOT OK" })
+            }
+            GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
+            GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
         }
     }
 }
@@ -102,7 +138,7 @@ pub enum ClientCommand<P: PublicKey> {
     },
     MultiSigSetupRequest {
         peer_id: PeerId,
-        multi_sig_setup: usize, // todo
+        multi_sig_setup: MultisigSetupInfo,
         sender: oneshot::Sender<MultiSigSetupResponse>,
     },
     KesReadyNotification {
@@ -140,6 +176,9 @@ pub enum ClientCommand<P: PublicKey> {
     /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
     Shutdown(oneshot::Sender<bool>),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MultiSigSetupInfo {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MultiSigSetupResponse;
@@ -267,6 +306,8 @@ pub enum RejectReason {
     NotSent(String),
     /// The channel was not newly created, and so cannot accept a proposal.
     NotANewChannel,
+    /// The proposal was rejected for an internal reason or bug.
+    Internal(String),
 }
 
 impl Display for RejectReason {
@@ -279,6 +320,7 @@ impl Display for RejectReason {
             RejectReason::NotANewChannel => {
                 write!(f, "The channel was not newly created, and so cannot accept a proposal.")
             }
+            RejectReason::Internal(msg) => write!(f, "Internal error: {msg}"),
         }
     }
 }
