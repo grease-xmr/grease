@@ -3,7 +3,7 @@ use crate::message_types::NewChannelProposal;
 use crate::ContactInfo;
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
-use libgrease::monero::{MultiSigService, WalletState};
+use libgrease::monero::{MultiSigWallet, WalletState};
 use libgrease::payment_channel::ActivePaymentChannel;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::LifeCycleEvent;
@@ -13,7 +13,9 @@ use log::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
@@ -46,36 +48,37 @@ where
 /// Again, the word channel is overloaded
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct PaymentChannel<P, C, WS, KES>
+pub struct PaymentChannel<P, C, W, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    WS: MultiSigService,
+    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
     peer_info: ContactInfo,
     // Invariant: `state` is `None` only transiently inside `handle_event`.
-    state: Option<ChannelLifeCycle<P, C, WS, KES>>,
+    state: Option<ChannelLifeCycle<P, C, W, KES>>,
 }
 
-impl<P, C, WS, KES> PaymentChannel<P, C, WS, KES>
+impl<P, C, W, KES> PaymentChannel<P, C, W, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    WS: MultiSigService,
+    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
     /// Creates a new `PaymentChannel` with the given identity and peer information.
-    pub fn new(peer_info: ContactInfo, state: ChannelLifeCycle<P, C, WS, KES>) -> Self {
+    pub fn new(peer_info: ContactInfo, state: ChannelLifeCycle<P, C, W, KES>) -> Self {
         PaymentChannel { peer_info, state: Some(state) }
     }
 
     pub fn try_load_from_file<PATH: AsRef<Path>>(path: PATH) -> Result<Self, PaymentChannelError> {
+        debug!("🛣️ Loading channel from {}", path.as_ref().display());
         if path.as_ref().is_file() {
             let file_name = path.as_ref().file_name().unwrap().to_string_lossy().to_string();
             if file_name.ends_with(".ron") {
                 fs::read_to_string(path).map_err(|e| PaymentChannelError::LoadingError(e.to_string())).and_then(|s| {
-                    ron::from_str::<PaymentChannel<P, C, WS, KES>>(&s)
+                    ron::from_str::<PaymentChannel<P, C, W, KES>>(&s)
                         .map_err(|e| PaymentChannelError::LoadingError(e.to_string()))
                 })
             } else {
@@ -104,8 +107,31 @@ where
         self.peer_info.peer_id
     }
 
-    pub fn state(&self) -> &ChannelLifeCycle<P, C, WS, KES> {
+    pub fn state(&self) -> &ChannelLifeCycle<P, C, W, KES> {
         self.state.as_ref().expect("State should be present")
+    }
+
+    /// Update the wallet state using the state transition function `update` provided.
+    ///
+    /// This function returns true if the state was updated (but might still have led to an aborted wallet state).
+    /// if the state does not exist, or we're not in the `Establishing` state, it returns false.
+    pub async fn wallet_preparation<U, F>(&mut self, update: U) -> Result<(), LifeCycleError>
+    where
+        F: Future<Output = WalletState<W>>,
+        U: FnOnce(WalletState<W>) -> Pin<Box<F>>,
+    {
+        let Some(ChannelLifeCycle::Establishing(state)) = &mut self.state else {
+            return Err(LifeCycleError::InvalidStateTransition);
+        };
+        state.update_wallet_state(update).await;
+        Ok(())
+    }
+
+    pub fn wallet_state(&self) -> Result<&WalletState<W>, LifeCycleError> {
+        let Some(ChannelLifeCycle::Establishing(state)) = &self.state else {
+            return Err(LifeCycleError::InvalidStateTransition);
+        };
+        Ok(state.wallet_state())
     }
 
     /// Returns the channel name, which is identical to `channel_id.name()`
@@ -113,7 +139,8 @@ where
         self.state().current_state().name()
     }
 
-    async fn handle_event(&mut self, event: LifeCycleEvent<P, C, WS, KES>) -> Result<(), LifeCycleError> {
+    async fn handle_event(&mut self, event: LifeCycleEvent<P, C, W, KES>) -> Result<(), LifeCycleError> {
+        trace!("🛣️ Handling event: {event}");
         let state = self.state.take().expect("State should be present");
         let (state, result) = match state.handle_event(event).await {
             Ok(new_state) => (new_state, Ok(())),
@@ -128,6 +155,7 @@ where
 
     /// Drive the state transition from New -> Establishing for merchants/proposees accepting a proposal
     pub(crate) async fn receive_proposal(&mut self) -> Result<(), LifeCycleError> {
+        debug!("🛣️ Received new channel proposal");
         let proposal = {
             let state = self.state();
             if let ChannelLifeCycle::New(new_state) = state {
@@ -143,27 +171,35 @@ where
 
     /// Drive the state transition from New -> Establishing for customers/proposers handling an ACK on a proposal
     pub async fn receive_proposal_ack(&mut self, ack: NewChannelProposal<P>) -> Result<(), LifeCycleError> {
+        debug!("🛣️ Received channel proposal ACK");
         let info = ack.proposed_channel_info();
         let event = LifeCycleEvent::OnAckNewChannel(Box::new(info));
         self.handle_event(event).await
     }
+
+    /// Accept a newly created and verified Multisig wallet and move the state from `Establishing` to `WalletCreated`
+    pub async fn accept_new_wallet(&mut self, wallet: W) -> Result<(), LifeCycleError> {
+        debug!("🛣️ Accepting new wallet");
+        let event = LifeCycleEvent::OnMultiSigWalletCreated(Box::new(wallet));
+        self.handle_event(event).await
+    }
 }
 
-pub struct PaymentChannels<P, C, WS, KES>
+pub struct PaymentChannels<P, C, W, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    WS: MultiSigService,
+    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
-    channels: Arc<RwLock<HashMap<String, Arc<RwLock<PaymentChannel<P, C, WS, KES>>>>>>,
+    channels: Arc<RwLock<HashMap<String, Arc<RwLock<PaymentChannel<P, C, W, KES>>>>>>,
 }
 
-impl<P, C, WS, KES> Clone for PaymentChannels<P, C, WS, KES>
+impl<P, C, W, KES> Clone for PaymentChannels<P, C, W, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    WS: MultiSigService,
+    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
     fn clone(&self) -> Self {
@@ -171,11 +207,11 @@ where
     }
 }
 
-impl<P, C, WS, KES> PaymentChannels<P, C, WS, KES>
+impl<P, C, W, KES> PaymentChannels<P, C, W, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    WS: MultiSigService,
+    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
     pub fn new() -> Self {
@@ -194,7 +230,7 @@ where
         for entry in fs::read_dir(channel_dir)? {
             let entry = entry?;
             let path = entry.path();
-            match PaymentChannel::<P, C, WS, KES>::try_load_from_file(&path) {
+            match PaymentChannel::<P, C, W, KES>::try_load_from_file(&path) {
                 Ok(channel) => {
                     let key = channel.name();
                     let channel = Arc::new(RwLock::new(channel));
@@ -215,7 +251,7 @@ where
     }
 
     /// Add a new channel to the list of channels.
-    pub async fn add(&self, channel: PaymentChannel<P, C, WS, KES>) {
+    pub async fn add(&self, channel: PaymentChannel<P, C, W, KES>) {
         let key = channel.name();
         let channel = Arc::new(RwLock::new(channel));
         let mut lock = self.channels.write().await;
@@ -225,7 +261,7 @@ where
     /// Check the channel out for writing, if it exists.
     /// If the channel is already checked out, this method will block until the channel is available.
     /// If the channel does not exist, `checkout` returns None.
-    pub async fn checkout(&self, channel_name: &str) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, WS, KES>>> {
+    pub async fn checkout(&self, channel_name: &str) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>> {
         let lock = self.channels.read().await;
         match lock.get(channel_name) {
             Some(lock) => {
@@ -242,12 +278,12 @@ where
     pub async fn try_checkout(
         &self,
         channel_name: &str,
-    ) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, WS, KES>>> {
+    ) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>> {
         let lock = self.channels.read().await;
         lock.get(channel_name).cloned().and_then(|lock| lock.try_write_owned().ok())
     }
 
-    pub async fn try_peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel<P, C, WS, KES>>> {
+    pub async fn try_peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel<P, C, W, KES>>> {
         let lock = self.channels.read().await;
         lock.get(channel_name).cloned().and_then(|lock| lock.try_read_owned().ok())
     }
@@ -260,7 +296,7 @@ where
         for (name, channel) in lock.iter() {
             let path = channel_dir.join(format!("{name}.ron"));
             let readable = channel.read().await;
-            let serialized = ron::to_string::<PaymentChannel<P, C, WS, KES>>(&readable)?;
+            let serialized = ron::to_string::<PaymentChannel<P, C, W, KES>>(&readable)?;
             drop(readable);
             fs::write(path, serialized)?;
         }

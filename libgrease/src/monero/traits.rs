@@ -5,150 +5,59 @@
 
 use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
-use crate::monero::error::{MoneroWalletError, MoneroWalletServiceError};
+use crate::monero::data_objects::{
+    MoneroAddress, MoneroTransaction, MoneroViewKey, MultiSigInitInfo, MultiSigSeed, MultisigKeyInfo, PartialKeyImage,
+    PartiallySignedMoneroTransaction, WalletBalance,
+};
+use crate::monero::error::MoneroWalletError;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
-use std::path::Path;
-
-pub struct MoneroAddress;
-pub struct MoneroViewKey;
-pub struct MoneroTransaction;
-
-pub struct TransactionId;
-
-#[derive(Clone, Deserialize, Serialize, Debug)]
-pub struct MultisigInitInfo;
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct MultisigKeyInfo;
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct PartialKeyImage;
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct PartiallySignedMoneroTransaction;
-pub struct MoneroPeer;
-pub struct MultiSigSeed;
-
-#[derive(Debug, Clone, Default)]
-pub struct WalletBalance {
-    pub total: MoneroAmount,
-    pub spendable: MoneroAmount,
-    pub blocks_left: usize,
-}
 
 /// Interface for a 2-of-2 Monero multisig wallet implementation
 #[allow(async_fn_in_trait)]
 pub trait MultiSigWallet: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync {
+    /// Create a new wallet instance associate with the given channel ID
+    fn new(channel_id: &ChannelId) -> Result<Self, MoneroWalletError>;
     /// Preparation Step 1/3: Monero multisig wallet - generate the Multisig info string
-    async fn prepare_multisig(&mut self) -> Result<MultisigInitInfo, MoneroWalletError>;
+    fn prepare_multisig(&self) -> impl Future<Output = Result<MultiSigInitInfo, MoneroWalletError>> + Send;
     /// Preparation Step 2/3: Consume the peer's multisig info string to initialize the wallet
-    async fn prep_make_multisig(&mut self, peer_info: MultisigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError>;
+    fn prep_make_multisig(
+        &self,
+        peer_info: MultiSigInitInfo,
+    ) -> impl Future<Output = Result<MultisigKeyInfo, MoneroWalletError>> + Send;
     /// Preparation Step 3/3: Import the peer's multisig keys
-    async fn prep_import_ms_keys(&mut self, peer_info: MultisigKeyInfo) -> Result<(), MoneroWalletError>;
+    fn prep_import_ms_keys(
+        &self,
+        peer_info: MultisigKeyInfo,
+    ) -> impl Future<Output = Result<(), MoneroWalletError>> + Send;
 
     /// Spending Step 1/4: Export partial key image - this needs to be done fairly soon before the transaction is
     /// broadcast, since it involves decoy selection and thus the key image is only valid for a short time.
-    async fn export_key_image_for_spend(&mut self) -> Result<PartialKeyImage, MoneroWalletError>;
+    fn export_key_image_for_spend(&mut self)
+        -> impl Future<Output = Result<PartialKeyImage, MoneroWalletError>> + Send;
     /// Spending Step 2/4: Import peer's partial key image - this needs to be done fairly soon before the transaction
     /// is broadcast, since it involves decoy selection and thus the key image is only valid for a short time.
-    async fn import_key_image_for_spend(&mut self, peer_info: PartialKeyImage) -> Result<(), MoneroWalletError>;
+    fn import_key_image_for_spend(
+        &mut self,
+        peer_info: PartialKeyImage,
+    ) -> impl Future<Output = Result<(), MoneroWalletError>> + Send;
     /// Spending Step 3/4: Create a partially signed transaction. Only one peer should do this.
-    async fn create_unsigned_tx(
+    fn create_unsigned_tx(
         &mut self,
         to: MoneroAddress,
         amount: MoneroAmount,
-    ) -> Result<PartiallySignedMoneroTransaction, MoneroWalletError>;
+    ) -> impl Future<Output = Result<PartiallySignedMoneroTransaction, MoneroWalletError>> + Send;
     /// Spending Step 4/4: Sign the transaction. Both peers need to do this.
-    async fn cosign_transaction(
+    fn cosign_transaction(
         &mut self,
         transaction: PartiallySignedMoneroTransaction,
-    ) -> Result<MoneroTransaction, MoneroWalletError>;
+    ) -> impl Future<Output = Result<MoneroTransaction, MoneroWalletError>> + Send;
 
     /// Return the wallet's multisig address. This is just like any other Monero address
-    async fn get_address(&self) -> MoneroAddress;
+    fn get_address(&self) -> impl Future<Output = MoneroAddress> + Send;
     async fn get_view_key(&self) -> MoneroViewKey;
     async fn get_balance(&self) -> Result<WalletBalance, MoneroWalletError>;
 
     async fn get_seed(&self) -> Result<MultiSigSeed, MoneroWalletError>;
     async fn restore_from_seed(seed: MultiSigSeed) -> Result<Self, MoneroWalletError>;
-}
-
-/// Interface for a service that is able to orchestrate multi-sig transactions between wallets on the Monero network.
-#[allow(async_fn_in_trait)]
-pub trait MultiSigService: Default + Serialize + for<'de> Deserialize<'de> + Send + Sync {
-    type Wallet: MultiSigWallet;
-
-    /// Save the wallet to disk
-    async fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<(), MoneroWalletError>;
-    /// Try and load an existing wallet from disk
-    async fn load<P: AsRef<Path>>(path: P) -> Result<Self::Wallet, MoneroWalletError>;
-
-    /// Wallet Prep 1/3: Create or load a new multisig 2-of-2 wallet. A unique wallet is required for every channel.
-    fn create_wallet(
-        &mut self,
-        channel_id: &ChannelId,
-    ) -> impl Future<Output = Result<Self::Wallet, MoneroWalletServiceError>> + Send;
-    /// Wallet Prep 2a/3: Exchange the multisig initialisation data between peers (sending)     
-    async fn send_multisig_init(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        peer: MoneroPeer,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Wallet Prep 2b/3: Exchange the multisig initialisation data between peers (receiving)     
-    async fn on_receive_multisig_init(
-        &mut self,
-        info: MultisigInitInfo,
-        wallet: &mut Self::Wallet,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Wallet Prep 3a/3: Exchange the multisig keys between peers (sending)
-    async fn send_multisig_keys(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        peer: MoneroPeer,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Wallet Prep 3b/3: Exchange the multisig keys between peers (receiving)
-    async fn on_receive_multisig_keys(
-        &mut self,
-        info: MultisigKeyInfo,
-        wallet: &mut Self::Wallet,
-    ) -> Result<(), MoneroWalletServiceError>;
-
-    /// Multisig spending 1a/3: Exchange the partial key image between peers (sending)
-    async fn send_partial_key_image(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        peer: MoneroPeer,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Multisig spending 1b/3: Exchange the partial key image between peers (receiving)
-    async fn on_receive_partial_key_image(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        info: PartialKeyImage,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Multisig spending 2a/3: Exchange unsigned transaction with peer (sending)
-    async fn send_partially_signed_tx(
-        &mut self,
-        peer: MoneroPeer,
-        wallet: &Self::Wallet,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Multisig spending 2b/3: Exchange unsigned transaction with peer (receiving)
-    async fn on_receive_partially_signed_tx(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        transaction: MoneroTransaction,
-    ) -> Result<(), MoneroWalletServiceError>;
-    /// Multisig spending 3/3: Exchange signed transaction with peer (sending)
-    async fn broadcast_transaction(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        transaction: MoneroTransaction,
-    ) -> Result<TransactionId, MoneroWalletServiceError>;
-
-    /// Meta-function to handle all the wallet preparation steps
-    async fn prepare_transaction(
-        &mut self,
-        wallet: &mut Self::Wallet,
-        transaction: MoneroTransaction,
-    ) -> Result<(), MoneroWalletServiceError>;
 }

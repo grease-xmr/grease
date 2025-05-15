@@ -1707,6 +1707,7 @@ dependencies = [
  "env_logger",
  "hex",
  "log",
+ "monero",
  "rand 0.9.1",
  "ron",
  "serde",

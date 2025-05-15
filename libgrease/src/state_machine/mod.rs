@@ -15,7 +15,7 @@ pub mod traits;
 pub use closed_channel::{ChannelClosedReason, ClosedChannelState};
 pub use closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};
 pub use disputing_channel::{DisputeOrigin, DisputeResolvedInfo, DisputingChannelState, ForceCloseInfo};
-pub use establishing_channel::{Balances, EstablishingChannelState};
+pub use establishing_channel::{Balances, ChannelMetadata};
 pub use lifecycle::{ChannelLifeCycle, LifecycleStage};
 pub use new_channel::{ChannelSeedBuilder, ChannelSeedInfo, NewChannelBuilder, NewChannelState, ProposedChannelInfo};
 pub use open_channel::EstablishedChannelState;

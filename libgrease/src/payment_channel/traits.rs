@@ -15,6 +15,8 @@ pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> + Send + Syn
     type UpdateInfo: Send;
     type Finalized: ClosedPaymentChannel + Send + Sync;
 
+    fn new(channel_id: ChannelId, role: ChannelRole, initial_balances: Balances) -> Self;
+
     fn role(&self) -> ChannelRole;
     fn channel_id(&self) -> &ChannelId;
     fn my_balance(&self) -> MoneroAmount {
@@ -24,7 +26,15 @@ pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> + Send + Syn
             ChannelRole::Customer => balances.customer,
         }
     }
+    fn my_initial_balance(&self) -> MoneroAmount {
+        let balances = self.initial_balances();
+        match self.role() {
+            ChannelRole::Merchant => balances.merchant,
+            ChannelRole::Customer => balances.customer,
+        }
+    }
     fn balances(&self) -> Balances;
+    fn initial_balances(&self) -> Balances;
     fn transaction_count(&self) -> usize;
     fn update(&mut self, update_info: Self::UpdateInfo) -> Result<(), UpdateError>;
     fn finalize(self) -> Self::Finalized;

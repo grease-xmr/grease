@@ -1,13 +1,13 @@
 use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
-use crate::monero::error::{MoneroWalletError, MoneroWalletServiceError};
-use crate::monero::traits::{
-    MoneroAddress, MoneroPeer, MoneroTransaction, MoneroViewKey, MultiSigSeed, MultiSigService, MultisigInitInfo,
-    MultisigKeyInfo, PartialKeyImage, PartiallySignedMoneroTransaction, TransactionId, WalletBalance,
+use crate::monero::data_objects::{
+    MoneroAddress, MoneroTransaction, MoneroViewKey, MultiSigInitInfo, MultiSigSeed, MultisigKeyInfo, PartialKeyImage,
+    PartiallySignedMoneroTransaction, WalletBalance,
 };
+use crate::monero::error::MoneroWalletError;
 use crate::monero::MultiSigWallet;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DummyWallet {
@@ -31,23 +31,27 @@ impl DummyWallet {
 }
 
 impl MultiSigWallet for DummyWallet {
-    async fn prepare_multisig(&mut self) -> Result<MultisigInitInfo, MoneroWalletError> {
+    fn new(_id: &ChannelId) -> Result<Self, MoneroWalletError> {
+        Ok(DummyWallet { ok: true })
+    }
+
+    async fn prepare_multisig(&self) -> Result<MultiSigInitInfo, MoneroWalletError> {
         if self.ok {
-            Ok(MultisigInitInfo)
+            Ok(MultiSigInitInfo { init: "MultisigExampleInit".to_string() })
         } else {
             Err(MoneroWalletError::MultisigPrepare)
         }
     }
 
-    async fn prep_make_multisig(&mut self, _peer_info: MultisigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError> {
+    async fn prep_make_multisig(&self, _peer_info: MultiSigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError> {
         if self.ok {
-            Ok(MultisigKeyInfo)
+            Ok(MultisigKeyInfo { key: "MultisigExampleKey".to_string() })
         } else {
             Err(MoneroWalletError::MakeMultisig)
         }
     }
 
-    async fn prep_import_ms_keys(&mut self, _info: MultisigKeyInfo) -> Result<(), MoneroWalletError> {
+    async fn prep_import_ms_keys(&self, _info: MultisigKeyInfo) -> Result<(), MoneroWalletError> {
         if self.ok {
             Ok(())
         } else {
@@ -87,7 +91,10 @@ impl MultiSigWallet for DummyWallet {
     }
 
     async fn get_address(&self) -> MoneroAddress {
-        MoneroAddress
+        MoneroAddress::from_str(
+            "4Byr22j9M2878Mtyb3fEPcBNwBZf5EXqn1Yi6VzR46618SFBrYysab2Cs1474CVDbsh94AJq7vuV3Z2DRq4zLcY3LHzo1Nbv3d8J6VhvCV",
+        )
+        .unwrap()
     }
 
     async fn get_view_key(&self) -> MoneroViewKey {
@@ -107,101 +114,14 @@ impl MultiSigWallet for DummyWallet {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
-pub struct DummyMultiSigWalletService;
+#[cfg(test)]
+mod test {
+    use crate::monero::data_objects::MoneroAddress;
+    use std::str::FromStr;
 
-impl MultiSigService for DummyMultiSigWalletService {
-    type Wallet = DummyWallet;
-
-    async fn save<P: AsRef<Path>>(&mut self, _path: P) -> Result<(), MoneroWalletError> {
-        Ok(())
-    }
-
-    async fn load<P: AsRef<Path>>(_path: P) -> Result<Self::Wallet, MoneroWalletError> {
-        Ok(DummyWallet::default())
-    }
-
-    async fn create_wallet(&mut self, _channel_id: &ChannelId) -> Result<Self::Wallet, MoneroWalletServiceError> {
-        Ok(DummyWallet::default())
-    }
-
-    async fn send_multisig_init(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _peer: MoneroPeer,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn on_receive_multisig_init(
-        &mut self,
-        _info: MultisigInitInfo,
-        _wallet: &mut Self::Wallet,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn send_multisig_keys(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _peer: MoneroPeer,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn on_receive_multisig_keys(
-        &mut self,
-        _info: MultisigKeyInfo,
-        _wallet: &mut Self::Wallet,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn send_partial_key_image(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _peer: MoneroPeer,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn on_receive_partial_key_image(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _info: PartialKeyImage,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn send_partially_signed_tx(
-        &mut self,
-        _peer: MoneroPeer,
-        _wallet: &Self::Wallet,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn on_receive_partially_signed_tx(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _tx: MoneroTransaction,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
-    }
-
-    async fn broadcast_transaction(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _tx: MoneroTransaction,
-    ) -> Result<TransactionId, MoneroWalletServiceError> {
-        Ok(TransactionId)
-    }
-
-    async fn prepare_transaction(
-        &mut self,
-        _wallet: &mut Self::Wallet,
-        _tx: MoneroTransaction,
-    ) -> Result<(), MoneroWalletServiceError> {
-        Ok(())
+    #[test]
+    fn valid_monero_address() {
+        let address = "4Byr22j9M2878Mtyb3fEPcBNwBZf5EXqn1Yi6VzR46618SFBrYysab2Cs1474CVDbsh94AJq7vuV3Z2DRq4zLcY3LHzo1Nbv3d8J6VhvCV";
+        MoneroAddress::from_str(address).unwrap();
     }
 }

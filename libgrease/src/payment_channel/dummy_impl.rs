@@ -10,17 +10,16 @@ pub struct DummyActiveChannel {
     role: ChannelRole,
     tx_count: usize,
     balances: Balances,
-}
-
-impl DummyActiveChannel {
-    pub fn new(channel_id: ChannelId, role: ChannelRole, balances: Balances) -> Self {
-        DummyActiveChannel { channel_id, role, tx_count: 0, balances }
-    }
+    initial: Balances,
 }
 
 impl ActivePaymentChannel for DummyActiveChannel {
     type UpdateInfo = DummyUpdateInfo;
     type Finalized = DummyClosedChannel;
+
+    fn new(channel_id: ChannelId, role: ChannelRole, initial_balances: Balances) -> Self {
+        DummyActiveChannel { channel_id, role, tx_count: 0, balances: initial_balances, initial: initial_balances }
+    }
 
     fn role(&self) -> ChannelRole {
         self.role
@@ -32,6 +31,10 @@ impl ActivePaymentChannel for DummyActiveChannel {
 
     fn balances(&self) -> Balances {
         self.balances
+    }
+
+    fn initial_balances(&self) -> Balances {
+        self.initial
     }
 
     fn transaction_count(&self) -> usize {
