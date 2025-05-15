@@ -11,7 +11,7 @@ use futures::future::join;
 use futures::StreamExt;
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
-use libgrease::monero::MultiSigWallet;
+use libgrease::monero::MultiSigService;
 use libgrease::payment_channel::ActivePaymentChannel;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
@@ -24,33 +24,33 @@ use tokio::task::JoinHandle;
 
 pub type WritableState<P, C, W, KES> = OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>;
 
-pub struct NetworkServer<P, C, W, KES, D, K>
+pub struct NetworkServer<P, C, WS, KES, D, K>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
-    D: GreaseChannelDelegate<P, C, W, KES>,
+    D: GreaseChannelDelegate<P, C, WS::Wallet, KES>,
     K: KeyManager,
 {
     id: ConversationIdentity,
-    inner: InnerEventHandler<P, C, W, KES, D, K>,
+    inner: InnerEventHandler<P, C, WS, KES, D, K>,
     event_loop_handle: JoinHandle<()>,
     event_handler_handle: JoinHandle<()>,
 }
 
-impl<P, C, W, KES, D, K> NetworkServer<P, C, W, KES, D, K>
+impl<P, C, WS, KES, D, K> NetworkServer<P, C, WS, KES, D, K>
 where
     P: PublicKey + 'static,
     C: ActivePaymentChannel + 'static,
-    W: MultiSigWallet + 'static,
+    WS: MultiSigService + 'static,
     KES: KeyEscrowService + 'static,
-    D: GreaseChannelDelegate<P, C, W, KES> + 'static,
+    D: GreaseChannelDelegate<P, C, WS::Wallet, KES> + 'static,
     K: KeyManager<PublicKey = P> + Send + Sync + 'static,
 {
     pub fn new(
         id: ConversationIdentity,
-        channels: PaymentChannels<P, C, W, KES>,
+        channels: PaymentChannels<P, C, WS, KES>,
         delegate: D,
         key_delegate: K,
     ) -> Result<Self, PeerConnectionError> {
@@ -104,7 +104,7 @@ where
         self.inner.channels.save_channels(path).await
     }
 
-    pub async fn add_channel(&self, channel: PaymentChannel<P, C, W, KES>) {
+    pub async fn add_channel(&self, channel: PaymentChannel<P, C, WS, KES>) {
         self.inner.channels.add(channel).await
     }
 
@@ -135,7 +135,7 @@ where
                 debug!("Channel proposal ACK received. Validating response.");
                 let peer_info = final_proposal.contact_info_proposee.clone();
                 let mut channel = PaymentChannel::new(peer_info, state);
-                match channel.receive_proposal_ack(final_proposal.clone()) {
+                match channel.receive_proposal_ack(final_proposal.clone()).await {
                     Ok(_) => info!("🥂 Channel proposal accepted."),
                     Err(err) => warn!("😢 We cannot accept the channel creation terms: {err}"),
                 }
@@ -153,7 +153,7 @@ where
         Ok(result)
     }
 
-    fn create_new_state(&self, secret: P::SecretKey, prop: NewChannelProposal<P>) -> ChannelLifeCycle<P, C, W, KES> {
+    fn create_new_state(&self, secret: P::SecretKey, prop: NewChannelProposal<P>) -> ChannelLifeCycle<P, C, WS, KES> {
         let new_state = NewChannelBuilder::new(prop.seed.role, prop.proposer_pubkey, secret)
             .with_my_user_label(&prop.proposer_label)
             .with_peer_label(&prop.seed.user_label)
@@ -167,28 +167,28 @@ where
     }
 }
 
-struct InnerEventHandler<P, C, W, KES, D, K>
+struct InnerEventHandler<P, C, WS, KES, D, K>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
-    D: GreaseChannelDelegate<P, C, W, KES>,
+    D: GreaseChannelDelegate<P, C, WS::Wallet, KES>,
     K: KeyManager,
 {
     network_client: Client<P>,
-    channels: PaymentChannels<P, C, W, KES>,
+    channels: PaymentChannels<P, C, WS, KES>,
     delegate: D,
     key_manager: K,
 }
 
-impl<P, C, W, KES, D, K> Clone for InnerEventHandler<P, C, W, KES, D, K>
+impl<P, C, WS, KES, D, K> Clone for InnerEventHandler<P, C, WS, KES, D, K>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
-    D: GreaseChannelDelegate<P, C, W, KES>,
+    D: GreaseChannelDelegate<P, C, WS::Wallet, KES>,
     K: KeyManager,
 {
     fn clone(&self) -> Self {
@@ -201,13 +201,13 @@ where
     }
 }
 
-impl<P, C, W, KES, D, K> InnerEventHandler<P, C, W, KES, D, K>
+impl<P, C, WS, KES, D, K> InnerEventHandler<P, C, WS, KES, D, K>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
-    D: GreaseChannelDelegate<P, C, W, KES>,
+    D: GreaseChannelDelegate<P, C, WS::Wallet, KES>,
     K: KeyManager<PublicKey = P>,
 {
     async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
@@ -228,7 +228,7 @@ where
         let name = request.channel_name();
         let response = if self.channels.exists(&name).await {
             match self.channels.checkout(&name).await {
-                Some(channel) => self.handle_pertinent_grease_request(request, channel).await,
+                Some(channel) => self.handle_grease_request_for_existing_channel(request, channel).await,
                 None => {
                     warn!("Channel exists, but we could not get a write lock: {name}");
                     GreaseResponse::Error("Could not get write lock".into())
@@ -248,38 +248,26 @@ where
         if let Err(err) = client.send_response_to_peer(response, return_chute).await {
             error!("Request was handled, but could not send response to peer: {err}");
         }
-        // Response has been sent, now check to see if there's any work to do on the channel
-        self.drive_channel_forward(name).await;
     }
 
-    async fn handle_pertinent_grease_request(
+    async fn handle_grease_request_for_existing_channel(
         &self,
         request: GreaseRequest<P>,
-        _channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>,
+        channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, WS, KES>>,
     ) -> GreaseResponse<P> {
         match request {
             GreaseRequest::ProposeNewChannel(_) => {
                 GreaseResponse::Error("Cannot create a new channel. Channel already exists.".into())
             }
-            GreaseRequest::SendMoney => todo!("SendMoney"),
-            GreaseRequest::RequestMoney => todo!("RequestMoney"),
-            GreaseRequest::CloseChannel => todo!("CloseChannel"),
-        }
-    }
-
-    async fn drive_channel_forward(&self, name: String) {
-        if let Some(channel) = self.channels.checkout(&name).await {
-            let stage = channel.state().stage();
-            match stage {
-                LifecycleStage::Establishing => {
-                    self.establish_channel(name, channel).await;
-                }
-                _ => {
-                    debug!("Nothing to do for channel {name} in state {stage}");
-                }
+            GreaseRequest::MsInit(init) => {
+                todo!()
             }
-        } else {
-            warn!("Channel does not exist: {name}");
+            GreaseRequest::MsKeyExchange(_) => {
+                todo!()
+            }
+            GreaseRequest::ConfirmMsAddress(_) => {
+                todo!()
+            }
         }
     }
 
@@ -316,24 +304,38 @@ where
         let peer_info = data.contact_info_proposer.clone();
         let mut channel = PaymentChannel::new(peer_info, state);
         // Emit an `AckProposal` event on the channel
-        if let Err(err) = channel.receive_proposal() {
+        if let Err(err) = channel.receive_proposal().await {
             warn!("Channel proposal was not accepted by the state machine");
             let reason = match err {
                 LifeCycleError::InvalidStateTransition => RejectReason::NotANewChannel,
                 LifeCycleError::Proposal(invalid) => RejectReason::InvalidProposal(invalid),
+                LifeCycleError::WalletServiceError(e) => {
+                    warn!("Cannot send AckProposal to peer because of an internal error: {e}");
+                    RejectReason::Internal("Peer had an issue with the multisig wallet service".into())
+                }
             };
             return GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
                 reason,
                 RetryOptions::close_only(),
             ));
         }
+        // We should be in Establishing now
+        assert_eq!(
+            channel.state().stage(),
+            LifecycleStage::Establishing,
+            "Channel state machine is not in the Establishing stage"
+        );
+        // If we're the merchant, kick of multisig creation
+        if let Err(err) = self.prepare_wallet(&mut channel).await {
+            error!("Error fresh wallet for new channel: {err}");
+            return GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
+                RejectReason::Internal("Peer was unable to initialize a new multisig wallet".into()),
+                RetryOptions::close_only(),
+            ));
+        }
         self.channels.add(channel).await;
         let ack = ChannelProposalResult::accept(data.clone());
         GreaseResponse::ChannelProposalResult(ack)
-    }
-
-    async fn establish_channel(&self, name: String, _channel: OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>) {
-        info!("Establishing channel {name}");
     }
 
     //------------------------------------------- Minor helper functions ---------------------------------------------//
@@ -351,5 +353,13 @@ where
                 RetryOptions::close_only(),
             )))
         }
+    }
+
+    async fn prepare_wallet(&self, channel: &mut PaymentChannel<P, C, WS, KES>) -> Result<(), LifeCycleError> {
+        if channel.state().role().is_merchant() {
+            debug!("Initiating multisig wallet creation..");
+            channel.create_fresh_wallet().await?
+        }
+        Ok(())
     }
 }

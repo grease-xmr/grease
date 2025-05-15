@@ -10,27 +10,65 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DummyWallet;
+pub struct DummyWallet {
+    ok: bool,
+}
+
+impl Default for DummyWallet {
+    fn default() -> Self {
+        Self { ok: true }
+    }
+}
+
+impl DummyWallet {
+    pub fn err(&mut self) {
+        self.ok = false;
+    }
+
+    pub fn clear_err(&mut self) {
+        self.ok = true;
+    }
+}
 
 impl MultiSigWallet for DummyWallet {
     async fn prepare_multisig(&mut self) -> Result<MultisigInitInfo, MoneroWalletError> {
-        Ok(MultisigInitInfo)
+        if self.ok {
+            Ok(MultisigInitInfo)
+        } else {
+            Err(MoneroWalletError::MultisigPrepare)
+        }
     }
 
-    async fn make_multisig(&mut self, _peer_info: MultisigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError> {
-        Ok(MultisigKeyInfo)
+    async fn prep_make_multisig(&mut self, _peer_info: MultisigInitInfo) -> Result<MultisigKeyInfo, MoneroWalletError> {
+        if self.ok {
+            Ok(MultisigKeyInfo)
+        } else {
+            Err(MoneroWalletError::MakeMultisig)
+        }
     }
 
-    async fn import_multisig_keys(&mut self, _info: MultisigKeyInfo) -> Result<(), MoneroWalletError> {
-        Ok(())
+    async fn prep_import_ms_keys(&mut self, _info: MultisigKeyInfo) -> Result<(), MoneroWalletError> {
+        if self.ok {
+            Ok(())
+        } else {
+            Err(MoneroWalletError::ImportMultisigKeyImage)
+        }
     }
 
-    async fn export_multisig_key_image(&mut self) -> Result<PartialKeyImage, MoneroWalletError> {
-        Ok(PartialKeyImage)
+    async fn export_key_image_for_spend(&mut self) -> Result<PartialKeyImage, MoneroWalletError> {
+        if self.ok {
+            Ok(PartialKeyImage)
+        } else {
+            Err(MoneroWalletError::ExportSpendKey)
+        }
     }
 
-    async fn import_multisig_key_image(&mut self, _info: PartialKeyImage) -> Result<(), MoneroWalletError> {
-        Ok(())
+    async fn import_key_image_for_spend(&mut self, _info: PartialKeyImage) -> Result<(), MoneroWalletError> {
+        if self.ok {
+            Ok(())
+        } else {
+            Err(MoneroWalletError::ImportSpendKey)
+        }
     }
 
     async fn create_unsigned_tx(
@@ -65,10 +103,11 @@ impl MultiSigWallet for DummyWallet {
     }
 
     async fn restore_from_seed(_seed: MultiSigSeed) -> Result<Self, MoneroWalletError> {
-        Ok(Self)
+        Ok(Self::default())
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
 pub struct DummyMultiSigWalletService;
 
 impl MultiSigService for DummyMultiSigWalletService {
@@ -79,11 +118,11 @@ impl MultiSigService for DummyMultiSigWalletService {
     }
 
     async fn load<P: AsRef<Path>>(_path: P) -> Result<Self::Wallet, MoneroWalletError> {
-        Ok(DummyWallet)
+        Ok(DummyWallet::default())
     }
 
     async fn create_wallet(&mut self, _channel_id: &ChannelId) -> Result<Self::Wallet, MoneroWalletServiceError> {
-        Ok(DummyWallet)
+        Ok(DummyWallet::default())
     }
 
     async fn send_multisig_init(

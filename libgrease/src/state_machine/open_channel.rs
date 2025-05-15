@@ -1,7 +1,7 @@
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
-use crate::monero::MultiSigWallet;
+use crate::monero::MultiSigService;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::establishing_channel::ChannelEstablishedInfo;
 use crate::state_machine::traits::ChannelState;
@@ -27,28 +27,35 @@ where
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
-pub struct EstablishedChannelState<P, C, W, KES>
+pub struct EstablishedChannelState<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
     pub(crate) secret: P::SecretKey,
     pub(crate) payment_channel: C,
-    pub(crate) wallet: W,
+    pub(crate) wallet: WS::Wallet,
+    pub(crate) wallet_service: WS,
     pub(crate) kes: KES,
 }
 
-impl<P, C, W, KES> EstablishedChannelState<P, C, W, KES>
+impl<P, C, WS, KES> EstablishedChannelState<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
-    pub fn from_new_channel_info(info: ChannelEstablishedInfo<C, W, KES>, secret: P::SecretKey) -> Self {
-        EstablishedChannelState { secret, payment_channel: info.channel, wallet: info.wallet, kes: info.kes }
+    pub fn from_new_channel_info(info: ChannelEstablishedInfo<C, WS, KES>, secret: P::SecretKey) -> Self {
+        EstablishedChannelState {
+            secret,
+            payment_channel: info.channel,
+            wallet: info.wallet,
+            wallet_service: info.wallet_service,
+            kes: info.kes,
+        }
     }
 
     /// Updates the channel state from the given update information.
@@ -77,11 +84,11 @@ where
     }
 }
 
-impl<P, C, W, KES> ChannelState for EstablishedChannelState<P, C, W, KES>
+impl<P, C, WS, KES> ChannelState for EstablishedChannelState<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
     fn channel_id(&self) -> &ChannelId {

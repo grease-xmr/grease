@@ -64,7 +64,7 @@ impl VCOF for Vcof25519 {
         let statement_next = Curve25519PublicKey::from_secret(&witness_next);
         // Generate a Schnorr proof for the next witness committing to the consecutive statements
         let (r, public_nonce) = Curve25519PublicKey::keypair(&mut rng);
-        let challenge = Vcof25519::construct_challenge(&public_nonce, &statement_prev, &statement_next);
+        let challenge = Vcof25519::construct_challenge(&public_nonce, statement_prev, &statement_next);
         let s = r.as_scalar() + challenge * witness_next.as_scalar();
 
         let witness_next = MoneroWitness::from_scalar(witness_next.to_scalar());

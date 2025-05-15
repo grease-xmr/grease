@@ -1,3 +1,4 @@
+use crate::monero::error::MoneroWalletServiceError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -7,6 +8,8 @@ pub enum LifeCycleError {
     InvalidStateTransition,
     #[error("Invalid channel proposal: {0}")]
     Proposal(#[from] InvalidProposal),
+    #[error("Wallet service error: {0}")]
+    WalletServiceError(#[from] MoneroWalletServiceError),
 }
 
 #[derive(Clone, Debug, Error, Serialize, Deserialize)]

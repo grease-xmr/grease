@@ -1,7 +1,7 @@
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::kes::KeyEscrowService;
-use crate::monero::MultiSigWallet;
+use crate::monero::MultiSigService;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::ChannelLifeCycle;
 
@@ -20,13 +20,13 @@ pub trait ChannelState {
     fn role(&self) -> ChannelRole;
 }
 
-pub trait StateStore<P, C, W, KES>
+pub trait StateStore<P, C, WS, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
+    WS: MultiSigService,
     KES: KeyEscrowService,
 {
-    fn write_channel(&mut self, state: &ChannelLifeCycle<P, C, W, KES>) -> Result<(), anyhow::Error>;
-    fn load_channel(&self, channel_name: &str) -> Result<ChannelLifeCycle<P, C, W, KES>, anyhow::Error>;
+    fn write_channel(&mut self, state: &ChannelLifeCycle<P, C, WS, KES>) -> Result<(), anyhow::Error>;
+    fn load_channel(&self, channel_name: &str) -> Result<ChannelLifeCycle<P, C, WS, KES>, anyhow::Error>;
 }

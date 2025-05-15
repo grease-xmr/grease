@@ -319,11 +319,11 @@ impl<P: PublicKey> ChannelSeedBuilder<P> {
     }
 
     pub fn build(self) -> Result<ChannelSeedInfo<P>, MissingSeedInfo> {
-        let pubkey = self.pubkey.ok_or(MissingSeedInfo::MissingPublicKey)?;
-        let key_id = self.key_id.ok_or(MissingSeedInfo::MissingKeyId)?;
-        let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::MissingKesPublicKey)?;
-        let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::MissingInitialBalances)?;
-        let user_label = self.user_label.ok_or(MissingSeedInfo::MissingPartialChannelId)?;
+        let pubkey = self.pubkey.ok_or(MissingSeedInfo::PublicKey)?;
+        let key_id = self.key_id.ok_or(MissingSeedInfo::Missing)?;
+        let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::KesPublicKey)?;
+        let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
+        let user_label = self.user_label.ok_or(MissingSeedInfo::PartialChannelId)?;
 
         Ok(ChannelSeedInfo { role: self.role, pubkey, key_id, kes_public_key, initial_balances, user_label })
     }
@@ -338,13 +338,13 @@ impl<P: PublicKey> Default for ChannelSeedBuilder<P> {
 #[derive(Debug, Clone, Error)]
 pub enum MissingSeedInfo {
     #[error("Missing public key")]
-    MissingPublicKey,
+    PublicKey,
     #[error("Missing merchant key id")]
-    MissingKeyId,
+    Missing,
     #[error("Missing KES public key")]
-    MissingKesPublicKey,
+    KesPublicKey,
     #[error("Missing initial balances")]
-    MissingInitialBalances,
+    InitialBalances,
     #[error("Missing partial channel ID")]
-    MissingPartialChannelId,
+    PartialChannelId,
 }
