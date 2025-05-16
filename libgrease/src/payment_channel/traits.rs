@@ -17,22 +17,23 @@ pub trait ActivePaymentChannel: Serialize + for<'d> Deserialize<'d> + Send + Syn
 
     fn new(channel_id: ChannelId, role: ChannelRole, initial_balances: Balances) -> Self;
 
+    fn balance_of(role: ChannelRole, balances: Balances) -> MoneroAmount {
+        match role {
+            ChannelRole::Merchant => balances.merchant,
+            ChannelRole::Customer => balances.customer,
+        }
+    }
+
     fn role(&self) -> ChannelRole;
     fn channel_id(&self) -> &ChannelId;
     fn my_balance(&self) -> MoneroAmount {
-        let balances = self.balances();
-        match self.role() {
-            ChannelRole::Merchant => balances.merchant,
-            ChannelRole::Customer => balances.customer,
-        }
+        Self::balance_of(self.role(), self.balances())
     }
+
     fn my_initial_balance(&self) -> MoneroAmount {
-        let balances = self.initial_balances();
-        match self.role() {
-            ChannelRole::Merchant => balances.merchant,
-            ChannelRole::Customer => balances.customer,
-        }
+        Self::balance_of(self.role(), self.initial_balances())
     }
+
     fn balances(&self) -> Balances;
     fn initial_balances(&self) -> Balances;
     fn transaction_count(&self) -> usize;

@@ -94,7 +94,7 @@ impl MultiSigWallet for DummyWallet {
         MoneroAddress::from_str(
             "4Byr22j9M2878Mtyb3fEPcBNwBZf5EXqn1Yi6VzR46618SFBrYysab2Cs1474CVDbsh94AJq7vuV3Z2DRq4zLcY3LHzo1Nbv3d8J6VhvCV",
         )
-        .unwrap()
+            .expect("dummy Monero address is hard-coded and must be valid")
     }
 
     async fn get_view_key(&self) -> MoneroViewKey {

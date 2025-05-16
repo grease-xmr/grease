@@ -39,17 +39,16 @@ pub enum LifecycleStage {
     Disputing,
 }
 
-pub enum LifeCycleEvent<P, C, W, KES>
+pub enum LifeCycleEvent<P, C, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
     OnAckNewChannel(Box<ProposedChannelInfo<P>>),
     OnRejectNewChannel(Box<RejectNewChannelReason>),
     OnTimeout(Box<TimeoutReason>),
-    OnMultiSigWalletCreated(Box<W>),
+    OnMultiSigWalletCreated,
     OnKesVerified(Box<KES>),
     OnFundingTxConfirmed(Box<TransactionId>),
     OnUpdateChannel(Box<ChannelUpdateInfo<C>>),
@@ -59,20 +58,19 @@ where
     OnSuccessfulClose(Box<SuccessfulCloseInfo>),
 }
 
-impl<P, C, W, KES> Display for LifeCycleEvent<P, C, W, KES>
+impl<P, C, KES> Display for LifeCycleEvent<P, C, KES>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    W: MultiSigWallet,
     KES: KeyEscrowService,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             LifeCycleEvent::OnAckNewChannel(_) => write!(f, "OnAckNewChannel"),
             LifeCycleEvent::OnTimeout(_) => write!(f, "OnTimeout"),
-            LifeCycleEvent::OnMultiSigWalletCreated(_) => write!(f, "MultiSigWalletCreated"),
+            LifeCycleEvent::OnMultiSigWalletCreated => write!(f, "MultiSigWalletCreated"),
             LifeCycleEvent::OnKesVerified(_) => write!(f, "MultiSigWalletCreated"),
-            LifeCycleEvent::OnFundingTxConfirmed(_) => write!(f, "OnChannelEstablished"),
+            LifeCycleEvent::OnFundingTxConfirmed(_) => write!(f, "FundingTxConfirmed"),
             LifeCycleEvent::OnUpdateChannel(_) => write!(f, "OnUpdateChannel"),
             LifeCycleEvent::OnStartClose(_) => write!(f, "OnStartClose"),
             LifeCycleEvent::OnRejectNewChannel(_) => write!(f, "OnRejectNewChannel"),
@@ -203,7 +201,7 @@ where
 
     /// Manage the transition from the Establishing state to the Open state. This is an elaborate process that involves
     /// multiple steps, and therefore makes use of a subordinate state machine.
-    fn establishing_to_wallet_created(self, wallet: W) -> Result<Self, (Self, LifeCycleError)> {
+    fn establishing_to_wallet_created(self) -> Result<Self, (Self, LifeCycleError)> {
         let Self::Establishing(establishing_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
@@ -350,14 +348,14 @@ where
         }
     }
 
-    pub async fn handle_event(self, event: LifeCycleEvent<P, C, W, KES>) -> Result<Self, (Self, LifeCycleError)> {
+    pub async fn handle_event(self, event: LifeCycleEvent<P, C, KES>) -> Result<Self, (Self, LifeCycleError)> {
         use LifeCycleEvent::*;
         use LifecycleStage::*;
         match (self.stage(), event) {
             (New, OnAckNewChannel(prop)) => self.new_to_establishing(*prop).await,
             (New, OnRejectNewChannel(reason)) => self.reject_new_channel(*reason),
             (New | Establishing | WalletCreated | KesVerified, OnTimeout(reason)) => self.timeout(*reason),
-            (Establishing, OnMultiSigWalletCreated(wallet)) => self.establishing_to_wallet_created(*wallet),
+            (Establishing, OnMultiSigWalletCreated) => self.establishing_to_wallet_created(),
             (WalletCreated, OnKesVerified(kes)) => self.wallet_created_to_kes_verified(*kes),
             (KesVerified, OnFundingTxConfirmed(txid)) => self.kes_verified_to_open(*txid),
             (Open, OnUpdateChannel(info)) => self.update_channel(*info),
@@ -432,7 +430,7 @@ pub mod test {
     use log::*;
 
     type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
-    type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
+    type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyKes>;
 
     pub fn new_channel_state() -> (DummyLifecycle, NewChannelState<Curve25519PublicKey>) {
         // All this info is known, or can be scanned in from a QR code etc
@@ -487,8 +485,7 @@ pub mod test {
 
     pub async fn create_wallet(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The wallet negotiation is successful, and the wallet is created
-        let wallet = DummyWallet::new(&lc.current_state().channel_id()).unwrap();
-        let event = LifeCycleEvent::OnMultiSigWalletCreated(Box::new(wallet));
+        let event = LifeCycleEvent::OnMultiSigWalletCreated;
         lc = ChannelLifeCycle::log_and_consolidate(lc.stage(), lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::WalletCreated);
         lc

@@ -8,7 +8,7 @@ use crate::{
     KeyManager, PaymentChannel, PeerConnectionEvent,
 };
 use futures::future::join;
-use futures::StreamExt;
+use futures::{ready, StreamExt};
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::data_objects::RequestEnvelope;
@@ -20,6 +20,7 @@ use libp2p::request_response::ResponseChannel;
 use libp2p::Multiaddr;
 use log::*;
 use std::collections::VecDeque;
+use std::future;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
@@ -29,7 +30,7 @@ pub type WritableState<P, C, W, KES> = OwnedRwLockWriteGuard<PaymentChannel<P, C
 
 macro_rules! abort {
     ($channel_name:expr, $msg:expr) => {{
-        use NextAction;
+        use crate::server::NextAction;
         warn!("{}", $msg);
         NextAction::Abort {
             channel_name: $channel_name.to_string(),
@@ -327,9 +328,7 @@ where
             GreaseRequest::MsInit(envelope) => {
                 trace!("Multisig Init request received");
                 let (channel_name, peer_info) = envelope.open();
-                if let Err(err) =
-                    channel.wallet_preparation(|wallet_state| Box::pin(wallet_state.prepare_multisig())).await
-                {
+                if let Err(err) = channel.wallet_preparation(|wallet_state| wallet_state.prepare_multisig()).await {
                     warn!("Error preparing multisig wallet: {err}");
                     return GreaseResponse::MsInit(Err("Customer could not create wallet".into()));
                 }
@@ -535,16 +534,13 @@ where
         // Step 4 - Confirm address
         trace!("Merchant: Received multisig key data from customer. Calling import_multisig_keys");
         wallet_state = wallet_state.import_multisig_keys(peer_key).await;
-        let wallet = if wallet_state.is_ready() {
-            wallet_state.to_wallet()
-        } else if wallet_state.is_aborted() {
-            let aborted = wallet_state.to_aborted().unwrap();
-            return abort!(&channel_name, "Wallet state is aborted. {}", aborted.reason());
-        } else {
-            return abort!(&channel_name, "Wallet state is in an unexpected state!");
+        trace!("Merchant: Fetching address");
+        let address = match wallet_state.get_address().await {
+            Some(address) => address,
+            None => {
+                return abort!(&channel_name, "Wallet state is not prepared");
+            }
         };
-        trace!("Merchant: Wallet is ready. Fetching address");
-        let address = wallet.get_address().await;
         trace!("Merchant: Sending address {} to customer", address.to_string());
         let (peer_channel, addresses_match) =
             match client.confirm_multisig_address(peer.peer_id, channel_name.clone(), address).await {
@@ -558,13 +554,23 @@ where
         if addresses_match {
             trace!("Merchant: Address confirmed. Accepting new wallet and moving to next state");
             match self.channels.checkout(&channel_name).await {
-                Some(mut channel) => match channel.accept_new_wallet(wallet).await {
-                    Ok(()) => NextAction::Continue,
-                    Err(e) => {
-                        warn!("Error accepting new wallet: {}", e);
-                        NextAction::Abort { channel_name, reason: format!("Error accepting new wallet: {}", e) }
+                Some(mut channel) => {
+                    // Inject this wallet state machine
+                    if let Err(e) = channel.wallet_preparation(|_state| future::ready(wallet_state)).await {
+                        warn!("Error setting wallet state: {}", e);
+                        return NextAction::Abort {
+                            channel_name,
+                            reason: format!("Error setting wallet state: {}", e),
+                        };
                     }
-                },
+                    match channel.accept_new_wallet().await {
+                        Ok(()) => NextAction::Continue,
+                        Err(e) => {
+                            warn!("Error accepting new wallet: {}", e);
+                            NextAction::Abort { channel_name, reason: format!("Error accepting new wallet: {}", e) }
+                        }
+                    }
+                }
                 None => {
                     abort!(&channel_name, "So close! Channel not found")
                 }
@@ -611,10 +617,4 @@ pub enum NextAction {
     Ignore,
     /// Close the channel with reason given
     Abort { channel_name: String, reason: String },
-}
-
-impl NextAction {
-    pub fn abort(channel_name: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::Abort { channel_name: channel_name.into(), reason: reason.into() }
-    }
 }

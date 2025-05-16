@@ -8,7 +8,6 @@ use crate::payment_channel::ChannelRole;
 use crate::state_machine::traits::ChannelState;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
-use std::pin::Pin;
 
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
@@ -84,10 +83,9 @@ where
         self.wallet_state.as_ref().expect("Wallet state has been removed")
     }
 
-    pub async fn update_wallet_state<U, F>(&mut self, update: U)
+    pub async fn update_wallet_state<F>(&mut self, update: impl FnOnce(WalletState<W>) -> F)
     where
         F: Future<Output = WalletState<W>>,
-        U: FnOnce(WalletState<W>) -> Pin<Box<F>>,
     {
         let wallet_state = self.wallet_state.take().expect("Wallet state has been removed");
         let new_wallet_state = update(wallet_state).await;

@@ -177,7 +177,7 @@ impl<W: MultiSigWallet> PreSharedWallet<W> {
     }
 
     pub async fn make_multisig(self, peer_info: MultiSigInitInfo) -> WalletState<W> {
-        trace!("Wallet state machine: Prepare multisig");
+        trace!("Wallet state machine: Make multisig");
         match self.wallet.prep_make_multisig(peer_info).await {
             Ok(key) => WalletState::MultisigMade(MadeWallet::new(self.wallet, key)),
             Err(e) => WalletState::Aborted(AbortedWallet::new(self.wallet, e)),

@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
@@ -115,10 +114,12 @@ where
     ///
     /// This function returns true if the state was updated (but might still have led to an aborted wallet state).
     /// if the state does not exist, or we're not in the `Establishing` state, it returns false.
-    pub async fn wallet_preparation<U, F>(&mut self, update: U) -> Result<(), LifeCycleError>
+    pub async fn wallet_preparation<F>(
+        &mut self,
+        update: impl FnOnce(WalletState<W>) -> F,
+    ) -> Result<(), LifeCycleError>
     where
         F: Future<Output = WalletState<W>>,
-        U: FnOnce(WalletState<W>) -> Pin<Box<F>>,
     {
         let Some(ChannelLifeCycle::Establishing(state)) = &mut self.state else {
             return Err(LifeCycleError::InvalidStateTransition);
@@ -139,7 +140,7 @@ where
         self.state().current_state().name()
     }
 
-    async fn handle_event(&mut self, event: LifeCycleEvent<P, C, W, KES>) -> Result<(), LifeCycleError> {
+    async fn handle_event(&mut self, event: LifeCycleEvent<P, C, KES>) -> Result<(), LifeCycleError> {
         trace!("🛣️ Handling event: {event}");
         let state = self.state.take().expect("State should be present");
         let (state, result) = match state.handle_event(event).await {
@@ -178,10 +179,8 @@ where
     }
 
     /// Accept a newly created and verified Multisig wallet and move the state from `Establishing` to `WalletCreated`
-    pub async fn accept_new_wallet(&mut self, wallet: W) -> Result<(), LifeCycleError> {
-        debug!("🛣️ Accepting new wallet");
-        let event = LifeCycleEvent::OnMultiSigWalletCreated(Box::new(wallet));
-        self.handle_event(event).await
+    pub async fn accept_new_wallet(&mut self) -> Result<(), LifeCycleError> {
+        self.handle_event(LifeCycleEvent::OnMultiSigWalletCreated).await
     }
 }
 
@@ -255,7 +254,9 @@ where
         let key = channel.name();
         let channel = Arc::new(RwLock::new(channel));
         let mut lock = self.channels.write().await;
-        lock.insert(key, channel);
+        if lock.insert(key.clone(), channel).is_some() {
+            warn!("Channel {key} already existed – it has been replaced");
+        };
     }
 
     /// Check the channel out for writing, if it exists.

@@ -65,7 +65,8 @@ where
             GreaseResponse::Error(err) => write!(f, "Error: {}", err),
             GreaseResponse::MsInit(Ok(s)) => write!(f, "MultisigInitResponseOk({})", &s.channel),
             GreaseResponse::MsInit(Err(s)) => write!(f, "MultisigInitResponseError({s})"),
-            GreaseResponse::MsKeyExchange(_) => write!(f, "MultisigKeyExchange(***)"),
+            GreaseResponse::MsKeyExchange(Ok(_)) => write!(f, "MultisigKeyExchange(***)"),
+            GreaseResponse::MsKeyExchange(Err(e)) => write!(f, "MultisigKeyExchangeError({e})"),
             GreaseResponse::ConfirmMsAddress(env) => {
                 write!(
                     f,
