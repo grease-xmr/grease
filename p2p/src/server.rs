@@ -8,7 +8,7 @@ use crate::{
     KeyManager, PaymentChannel, PeerConnectionEvent,
 };
 use futures::future::join;
-use futures::{ready, StreamExt};
+use futures::StreamExt;
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::data_objects::RequestEnvelope;
