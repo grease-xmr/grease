@@ -3,6 +3,7 @@ use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
+use libgrease::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::InvalidProposal;
 use libgrease::state_machine::{ChannelSeedInfo, ProposedChannelInfo};
@@ -19,23 +20,11 @@ use std::fmt::{Display, Formatter};
 pub enum GreaseRequest<P: PublicKey> {
     ProposeNewChannel(NewChannelProposal<P>),
     /// A request from the merchant to begin initializing the commit transaction wallet (Prep phase).
-    MsInit(MultisigSetupInfo),
+    MsInit(RequestEnvelope<MultiSigInitInfo>),
     /// A request from the merchant to exchange multisig keys (Prep phase).
-    MsKeyExchange(MultisigKeyInfo),
+    MsKeyExchange(RequestEnvelope<MultisigKeyInfo>),
     /// A request from the merchant to confirm that the multisig address was set up correctly (Prep phase).
-    ConfirmMsAddress(MoneroAddress),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MultisigSetupInfo {
-    // Something like MultisigxV2R1C9Bd2LN...
-    pub init: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MultisigKeyInfo {
-    // Something like MultisigxV2Rn1LVYohry...
-    pub key: String,
+    ConfirmMsAddress(RequestEnvelope<MoneroAddress>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -44,27 +33,15 @@ pub struct MultisigKeyInfo {
 pub enum GreaseResponse<P: PublicKey> {
     ChannelProposalResult(ChannelProposalResult<P>),
     /// The customer's response to the MS init request. The customer's Init info is included in the response.
-    MsInit(MultiSigInitResponse),
+    MsInit(Result<RequestEnvelope<MultiSigInitInfo>, String>),
     /// The customer's response to the MS key exchange request. The customer's key info is included in the response.
-    MsKeyExchange(MultisigKeyResponse),
+    MsKeyExchange(Result<RequestEnvelope<MultisigKeyInfo>, String>),
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
-    ConfirmMsAddress(bool),
+    ConfirmMsAddress(RequestEnvelope<bool>),
     ChannelClosed,
     ChannelNotFound,
     Error(String),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MultiSigInitResponse {
-    // Something like MultisigxV2R1C9Bd2LN...
-    pub init: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MultisigKeyResponse {
-    // Something like MultisigxV2Rn1LVYohry...
-    pub key: String,
 }
 
 impl<P: PublicKey> From<ChannelProposalResult<P>> for GreaseResponse<P> {
@@ -86,10 +63,16 @@ where
                 write!(f, "Channel Proposal REJECTED.")
             }
             GreaseResponse::Error(err) => write!(f, "Error: {}", err),
-            GreaseResponse::MsInit(info) => write!(f, "MultisigInit({})", info.init),
-            GreaseResponse::MsKeyExchange(_) => write!(f, "MultisigKeyExchange(***)"),
-            GreaseResponse::ConfirmMsAddress(ok) => {
-                write!(f, "Multisig address confirmation: {}", if *ok { "OK" } else { "NOT OK" })
+            GreaseResponse::MsInit(Ok(s)) => write!(f, "MultisigInitResponseOk({})", &s.channel),
+            GreaseResponse::MsInit(Err(s)) => write!(f, "MultisigInitResponseError({s})"),
+            GreaseResponse::MsKeyExchange(Ok(_)) => write!(f, "MultisigKeyExchange(***)"),
+            GreaseResponse::MsKeyExchange(Err(e)) => write!(f, "MultisigKeyExchangeError({e})"),
+            GreaseResponse::ConfirmMsAddress(env) => {
+                write!(
+                    f,
+                    "Multisig address confirmation: {}",
+                    if env.payload { "OK" } else { "NOT OK" }
+                )
             }
             GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
             GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
@@ -104,7 +87,9 @@ where
     pub fn channel_name(&self) -> String {
         match self {
             GreaseRequest::ProposeNewChannel(ref proposal) => proposal.channel_name(),
-            _ => todo!(),
+            GreaseRequest::MsInit(env) => env.channel_name(),
+            GreaseRequest::MsKeyExchange(env) => env.channel_name(),
+            GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
         }
     }
 }
@@ -136,10 +121,20 @@ pub enum ClientCommand<P: PublicKey> {
         data: NewChannelProposal<P>,
         sender: oneshot::Sender<ChannelProposalResult<P>>,
     },
-    MultiSigSetupRequest {
+    MultiSigInitRequest {
         peer_id: PeerId,
-        multi_sig_setup: MultisigSetupInfo,
-        sender: oneshot::Sender<MultiSigSetupResponse>,
+        envelope: RequestEnvelope<MultiSigInitInfo>,
+        sender: oneshot::Sender<Result<RequestEnvelope<MultiSigInitInfo>, String>>,
+    },
+    MultiSigKeyRequest {
+        peer_id: PeerId,
+        envelope: RequestEnvelope<MultisigKeyInfo>,
+        sender: oneshot::Sender<Result<RequestEnvelope<MultisigKeyInfo>, String>>,
+    },
+    ConfirmMultiSigAddressRequest {
+        peer_id: PeerId,
+        envelope: RequestEnvelope<MoneroAddress>,
+        sender: oneshot::Sender<Result<RequestEnvelope<bool>, String>>,
     },
     KesReadyNotification {
         peer_id: PeerId,
@@ -176,12 +171,6 @@ pub enum ClientCommand<P: PublicKey> {
     /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
     Shutdown(oneshot::Sender<bool>),
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MultiSigSetupInfo {}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MultiSigSetupResponse;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FundingTxStartResponse;

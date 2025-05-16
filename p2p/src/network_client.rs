@@ -6,6 +6,7 @@ use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
 use libgrease::crypto::traits::PublicKey;
+use libgrease::monero::data_objects::{MoneroAddress, MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::request_response::ResponseChannel;
@@ -110,6 +111,45 @@ impl<P: PublicKey> Client<P> {
         self.sender.send(ClientCommand::ProposeChannelRequest { peer_id, data, sender }).await?;
         let open_result = receiver.await?;
         Ok(open_result)
+    }
+
+    pub async fn send_multisig_init(
+        &mut self,
+        peer_id: PeerId,
+        channel: String,
+        multisig_init: MultiSigInitInfo,
+    ) -> Result<Result<RequestEnvelope<MultiSigInitInfo>, String>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        let envelope = RequestEnvelope::new(channel, multisig_init);
+        self.sender.send(ClientCommand::MultiSigInitRequest { peer_id, envelope, sender }).await?;
+        let res = receiver.await?;
+        Ok(res)
+    }
+
+    pub async fn send_multisig_key(
+        &mut self,
+        peer_id: PeerId,
+        channel: String,
+        multisig_key: MultisigKeyInfo,
+    ) -> Result<Result<RequestEnvelope<MultisigKeyInfo>, String>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        let envelope = RequestEnvelope::new(channel, multisig_key);
+        self.sender.send(ClientCommand::MultiSigKeyRequest { peer_id, envelope, sender }).await?;
+        let res = receiver.await?;
+        Ok(res)
+    }
+
+    pub async fn confirm_multisig_address(
+        &mut self,
+        peer_id: PeerId,
+        channel: String,
+        address: MoneroAddress,
+    ) -> Result<Result<RequestEnvelope<bool>, String>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        let envelope = RequestEnvelope::new(channel, address);
+        self.sender.send(ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender }).await?;
+        let res = receiver.await?;
+        Ok(res)
     }
 
     pub async fn send_response_to_peer(

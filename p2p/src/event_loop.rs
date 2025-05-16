@@ -12,6 +12,7 @@ use futures::channel::{
 };
 use futures::{SinkExt, StreamExt};
 use libgrease::crypto::traits::PublicKey;
+use libgrease::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
@@ -73,6 +74,11 @@ pub struct EventLoop<P: PublicKey + 'static> {
     event_sender: Sender<PeerConnectionEvent<P>>,
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
     pending_new_channel_proposals: HashMap<OutboundRequestId, oneshot::Sender<ChannelProposalResult<P>>>,
+    pending_multisig_inits:
+        HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<MultiSigInitInfo>, String>>>,
+    pending_multisig_keys:
+        HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<MultisigKeyInfo>, String>>>,
+    pending_address_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<bool>, String>>>,
     pending_shutdown: Option<oneshot::Sender<bool>>,
     status: AtomicUsize,
     connections: HashSet<ConnectionId>,
@@ -90,6 +96,9 @@ impl<P: PublicKey + Send> EventLoop<P> {
             event_sender,
             pending_dial: Default::default(),
             pending_new_channel_proposals: Default::default(),
+            pending_multisig_inits: Default::default(),
+            pending_multisig_keys: Default::default(),
+            pending_address_confirmations: Default::default(),
             pending_shutdown: None,
             status: AtomicUsize::new(RUNNING),
             connections: Default::default(),
@@ -179,19 +188,19 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 self.on_non_fatal_listener_error(listener_id, error);
             }
             SwarmEvent::NewExternalAddrCandidate { address } => {
-                debug!("EVENT: New external address candidate: {address}");
+                trace!("EVENT: New external address candidate: {address}");
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {
-                debug!("EVENT: External address confirmed: {address}");
+                trace!("EVENT: External address confirmed: {address}");
             }
             SwarmEvent::ExternalAddrExpired { address } => {
-                debug!("EVENT: External address expired: {address}");
+                trace!("EVENT: External address expired: {address}");
             }
             SwarmEvent::NewExternalAddrOfPeer { peer_id, address } => {
-                debug!("EVENT: New external address of peer: {peer_id} {address}");
+                trace!("EVENT: New external address of peer: {peer_id} {address}");
             }
             ev => {
-                debug!("Unknown and unhandled event: {:?}", ev.type_id());
+                trace!("Unknown and unhandled event: {:?}", ev.type_id());
             }
         }
     }
@@ -243,9 +252,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
                     .expect("Event receiver not to be dropped.");
             }
             EventMessage::Response { request_id, response } => {
-                debug!(
-                    "EVENT: Response received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}"
-                );
+                trace!("EVENT: Response received. Peer: {peer}. Conn_id: {connection_id}. Req_id: {request_id}");
                 match response {
                     GreaseResponse::ChannelProposalResult(result) => {
                         let pending = self.pending_new_channel_proposals.remove(&request_id);
@@ -255,9 +262,32 @@ impl<P: PublicKey + Send> EventLoop<P> {
                         };
                         let _ = sender.send(result);
                     }
-                    GreaseResponse::MsInit(_) => {}
-                    GreaseResponse::MsKeyExchange(_) => {}
-                    GreaseResponse::ConfirmMsAddress(_) => {}
+                    GreaseResponse::MsInit(info) => {
+                        let pending = self.pending_multisig_inits.remove(&request_id);
+                        let Some(sender) = pending else {
+                            error!("Received response for unknown multisig init request. Request id: {request_id}");
+                            return;
+                        };
+                        let _ = sender.send(info);
+                    }
+                    GreaseResponse::MsKeyExchange(key) => {
+                        let pending = self.pending_multisig_keys.remove(&request_id);
+                        let Some(sender) = pending else {
+                            error!(
+                                "Received response for unknown multisig key exchange request. Request id: {request_id}"
+                            );
+                            return;
+                        };
+                        let _ = sender.send(key);
+                    }
+                    GreaseResponse::ConfirmMsAddress(confirmed) => {
+                        let pending = self.pending_address_confirmations.remove(&request_id);
+                        let Some(sender) = pending else {
+                            error!("Received response for unknown multisig address confirmation request. Request id: {request_id}");
+                            return;
+                        };
+                        let _ = sender.send(Ok(confirmed));
+                    }
                     GreaseResponse::ChannelClosed => {}
                     GreaseResponse::ChannelNotFound => {}
                     GreaseResponse::Error(_) => {}
@@ -282,12 +312,20 @@ impl<P: PublicKey + Send> EventLoop<P> {
     ) {
         warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
         if let Some(sender) = self.pending_new_channel_proposals.remove(&request_id) {
-            debug!("Removing pending channel proposal for request id: {request_id}");
             let reason = RejectReason::NotSent(format!("Outbound request failed. Error: {error}"));
             let response = RejectChannelProposal::new(reason, RetryOptions::close_only());
             if sender.send(ChannelProposalResult::Rejected(response)).is_err() {
                 error!("Failed to send rejection response for request id: {request_id}.");
             }
+        }
+        if let Some(sender) = self.pending_multisig_inits.remove(&request_id) {
+            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
+        }
+        if let Some(sender) = self.pending_multisig_keys.remove(&request_id) {
+            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
+        }
+        if let Some(sender) = self.pending_address_confirmations.remove(&request_id) {
+            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
         }
     }
 
@@ -316,7 +354,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
     /// * `connection_id` - Identifier of the connection that the response was sent on.
     /// * `request_id` - The id of the request for which the response was sent.
     fn on_response_sent(&mut self, peer: PeerId, connection_id: ConnectionId, request_id: InboundRequestId) {
-        debug!("EVENT: Response sent. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}");
+        trace!("EVENT: Response sent. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}");
     }
 
     /// Handle a failed connection attempt
@@ -492,7 +530,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
     /// * `listener_id` - The listener that is no longer listening on the address.
     /// * `address` - Address that has expired.
     fn on_expired_listen_addr(&mut self, listener_id: ListenerId, address: Multiaddr) {
-        debug!("EVENT: Expired listen address: {address} #{listener_id}");
+        trace!("EVENT: Expired listen address: {address} #{listener_id}");
     }
 
     /// Responds to a listener being closed.
@@ -516,9 +554,9 @@ impl<P: PublicKey + Send> EventLoop<P> {
             Ok(()) => "gracefully",
             Err(e) => &format!("with error: {e}"),
         };
-        debug!("EVENT: Listener {listener_id} closed {reason}.");
+        trace!("EVENT: Listener {listener_id} closed {reason}.");
         let addresses = addresses.into_iter().map(|addr| format!("{addr}")).collect::<Vec<_>>();
-        debug!("Addresses that are now closed: {}", addresses.join(","));
+        debug!("Connections closed: {}", addresses.join(","));
     }
 
     /// Responds to a non-fatal listener error.
@@ -594,7 +632,35 @@ impl<P: PublicKey + Send> EventLoop<P> {
                     self.swarm.close_connection(id);
                 }
             }
-            ClientCommand::MultiSigSetupRequest { .. } => {}
+            // MultiSig wallet prep commands
+            ClientCommand::MultiSigInitRequest { peer_id, envelope, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not setting up wallets now.");
+                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
+                    return;
+                }
+                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::MsInit(envelope));
+                self.pending_multisig_inits.insert(id, sender);
+            }
+            ClientCommand::MultiSigKeyRequest { peer_id, envelope, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not setting up wallets now.");
+                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
+                    return;
+                }
+                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::MsKeyExchange(envelope));
+                self.pending_multisig_keys.insert(id, sender);
+            }
+            ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not confirming multisig addresses now.");
+                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
+                    return;
+                }
+                let id =
+                    self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ConfirmMsAddress(envelope));
+                self.pending_address_confirmations.insert(id, sender);
+            }
             ClientCommand::KesReadyNotification { .. } => {}
             ClientCommand::AckKesReadyNotification { .. } => {}
             ClientCommand::FundingTxRequestStart { .. } => {}
