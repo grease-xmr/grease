@@ -144,7 +144,7 @@ impl<P: PublicKey> Client<P> {
         peer_id: PeerId,
         channel: String,
         address: MoneroAddress,
-    ) -> Result<RequestEnvelope<bool>, PeerConnectionError> {
+    ) -> Result<Result<RequestEnvelope<bool>, String>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
         let envelope = RequestEnvelope::new(channel, address);
         self.sender.send(ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender }).await?;

@@ -80,7 +80,7 @@ where
         DisputingChannelState {
             origin: info.origin,
             reason: info.reason,
-            secret: closing_state.secret,
+            secret: closing_state.channel_info.secret_key,
             payment_channel: closing_state.payment_channel,
             wallet: closing_state.wallet,
             kes: closing_state.kes,

@@ -78,7 +78,7 @@ pub struct EventLoop<P: PublicKey + 'static> {
         HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<MultiSigInitInfo>, String>>>,
     pending_multisig_keys:
         HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<MultisigKeyInfo>, String>>>,
-    pending_address_confirmations: HashMap<OutboundRequestId, oneshot::Sender<RequestEnvelope<bool>>>,
+    pending_address_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<bool>, String>>>,
     pending_shutdown: Option<oneshot::Sender<bool>>,
     status: AtomicUsize,
     connections: HashSet<ConnectionId>,
@@ -286,7 +286,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
                             error!("Received response for unknown multisig address confirmation request. Request id: {request_id}");
                             return;
                         };
-                        let _ = sender.send(confirmed);
+                        let _ = sender.send(Ok(confirmed));
                     }
                     GreaseResponse::ChannelClosed => {}
                     GreaseResponse::ChannelNotFound => {}
@@ -312,12 +312,20 @@ impl<P: PublicKey + Send> EventLoop<P> {
     ) {
         warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
         if let Some(sender) = self.pending_new_channel_proposals.remove(&request_id) {
-            debug!("Removing pending channel proposal for request id: {request_id}");
             let reason = RejectReason::NotSent(format!("Outbound request failed. Error: {error}"));
             let response = RejectChannelProposal::new(reason, RetryOptions::close_only());
             if sender.send(ChannelProposalResult::Rejected(response)).is_err() {
                 error!("Failed to send rejection response for request id: {request_id}.");
             }
+        }
+        if let Some(sender) = self.pending_multisig_inits.remove(&request_id) {
+            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
+        }
+        if let Some(sender) = self.pending_multisig_keys.remove(&request_id) {
+            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
+        }
+        if let Some(sender) = self.pending_address_confirmations.remove(&request_id) {
+            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
         }
     }
 
@@ -646,6 +654,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
             ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender } => {
                 if !self.is_running() {
                     info!("Event loop is shutting down. I'm not confirming multisig addresses now.");
+                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
                     return;
                 }
                 let id =

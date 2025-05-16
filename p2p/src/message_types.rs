@@ -133,7 +133,7 @@ pub enum ClientCommand<P: PublicKey> {
     ConfirmMultiSigAddressRequest {
         peer_id: PeerId,
         envelope: RequestEnvelope<MoneroAddress>,
-        sender: oneshot::Sender<RequestEnvelope<bool>>,
+        sender: oneshot::Sender<Result<RequestEnvelope<bool>, String>>,
     },
     KesReadyNotification {
         peer_id: PeerId,

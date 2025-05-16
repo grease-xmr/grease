@@ -548,7 +548,8 @@ where
         trace!("Merchant: Sending address {} to customer", address.to_string());
         let (peer_channel, addresses_match) =
             match client.confirm_multisig_address(peer.peer_id, channel_name.clone(), address).await {
-                Ok(envelope) => envelope.open(),
+                Ok(Ok(envelope)) => envelope.open(),
+                Ok(Err(e)) => return abort!(&channel_name, "Error confirming multisig address: {}", e),
                 Err(e) => return abort!(&channel_name, "Error sending multisig address data to peer: {}", e),
             };
         if peer_channel != channel_name {

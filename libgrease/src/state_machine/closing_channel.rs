@@ -4,7 +4,7 @@ use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::traits::ChannelState;
-use crate::state_machine::EstablishedChannelState;
+use crate::state_machine::{ChannelMetadata, EstablishedChannelState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ where
     W: MultiSigWallet,
     KES: KeyEscrowService,
 {
-    pub(crate) secret: P::SecretKey,
+    pub(crate) channel_info: ChannelMetadata<P>,
     pub(crate) payment_channel: C,
     pub(crate) wallet: W,
     pub(crate) kes: KES,
@@ -32,7 +32,7 @@ where
     /// Create a new closing channel state
     pub fn from_open(open_state: EstablishedChannelState<P, C, W, KES>) -> Self {
         ClosingChannelState {
-            secret: open_state.channel_info.secret_key,
+            channel_info: open_state.channel_info,
             payment_channel: open_state.payment_channel,
             wallet: open_state.wallet,
             kes: open_state.kes,
