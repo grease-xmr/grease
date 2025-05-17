@@ -8,7 +8,6 @@ use crate::{
     KeyManager, PaymentChannel, PeerConnectionEvent,
 };
 use futures::future::join;
-use futures::stream::Next;
 use futures::StreamExt;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
@@ -16,7 +15,7 @@ use libgrease::kes::KeyEscrowService;
 use libgrease::monero::data_objects::RequestEnvelope;
 use libgrease::monero::{MultiSigWallet, WalletState};
 use libgrease::payment_channel::{ActivePaymentChannel, ChannelRole};
-use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
+use libgrease::state_machine::error::InvalidProposal;
 use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
 use libp2p::request_response::ResponseChannel;
 use libp2p::Multiaddr;
@@ -488,7 +487,7 @@ where
     // so that abort! macros can return early.
     async fn prepare_multisig_wallet_wrapped(&self, channel_name: String) -> Result<NextAction, NextAction> {
         // Pre creation sanity checks and get the required channel info from the state machine
-        let (channel_id, role, peer) = self.pre_wallet_checks(&channel_name).await?;
+        let (channel_id, peer) = self.pre_wallet_checks(&channel_name).await?;
 
         // Step 1 - Prepare multisig
         let wallet = W::new(&channel_id).map_err(|e| abort!(&channel_name, "Error creating wallet: {}", e))?;
@@ -613,18 +612,18 @@ where
     // 1. The channel exists
     // 2. The channel is in the Establishing state
     // 3. The role of this side of the channel is Merchant
-    async fn pre_wallet_checks(&self, channel_name: &str) -> Result<(ChannelId, ChannelRole, ContactInfo), NextAction> {
+    async fn pre_wallet_checks(&self, channel_name: &str) -> Result<(ChannelId, ContactInfo), NextAction> {
         trace!("Peeking at channel {channel_name}");
         match self.channels.try_peek(&channel_name).await {
             Some(channel) => match channel.state() {
                 ChannelLifeCycle::Establishing(state) => {
+                    let role = state.channel_info.role;
                     let state_needed = (
                         state.channel_info.channel_id.clone(),
-                        state.channel_info.role,
                         channel.peer_info(),
                     );
                     drop(channel);
-                    if state_needed.1.is_customer() {
+                    if role.is_customer() {
                         error!("🖥️  Wallet setup must start from merchant side. Channel {channel_name} is not a merchant channel");
                         Err(abort!(&channel_name, "Channel is not a merchant channel"))
                     } else {
