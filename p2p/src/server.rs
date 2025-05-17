@@ -8,12 +8,14 @@ use crate::{
     KeyManager, PaymentChannel, PeerConnectionEvent,
 };
 use futures::future::join;
+use futures::stream::Next;
 use futures::StreamExt;
+use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::data_objects::RequestEnvelope;
 use libgrease::monero::{MultiSigWallet, WalletState};
-use libgrease::payment_channel::ActivePaymentChannel;
+use libgrease::payment_channel::{ActivePaymentChannel, ChannelRole};
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
 use libp2p::request_response::ResponseChannel;
@@ -244,7 +246,7 @@ where
     }
 
     async fn add_todo_list_item(&self, item: TodoListItem) {
-        debug!("🖥️ Adding item to todo list: {item:?}");
+        debug!("🖥️  Adding item to todo list: {item:?}");
         let mut write_lock = self.todo_list.write().await;
         write_lock.push_back(item);
         drop(write_lock);
@@ -264,10 +266,10 @@ where
                 TodoListItem::CloseChannel { channel_name, reason } => self.close_channel(channel_name, reason).await,
             };
             match next {
-                NextAction::Continue => debug!("Todo item completed successfully"),
-                NextAction::Ignore => debug!("Todo item errored out, but we're ignoring it"),
+                NextAction::Continue => debug!("🖥️  Todo item completed successfully"),
+                NextAction::Ignore => debug!("🖥️  Todo item errored out, but we're ignoring it"),
                 NextAction::Abort { channel_name, reason } => {
-                    debug!("Aborting channel: {reason}");
+                    debug!("🖥️  Aborting channel: {reason}");
                     let item = TodoListItem::CloseChannel { channel_name, reason };
                     self.add_todo_list_item(item).await;
                 }
@@ -295,7 +297,7 @@ where
             match self.channels.checkout(&name).await {
                 Some(channel) => self.handle_grease_request_for_existing_channel(request, channel).await,
                 None => {
-                    warn!("Channel exists, but we could not get a write lock: {name}");
+                    warn!("🖥️  Channel exists, but we could not get a write lock: {name}");
                     GreaseResponse::Error("Could not get write lock".into())
                 }
             }
@@ -304,14 +306,14 @@ where
             match &request {
                 GreaseRequest::ProposeNewChannel(proposal) => self.handle_open_channel_request(proposal).await,
                 _ => {
-                    warn!("Request made for unknown channel: {name}");
+                    warn!("🖥️  Request made for unknown channel: {name}");
                     GreaseResponse::ChannelNotFound
                 }
             }
         };
         let mut client = self.network_client.clone();
         if let Err(err) = client.send_response_to_peer(response, return_chute).await {
-            error!("Request was handled, but could not send response to peer: {err}");
+            error!("🖥️  Request was handled, but could not send response to peer: {err}");
         }
     }
 
@@ -326,13 +328,13 @@ where
                 GreaseResponse::Error("Cannot create a new channel. Channel already exists.".into())
             }
             GreaseRequest::MsInit(envelope) => {
-                trace!("Multisig Init request received");
+                trace!("🖥️  Multisig Init request received");
                 let (channel_name, peer_info) = envelope.open();
                 if let Err(err) = channel.wallet_preparation(|wallet_state| wallet_state.prepare_multisig()).await {
-                    warn!("Error preparing multisig wallet: {err}");
+                    warn!("🖥️  Error preparing multisig wallet: {err}");
                     return GreaseResponse::MsInit(Err("Customer could not create wallet".into()));
                 }
-                trace!("Customer: Multisig wallet prepared");
+                trace!("🖥️  Customer: Multisig wallet prepared");
                 let Some(my_info) = channel.wallet_state().ok().and_then(|s| s.init_info().cloned()) else {
                     return GreaseResponse::MsInit(Err("Customer could not generate initialization info".into()));
                 };
@@ -340,15 +342,15 @@ where
                 if let Err(err) =
                     channel.wallet_preparation(|wallet_state| Box::pin(wallet_state.make_multisig(peer_info))).await
                 {
-                    warn!("Error making multisig wallet: {err}");
+                    warn!("🖥️  Error making multisig wallet: {err}");
                     return GreaseResponse::MsInit(Err("Customer could not create wallet".into()));
                 }
-                trace!("Customer: Multisig wallet made. Returning init info to merchant");
+                trace!("🖥️  Customer: Multisig wallet made. Returning init info to merchant");
                 let envelope = RequestEnvelope::new(channel_name, my_info);
                 GreaseResponse::MsInit(Ok(envelope))
             }
             GreaseRequest::MsKeyExchange(envelope) => {
-                trace!("Multisig Key Exchange request received");
+                trace!("🖥️  Multisig Key Exchange request received");
                 let (channel_name, peer_key_info) = envelope.open();
                 if let Err(err) = channel
                     .wallet_preparation(|wallet_state| Box::pin(wallet_state.import_multisig_keys(peer_key_info)))
@@ -357,27 +359,27 @@ where
                     warn!("Error importing multisig keys: {err}");
                     return GreaseResponse::MsKeyExchange(Err("Customer could not import keys".into()));
                 }
-                trace!("Customer: Peer multisig keys imported.");
+                trace!("🖥️  Customer: Peer multisig keys imported.");
                 let Some(my_key_info) = channel.wallet_state().ok().and_then(|s| s.multisig_keys().cloned()) else {
                     return GreaseResponse::MsKeyExchange(Err("Customer could not generate key info".into()));
                 };
-                trace!("Customer: Multisig keys retrieved. Sending them onto merchant");
+                trace!("🖥️  Customer: Multisig keys retrieved. Sending them onto merchant");
                 let envelope = RequestEnvelope::new(channel_name, my_key_info);
                 GreaseResponse::MsKeyExchange(Ok(envelope))
             }
             GreaseRequest::ConfirmMsAddress(envelope) => {
-                trace!("Confirm multisig address request received");
+                trace!("🖥️  Confirm multisig address request received");
                 let (channel_name, address) = envelope.open();
                 let addr_str = address.to_string();
                 let result = match channel.wallet_state() {
                     Ok(state) => match state.get_address().await {
                         Some(my_address) if my_address == address => {
-                            info!("📧 Multisig wallet created with address {addr_str}");
+                            info!("🖥️  Multisig wallet created with address {addr_str}");
                             true
                         }
                         Some(my_address) if my_address != address => {
                             warn!(
-                                "📧 The merchant's address {addr_str} does not match the one we generated {}",
+                                "🖥️  The merchant's address {addr_str} does not match the one we generated {}",
                                 my_address.to_string()
                             );
                             false
@@ -387,7 +389,7 @@ where
                     Err(_) => false,
                 };
                 if !result {
-                    warn!("📧 Could not confirm multisig address");
+                    warn!("🖥️  Could not confirm multisig address");
                 }
                 let envelope = RequestEnvelope::new(channel_name, result);
                 GreaseResponse::ConfirmMsAddress(envelope)
@@ -429,12 +431,12 @@ where
         let mut channel = PaymentChannel::new(peer_info, state);
         // Emit an `AckProposal` event on the channel
         if let Err(err) = channel.receive_proposal().await {
-            warn!("Channel proposal was not accepted by the state machine");
+            warn!("🖥️  Channel proposal was not accepted by the state machine");
             let reason = match err {
                 LifeCycleError::InvalidStateTransition => RejectReason::NotANewChannel,
                 LifeCycleError::Proposal(invalid) => RejectReason::InvalidProposal(invalid),
                 LifeCycleError::WalletError(e) => {
-                    warn!("Cannot send AckProposal to peer because of an internal error: {e}");
+                    warn!("🖥️  Cannot send AckProposal to peer because of an internal error: {e}");
                     RejectReason::Internal("Peer had an issue with the multisig wallet service".into())
                 }
             };
@@ -453,130 +455,89 @@ where
     }
 
     async fn close_channel(&self, channel_name: String, reason: String) -> NextAction {
-        info!("Closing channel {channel_name}. {reason}");
+        info!("🖥️  Closing channel {channel_name}. {reason}");
         todo!()
     }
 
     /// As a merchant, fetch the multisig initialization data from the wallet.
     ///Once received, pass the information to the peer over the wire and wait.
     async fn prepare_multisig_wallet(&self, channel_name: String) -> NextAction {
-        // Get needed channel info
-        trace!("Peeking at channel {channel_name}");
-        let (channel_id, role, peer) = match self.channels.try_peek(&channel_name).await {
-            Some(channel) => match channel.state() {
-                ChannelLifeCycle::Establishing(state) => {
-                    let state_needed = (
-                        state.channel_info.channel_id.clone(),
-                        state.channel_info.role,
-                        channel.peer_info(),
-                    );
-                    drop(channel);
-                    state_needed
-                }
-                _ => {
-                    return abort!(&channel_name, "Channel is not in the Establishing state");
-                }
-            },
-            None => {
-                return abort!(&channel_name, "Channel not found");
-            }
-        };
-        if role.is_customer() {
-            error!("Wallet setup must start from merchant side. Channel {channel_name} is not a merchant channel");
-            return abort!(&channel_name, "Channel is not a merchant channel");
-        }
+        self.prepare_multisig_wallet_wrapped(channel_name).await.unwrap_or_else(|next_action| next_action)
+    }
+
+    // This function is the actual implementation of the multisig wallet preparation. It returns result for ergonomics
+    // so that abort! macros can return early.
+    async fn prepare_multisig_wallet_wrapped(&self, channel_name: String) -> Result<NextAction, NextAction> {
+        // Pre creation sanity checks and get the required channel info from the state machine
+        let (channel_id, role, peer) = self.pre_wallet_checks(&channel_name).await?;
+
         // Step 1 - Prepare multisig
-        let wallet = match W::new(&channel_id) {
-            Ok(wallet) => wallet,
-            Err(e) => {
-                return abort!(&channel_name, "Error creating wallet: {}", e);
-            }
-        };
+        let wallet = W::new(&channel_id).map_err(|e| abort!(&channel_name, "Error creating wallet: {}", e))?;
         let mut wallet_state = WalletState::new(wallet);
-        trace!("Merchant: Preparing multisig wallet");
+        trace!("🖥️  Merchant: Preparing multisig wallet");
         wallet_state = wallet_state.prepare_multisig().await;
-        let info = match wallet_state.init_info() {
-            Some(info) => info,
-            None => {
-                return abort!(&channel_name, "Wallet state is not prepared");
-            }
-        };
+        let info = wallet_state.init_info().ok_or_else(|| abort!(&channel_name, "Wallet state is not prepared"))?;
+
         // Step 2 - Share info with peer
         let mut client = self.network_client.clone();
-        trace!("Sending init info to customer");
+        trace!("🖥️  Sending init info to customer");
         let (peer_channel, peer_info) =
             match client.send_multisig_init(peer.peer_id, channel_name.clone(), info.clone()).await {
-                Ok(Ok(envelope)) => envelope.open(),
-                Ok(Err(e)) => return abort!(&channel_name, "Peer did not return multisig init data: {}", e),
-                Err(e) => return abort!(&channel_name, "Error sending multisig init data to peer: {}", e),
-            };
+                Ok(Ok(envelope)) => Ok(envelope.open()),
+                Ok(Err(e)) => Err(abort!(&channel_name, "Peer did not return multisig init data: {}", e)),
+                Err(e) => Err(abort!(&channel_name, "Error sending multisig init data to peer: {}", e)),
+            }?;
         if peer_channel != channel_name {
-            return abort!(&channel_name, "Peer returned a different channel name: {peer_channel}");
+            return Err(abort!(&channel_name, "Peer returned a different channel name: {peer_channel}"));
         }
-        trace!("Merchant: Received multisig init data from customer. Calling make_multisig");
+        trace!("🖥️  Merchant: Received multisig init data from customer. Calling make_multisig");
         wallet_state = wallet_state.make_multisig(peer_info).await;
         // Step 3 - Send key info to peer
-        let key = match wallet_state.multisig_keys() {
-            Some(key) => key.clone(),
-            None => {
-                return abort!(&channel_name, "Wallet state is not prepared");
-            }
-        };
-        trace!("Merchant: Sending multisig partial key to customer");
+        let key =
+            wallet_state.multisig_keys().ok_or_else(|| abort!(&channel_name, "Wallet state is not prepared"))?.clone();
+        trace!("🖥️  Merchant: Sending multisig partial key to customer");
         let (peer_channel, peer_key) = match client.send_multisig_key(peer.peer_id, channel_name.clone(), key).await {
-            Ok(Ok(envelope)) => envelope.open(),
-            Ok(Err(e)) => return abort!(&channel_name, "Peer did not return multisig key data: {}", e),
-            Err(e) => return abort!(&channel_name, "Error sending multisig key data to peer: {}", e),
-        };
+            Ok(Ok(envelope)) => Ok(envelope.open()),
+            Ok(Err(e)) => Err(abort!(&channel_name, "Peer did not return multisig key data: {}", e)),
+            Err(e) => Err(abort!(&channel_name, "Error sending multisig key data to peer: {}", e)),
+        }?;
         if peer_channel != channel_name {
-            return abort!(&channel_name, "Peer returned a different channel name: {peer_channel}");
+            return Err(abort!(&channel_name, "Peer returned a different channel name: {peer_channel}"));
         }
         // Step 4 - Confirm address
-        trace!("Merchant: Received multisig key data from customer. Calling import_multisig_keys");
+        trace!("🖥️  Merchant: Received multisig key data from customer. Calling import_multisig_keys");
         wallet_state = wallet_state.import_multisig_keys(peer_key).await;
-        trace!("Merchant: Fetching address");
-        let address = match wallet_state.get_address().await {
-            Some(address) => address,
-            None => {
-                return abort!(&channel_name, "Wallet state is not prepared");
-            }
-        };
-        trace!("Merchant: Sending address {} to customer", address.to_string());
+        trace!("🖥️  Merchant: Fetching address");
+        let address =
+            wallet_state.get_address().await.ok_or_else(|| abort!(&channel_name, "Wallet state is not prepared"))?;
+        trace!("🖥️  Merchant: Sending address {} to customer", address.to_string());
         let (peer_channel, addresses_match) =
             match client.confirm_multisig_address(peer.peer_id, channel_name.clone(), address).await {
-                Ok(Ok(envelope)) => envelope.open(),
-                Ok(Err(e)) => return abort!(&channel_name, "Error confirming multisig address: {}", e),
-                Err(e) => return abort!(&channel_name, "Error sending multisig address data to peer: {}", e),
-            };
+                Ok(Ok(envelope)) => Ok(envelope.open()),
+                Ok(Err(e)) => Err(abort!(&channel_name, "Error confirming multisig address: {}", e)),
+                Err(e) => Err(abort!(&channel_name, "Error sending multisig address data to peer: {}", e)),
+            }?;
         if peer_channel != channel_name {
-            return abort!(&channel_name, "Peer returned a different channel name: {peer_channel}");
+            return Err(abort!(&channel_name, "Peer returned a different channel name: {peer_channel}"));
         }
-        if addresses_match {
-            trace!("Merchant: Address confirmed. Accepting new wallet and moving to next state");
-            match self.channels.checkout(&channel_name).await {
-                Some(mut channel) => {
-                    // Inject this wallet state machine
-                    if let Err(e) = channel.wallet_preparation(|_state| future::ready(wallet_state)).await {
-                        warn!("Error setting wallet state: {}", e);
-                        return NextAction::Abort {
-                            channel_name,
-                            reason: format!("Error setting wallet state: {}", e),
-                        };
-                    }
-                    match channel.accept_new_wallet().await {
-                        Ok(()) => NextAction::Continue,
-                        Err(e) => {
-                            warn!("Error accepting new wallet: {}", e);
-                            NextAction::Abort { channel_name, reason: format!("Error accepting new wallet: {}", e) }
-                        }
-                    }
-                }
-                None => {
-                    abort!(&channel_name, "So close! Channel not found")
-                }
+        if !addresses_match {
+            return Err(abort!(&channel_name, "Peer rejected the monero wallet address"));
+        }
+        trace!("🖥️  Merchant: Address confirmed. Accepting new wallet and moving to next state");
+        match self.channels.checkout(&channel_name).await {
+            Some(mut channel) => {
+                // Inject this wallet state machine
+                channel
+                    .wallet_preparation(|_state| future::ready(wallet_state))
+                    .await
+                    .map_err(|e| abort!(channel_name, "Error setting wallet state: {}", e))?;
+                channel
+                    .accept_new_wallet()
+                    .await
+                    .map(|_| NextAction::Continue)
+                    .map_err(|e| abort!(channel_name, "Error accepting new wallet: {}", e))
             }
-        } else {
-            abort!(&channel_name, "Peer rejected the monero wallet address")
+            None => Err(abort!(&channel_name, "So close! Channel not found")),
         }
     }
 
@@ -594,6 +555,34 @@ where
                 RejectReason::InvalidProposal(InvalidProposal::MismatchedMerchantPublicKey),
                 RetryOptions::close_only(),
             )))
+        }
+    }
+
+    // Before creating a new 2-of-2 wallet, check the following:
+    // 1. The channel exists
+    // 2. The channel is in the Establishing state
+    // 3. The role of this side of the channel is Merchant
+    async fn pre_wallet_checks(&self, channel_name: &str) -> Result<(ChannelId, ChannelRole, ContactInfo), NextAction> {
+        trace!("Peeking at channel {channel_name}");
+        match self.channels.try_peek(&channel_name).await {
+            Some(channel) => match channel.state() {
+                ChannelLifeCycle::Establishing(state) => {
+                    let state_needed = (
+                        state.channel_info.channel_id.clone(),
+                        state.channel_info.role,
+                        channel.peer_info(),
+                    );
+                    drop(channel);
+                    if state_needed.1.is_customer() {
+                        error!("🖥️  Wallet setup must start from merchant side. Channel {channel_name} is not a merchant channel");
+                        Err(abort!(&channel_name, "Channel is not a merchant channel"))
+                    } else {
+                        Ok(state_needed)
+                    }
+                }
+                _ => Err(abort!(&channel_name, "Channel is not in the Establishing state")),
+            },
+            None => Err(abort!(&channel_name, "Channel not found")),
         }
     }
 }

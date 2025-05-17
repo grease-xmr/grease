@@ -83,6 +83,7 @@ where
         self.wallet_state.as_ref().expect("Wallet state has been removed")
     }
 
+    /// Updates the wallet state machine by applying the provided async function to the current state.
     pub async fn update_wallet_state<F>(&mut self, update: impl FnOnce(WalletState<W>) -> F)
     where
         F: Future<Output = WalletState<W>>,
