@@ -5,10 +5,11 @@ use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
 use libgrease::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
 use libgrease::payment_channel::ChannelRole;
-use libgrease::state_machine::error::InvalidProposal;
+use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelSeedInfo, ProposedChannelInfo};
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
+use log::warn;
 use monero::Address as MoneroAddress;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -310,6 +311,19 @@ impl Display for RejectReason {
                 write!(f, "The channel was not newly created, and so cannot accept a proposal.")
             }
             RejectReason::Internal(msg) => write!(f, "Internal error: {msg}"),
+        }
+    }
+}
+
+impl From<LifeCycleError> for RejectReason {
+    fn from(err: LifeCycleError) -> Self {
+        match err {
+            LifeCycleError::InvalidStateTransition => RejectReason::NotANewChannel,
+            LifeCycleError::Proposal(invalid) => RejectReason::InvalidProposal(invalid),
+            LifeCycleError::WalletError(e) => {
+                warn!("🖥️  Cannot send AckProposal to peer because of an internal error: {e}");
+                RejectReason::Internal("Peer had an issue with the multisig wallet service".into())
+            }
         }
     }
 }

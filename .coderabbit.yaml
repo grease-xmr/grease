@@ -38,7 +38,7 @@ reviews:
     base_branches: []
   finishing_touches:
     docstrings:
-      enabled: true
+      enabled: false
   tools:
     ast-grep:
       rule_dirs: []
@@ -46,9 +46,9 @@ reviews:
       essential_rules: true
       packages: []
     shellcheck:
-      enabled: true
+      enabled: false
     ruff:
-      enabled: true
+      enabled: false
     markdownlint:
       enabled: true
     github-checks:
@@ -116,7 +116,7 @@ chat:
     linear:
       usage: disabled
 knowledge_base:
-  opt_out: true
+  opt_out: false
   web_search:
     enabled: true
   learnings:
