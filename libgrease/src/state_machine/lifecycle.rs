@@ -218,7 +218,7 @@ where
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
         let kes_verified = KesVerifiedState {
-            channel_info: (*wallet_created_state).channel_info,
+            channel_info: wallet_created_state.channel_info,
             wallet: wallet_created_state.wallet,
             kes,
         };

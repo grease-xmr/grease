@@ -14,7 +14,7 @@ use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KeyEscrowService;
 use libgrease::monero::data_objects::RequestEnvelope;
 use libgrease::monero::{MultiSigWallet, WalletState};
-use libgrease::payment_channel::{ActivePaymentChannel, ChannelRole};
+use libgrease::payment_channel::{ActivePaymentChannel};
 use libgrease::state_machine::error::InvalidProposal;
 use libgrease::state_machine::{ChannelLifeCycle, LifecycleStage, NewChannelBuilder};
 use libp2p::request_response::ResponseChannel;
@@ -80,7 +80,7 @@ where
         // Spawn the network task for it to run in the background.
         let event_loop_handle = tokio::spawn(network_event_loop.run());
         let inner = InnerEventHandler::new(network_client, channels, delegate, key_delegate);
-        let mut inner_clone = inner.clone();
+        let inner_clone = inner.clone();
         let event_handler_handle = tokio::spawn(async move {
             while let Some(ev) = network_events.next().await {
                 trace!("libp2p network event received.");
@@ -265,7 +265,7 @@ where
         next_item
     }
 
-    async fn clear_todo_list(&mut self) {
+    async fn clear_todo_list(&self) {
         while let Some(next_item) = self.get_next_todo_list_item().await {
             let next = match next_item {
                 TodoListItem::CreateMultiSigWallet { channel_name } => self.prepare_multisig_wallet(channel_name).await,
@@ -388,10 +388,7 @@ where
                             true
                         }
                         Some(my_address) if my_address != address => {
-                            warn!(
-                                "🖥️  The merchant's address {addr_str} does not match the one we generated {}",
-                                my_address.to_string()
-                            );
+                            warn!("🖥️  The merchant's address {addr_str} does not match ours {my_address}");
                             false
                         }
                         _ => false,
@@ -614,7 +611,7 @@ where
     // 3. The role of this side of the channel is Merchant
     async fn pre_wallet_checks(&self, channel_name: &str) -> Result<(ChannelId, ContactInfo), NextAction> {
         trace!("Peeking at channel {channel_name}");
-        match self.channels.try_peek(&channel_name).await {
+        match self.channels.try_peek(channel_name).await {
             Some(channel) => match channel.state() {
                 ChannelLifeCycle::Establishing(state) => {
                     let role = state.channel_info.role;
