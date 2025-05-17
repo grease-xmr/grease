@@ -92,7 +92,7 @@ where
                     }
                 }
                 // Carry out any pending tasks
-                inner_clone.handle_todo_list().await;
+                inner_clone.clear_todo_list().await;
             }
         });
         Ok(Self { id, inner, event_loop_handle, event_handler_handle })
@@ -252,6 +252,13 @@ where
         drop(write_lock);
     }
 
+    async fn add_todo_list_items(&self, items: impl IntoIterator<Item = TodoListItem>) {
+        trace!("🖥️  Adding items to todo list");
+        let mut write_lock = self.todo_list.write().await;
+        write_lock.extend(items);
+        drop(write_lock);
+    }
+
     async fn get_next_todo_list_item(&self) -> Option<TodoListItem> {
         let mut write_lock = self.todo_list.write().await;
         let next_item = write_lock.pop_front();
@@ -259,15 +266,19 @@ where
         next_item
     }
 
-    async fn handle_todo_list(&mut self) {
+    async fn clear_todo_list(&mut self) {
         while let Some(next_item) = self.get_next_todo_list_item().await {
             let next = match next_item {
-                TodoListItem::SendMsInit { channel_name } => self.prepare_multisig_wallet(channel_name).await,
+                TodoListItem::CreateMultiSigWallet { channel_name } => self.prepare_multisig_wallet(channel_name).await,
+                TodoListItem::CreateNewKes { channel_name } => self.create_kes(channel_name).await,
+                TodoListItem::ConstructFundingTransaction { channel_name } => {
+                    self.create_funding_transaction(channel_name).await
+                }
                 TodoListItem::CloseChannel { channel_name, reason } => self.close_channel(channel_name, reason).await,
             };
             match next {
-                NextAction::Continue => debug!("🖥️  Todo item completed successfully"),
-                NextAction::Ignore => debug!("🖥️  Todo item errored out, but we're ignoring it"),
+                NextAction::Continue => trace!("🖥️  Todo item completed successfully"),
+                NextAction::Ignore => trace!("🖥️  Todo item errored out, but we're ignoring it"),
                 NextAction::Abort { channel_name, reason } => {
                     debug!("🖥️  Aborting channel: {reason}");
                     let item = TodoListItem::CloseChannel { channel_name, reason };
@@ -401,68 +412,76 @@ where
 
     /// Handle an incoming request to open a payment channel.
     async fn handle_open_channel_request(&self, data: &NewChannelProposal<P>) -> GreaseResponse<P> {
-        // Check that the public key passed in the proposal matches our keypair
-        let (my_secret, my_pubkey) = match self.check_pubkey_matches(data) {
-            Ok(keys) => keys,
-            Err(err) => return err,
-        };
-        // Let the delegate do their checks
-        let delegate = self.delegate.clone();
-        if let Err(invalid) = delegate.verify_proposal(data) {
-            let retry = RetryOptions::close_only();
-            let rej = ChannelProposalResult::reject(RejectReason::InvalidProposal(invalid), retry);
-            return GreaseResponse::ChannelProposalResult(rej);
-        }
-        // Construct the new channel
-        let role = data.seed.role.other();
-        // Reconstruct the new channel state from our point of view
-        let new_state = NewChannelBuilder::new(role, my_pubkey, my_secret)
-            .with_my_user_label(&data.seed.user_label)
-            .with_peer_public_key(data.proposer_pubkey.clone())
-            .with_customer_initial_balance(data.seed.initial_balances.customer)
-            .with_merchant_initial_balance(data.seed.initial_balances.merchant)
-            .with_peer_label(&data.proposer_label)
-            .with_kes_public_key(data.seed.kes_public_key.clone())
-            .build::<blake2::Blake2b512>()
-            .expect("You've forgotten a field in the new state machine builder, dev");
+        self.establish_new_channel(data).await.unwrap_or_else(|early| early)
+    }
 
-        let state = ChannelLifeCycle::New(Box::new(new_state));
-        let peer_info = data.contact_info_proposer.clone();
-        let mut channel = PaymentChannel::new(peer_info, state);
-        // Emit an `AckProposal` event on the channel
-        if let Err(err) = channel.receive_proposal().await {
+    /// Establish a new payment channel with a peer.
+    ///
+    /// The steps involved are:
+    /// 1. Verify the proposal and create a new channel state machine.
+    /// 2. Emit an `AckProposal` event on the channel.
+    /// 3. Queue up the tasks to complete in order to establish the channel.
+    async fn establish_new_channel(
+        &self,
+        data: &NewChannelProposal<P>,
+    ) -> Result<GreaseResponse<P>, GreaseResponse<P>> {
+        let mut channel = self.verify_proposal_and_create_channel(data)?;
+        // Submit the proposal to the state machine and generate a response
+        channel.receive_proposal().await.map_err(|err| {
             warn!("🖥️  Channel proposal was not accepted by the state machine");
-            let reason = match err {
-                LifeCycleError::InvalidStateTransition => RejectReason::NotANewChannel,
-                LifeCycleError::Proposal(invalid) => RejectReason::InvalidProposal(invalid),
-                LifeCycleError::WalletError(e) => {
-                    warn!("🖥️  Cannot send AckProposal to peer because of an internal error: {e}");
-                    RejectReason::Internal("Peer had an issue with the multisig wallet service".into())
-                }
-            };
-            return GreaseResponse::ChannelProposalResult(ChannelProposalResult::reject(
-                reason,
-                RetryOptions::close_only(),
-            ));
-        }
-        // Make a note to send the wallet init data next
-        let channel_name = channel.name();
-        let item = TodoListItem::SendMsInit { channel_name: channel_name.clone() };
-        self.add_todo_list_item(item).await;
-        self.channels.add(channel).await;
+            let rejection = ChannelProposalResult::reject(err.into(), RetryOptions::close_only());
+            GreaseResponse::ChannelProposalResult(rejection)
+        })?;
         let ack = ChannelProposalResult::accept(data.clone());
-        GreaseResponse::ChannelProposalResult(ack)
+        // Queue up the tasks to complete next in order to establish the channel
+        let channel_name = channel.name();
+        let todo_list = [
+            TodoListItem::CreateMultiSigWallet { channel_name: channel_name.clone() },
+            TodoListItem::CreateNewKes { channel_name: channel_name.clone() },
+            TodoListItem::ConstructFundingTransaction { channel_name: channel_name.clone() },
+            // When the Funding tx is broadcast, it'll get picked up by the event loop and the state will move to
+            // Open automatically.
+        ];
+        self.add_todo_list_items(todo_list).await;
+        self.channels.add(channel).await;
+
+        Ok(GreaseResponse::ChannelProposalResult(ack))
     }
 
     async fn close_channel(&self, channel_name: String, reason: String) -> NextAction {
         info!("🖥️  Closing channel {channel_name}. {reason}");
-        todo!()
+        error!("🖥️  TODO!");
+        NextAction::Continue
     }
 
     /// As a merchant, fetch the multisig initialization data from the wallet.
     ///Once received, pass the information to the peer over the wire and wait.
     async fn prepare_multisig_wallet(&self, channel_name: String) -> NextAction {
-        self.prepare_multisig_wallet_wrapped(channel_name).await.unwrap_or_else(|next_action| next_action)
+        let next = self.prepare_multisig_wallet_wrapped(channel_name).await.unwrap_or_else(|next_action| next_action);
+        match next {
+            NextAction::Continue => {
+                info!("🖥️  Multisig wallet prepared successfully");
+                NextAction::Continue
+            }
+            NextAction::Ignore => {
+                info!("🖥️  Multisig wallet preparation failed, but we're ignoring it");
+                NextAction::Ignore
+            }
+            NextAction::Abort { channel_name, reason } => {
+                warn!("🖥️  Multisig wallet preparation failed: {reason}");
+                NextAction::Abort { channel_name, reason }
+            }
+        }
+    }
+
+    async fn create_funding_transaction(&self, channel_name: String) -> NextAction {
+        debug!("🖥️  Creating funding transaction for channel {channel_name}");
+        NextAction::Continue
+    }
+
+    async fn create_kes(&self, channel_name: String) -> NextAction {
+        debug!("🖥️  Creating KES for channel {channel_name}");
+        NextAction::Continue
     }
 
     // This function is the actual implementation of the multisig wallet preparation. It returns result for ergonomics
@@ -542,6 +561,38 @@ where
     }
 
     //------------------------------------------- Minor helper functions ---------------------------------------------//
+
+    fn verify_proposal_and_create_channel(
+        &self,
+        data: &NewChannelProposal<P>,
+    ) -> Result<PaymentChannel<P, C, W, KES>, GreaseResponse<P>> {
+        // Check that the public key passed in the proposal matches our keypair
+        let (my_secret, my_pubkey) = self.check_pubkey_matches(data)?;
+        // Let the delegate do their checks
+        let delegate = self.delegate.clone();
+        delegate.verify_proposal(data).map_err(|invalid| {
+            let retry = RetryOptions::close_only();
+            let rej = ChannelProposalResult::reject(RejectReason::InvalidProposal(invalid), retry);
+            GreaseResponse::ChannelProposalResult(rej)
+        })?;
+        // Construct the new channel
+        let role = data.seed.role.other();
+        // Reconstruct the new channel state from our point of view
+        let new_state = NewChannelBuilder::new(role, my_pubkey, my_secret)
+            .with_my_user_label(&data.seed.user_label)
+            .with_peer_public_key(data.proposer_pubkey.clone())
+            .with_customer_initial_balance(data.seed.initial_balances.customer)
+            .with_merchant_initial_balance(data.seed.initial_balances.merchant)
+            .with_peer_label(&data.proposer_label)
+            .with_kes_public_key(data.seed.kes_public_key.clone())
+            .build::<blake2::Blake2b512>()
+            .expect("You've forgotten a field in the new state machine builder, dev");
+
+        let state = ChannelLifeCycle::New(Box::new(new_state));
+        let peer_info = data.contact_info_proposer.clone();
+        Ok(PaymentChannel::new(peer_info, state))
+    }
+
     /// Check that the public key passed in the proposal matches our keypair
     fn check_pubkey_matches(&self, data: &NewChannelProposal<P>) -> Result<(P::SecretKey, P), GreaseResponse<P>> {
         let my_pubkey = data.seed.pubkey.clone();
@@ -590,7 +641,13 @@ where
 #[derive(Debug)]
 pub enum TodoListItem {
     /// Send the multisig wallet init data to the peer for channel `channel_name`
-    SendMsInit {
+    CreateMultiSigWallet {
+        channel_name: String,
+    },
+    CreateNewKes {
+        channel_name: String,
+    },
+    ConstructFundingTransaction {
         channel_name: String,
     },
     CloseChannel {
