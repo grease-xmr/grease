@@ -13,7 +13,6 @@ use futures::channel::{
 use futures::{SinkExt, StreamExt};
 use libgrease::crypto::traits::PublicKey;
 use libgrease::monero::data_objects::{MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo};
-use libgrease::state_machine::VssOutput;
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;

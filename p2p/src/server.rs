@@ -11,7 +11,7 @@ use futures::future::join;
 use futures::StreamExt;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::{KesInitializationRecord, KeyEscrowService, PartialEncryptedKey};
+use libgrease::kes::{KesInitializationRecord, KeyEscrowService};
 use libgrease::monero::data_objects::{
     MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
 };
