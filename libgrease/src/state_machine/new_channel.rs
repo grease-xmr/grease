@@ -82,7 +82,12 @@ impl<P: PublicKey> NewChannelBuilder<P> {
             ChannelRole::Merchant => (self.my_label.clone().unwrap(), self.peer_label.clone().unwrap()),
             ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
         };
-        let channel_id = ChannelId::new::<D, _, _, _>(merchant_label, customer_label, salt, initial_balances);
+        let channel_id = ChannelId::new::<D, _, _, _>(
+            merchant_label.clone(), 
+            customer_label.clone(), 
+            salt, 
+            initial_balances
+        );
         let (merchant_pubkey, customer_pubkey) = match self.channel_role {
             ChannelRole::Merchant => (self.my_public_key.clone(), self.peer_public_key.clone().unwrap()),
             ChannelRole::Customer => (self.peer_public_key.clone().unwrap(), self.my_public_key.clone()),
@@ -99,8 +104,8 @@ impl<P: PublicKey> NewChannelBuilder<P> {
         };
         Some(NewChannelState {
             channel_info,
-            customer_label: self.my_label.clone().unwrap(),
-            merchant_label: self.peer_label.clone().unwrap(),
+            customer_label,
+            merchant_label,
         })
     }
 
