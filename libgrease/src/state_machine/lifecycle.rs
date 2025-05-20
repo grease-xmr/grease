@@ -1,5 +1,5 @@
 use crate::crypto::traits::PublicKey;
-use crate::kes::KeyEscrowService;
+use crate::kes::{KesInitializationRecord, KeyEscrowService};
 use crate::monero::data_objects::TransactionId;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
@@ -147,6 +147,19 @@ where
         self.current_state().role()
     }
 
+    pub fn channel_info(&self) -> Option<&ChannelMetadata<P>> {
+        match self {
+            ChannelLifeCycle::New(_) => None,
+            ChannelLifeCycle::Establishing(state) => Some(&state.channel_info),
+            ChannelLifeCycle::WalletCreated(state) => Some(&state.channel_info),
+            ChannelLifeCycle::KesVerified(state) => Some(&state.channel_info),
+            ChannelLifeCycle::Open(state) => Some(&state.channel_info),
+            ChannelLifeCycle::Closing(state) => Some(&state.channel_info),
+            ChannelLifeCycle::Closed(_) => None,
+            ChannelLifeCycle::Disputing(_) => None,
+        }
+    }
+
     pub fn current_state(&self) -> &dyn ChannelState {
         match self {
             ChannelLifeCycle::New(state) => state.as_ref(),
@@ -167,20 +180,11 @@ where
         match new_state.review_proposal(&proposal) {
             Err(err) => Err((Self::New(new_state), err.into())),
             Ok(()) => {
-                let wallet = W::new(&new_state.channel_id).map_err(|e| {
+                let wallet = W::new(&new_state.channel_info.channel_id).map_err(|e| {
                     let old_state = ChannelLifeCycle::New(new_state.clone());
                     (old_state, e.into())
                 })?;
-                let channel_info = ChannelMetadata {
-                    role: new_state.role,
-                    secret_key: new_state.secret_key,
-                    merchant_pubkey: new_state.merchant_pubkey,
-                    customer_pubkey: new_state.customer_pubkey,
-                    kes_public_key: new_state.kes_public_key,
-                    initial_balances: new_state.initial_balances,
-                    channel_id: new_state.channel_id.clone(),
-                };
-                let establishing_state = EstablishingState::new(channel_info, wallet);
+                let establishing_state = EstablishingState::new(new_state.channel_info, wallet);
                 debug!("Transitioning from New to Establishing state");
                 Ok(ChannelLifeCycle::Establishing(Box::new(establishing_state)))
             }
@@ -193,8 +197,8 @@ where
         };
         warn!("Channel proposal rejected: {}", reason.reason());
         let reason = ChannelClosedReason::Rejected(reason);
-        let channel_id = new_state.channel_id.clone();
-        let channel_role = new_state.role;
+        let channel_id = new_state.channel_info.channel_id.clone();
+        let channel_role = new_state.channel_info.role;
         let state = ClosedChannelState::empty(reason, channel_id, channel_role);
         Ok(ChannelLifeCycle::Closed(Box::new(state)))
     }
@@ -206,9 +210,16 @@ where
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
         let state = *establishing_state;
+        let wallet_secret =
+            state.wallet_state.as_ref().and_then(|wallet_state| wallet_state.keypair()).cloned().ok_or_else(|| {
+                (
+                    Self::Establishing(Box::new(state.clone())),
+                    LifeCycleError::InvalidStateTransition,
+                )
+            })?;
         let channel_info = state.channel_info;
         let wallet = state.wallet_state.expect("wallet state MUST contain a wallet").to_wallet();
-        let wallet_created = WalletCreatedState { channel_info, wallet };
+        let wallet_created = WalletCreatedState { channel_info, wallet, wallet_secret };
         let new_state = ChannelLifeCycle::WalletCreated(Box::new(wallet_created));
         Ok(new_state)
     }
@@ -404,6 +415,15 @@ where
             _ => None,
         }
     }
+
+    pub fn kes_info(&self) -> Option<KesInitializationRecord> {
+        // match self {
+        //     ChannelLifeCycle::WalletCreated(state) => state.kes_info(),
+        //     ChannelLifeCycle::KesVerified(state) => state.kes_info(),
+        //     _ => None,
+        // }
+        todo!()
+    }
 }
 
 #[cfg(test)]
@@ -411,9 +431,10 @@ pub mod test {
     use crate::amount::MoneroAmount;
     use crate::crypto::keys::Curve25519PublicKey;
     use crate::kes::dummy_impl::DummyKes;
-    use crate::monero::data_objects::TransactionId;
+    use crate::kes::PartialEncryptedKey;
+    use crate::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, TransactionId};
     use crate::monero::dummy_impl::DummyWallet;
-    use crate::monero::MultiSigWallet;
+    use crate::monero::WalletState;
     use crate::payment_channel::dummy_impl::{DummyActiveChannel, DummyUpdateInfo};
     use crate::payment_channel::{ActivePaymentChannel, ChannelRole, ClosedPaymentChannel};
     use crate::state_machine::disputing_channel::DisputeResult;
@@ -424,10 +445,12 @@ pub mod test {
     use crate::state_machine::open_channel::ChannelUpdateInfo;
     use crate::state_machine::{
         ChannelClosedReason, ChannelLifeCycle, DisputeResolvedInfo, ForceCloseInfo, LifecycleStage, NewChannelBuilder,
+        VssOutput,
     };
     use crate::state_machine::{StartCloseInfo, SuccessfulCloseInfo};
     use blake2::Blake2b512;
     use log::*;
+    use monero::Network;
 
     type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
     type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyKes>;
@@ -468,11 +491,11 @@ pub mod test {
         // me to play.
         let proposal = ProposedChannelInfo {
             role: ChannelRole::Customer,
-            channel_id: initial_state.channel_id.clone(),
-            merchant_pubkey: initial_state.merchant_pubkey.clone(),
-            customer_pubkey: initial_state.customer_pubkey.clone(),
-            kes_public_key: initial_state.kes_public_key.clone(),
-            initial_balances: initial_state.initial_balances,
+            channel_id: initial_state.channel_info.channel_id.clone(),
+            merchant_pubkey: initial_state.channel_info.merchant_pubkey.clone(),
+            customer_pubkey: initial_state.channel_info.customer_pubkey.clone(),
+            kes_public_key: initial_state.channel_info.kes_public_key.clone(),
+            initial_balances: initial_state.channel_info.initial_balances,
             customer_label: initial_state.customer_label.clone(),
             merchant_label: initial_state.merchant_label.clone(),
         };
@@ -484,6 +507,32 @@ pub mod test {
     }
 
     pub async fn create_wallet(mut lc: DummyLifecycle) -> DummyLifecycle {
+        let wallet = DummyWallet::default();
+        let mut wallet_state = WalletState::new(Network::Testnet, wallet);
+        // The merchant collects the various information it needs during wallet negotiation
+        let peer_info = MultiSigInitInfo { init: "CustomerMultiSigInitInfo".to_string() };
+        let peer_shards = VssOutput {
+            peer_shard: PartialEncryptedKey("PeerShardFromMerchant".to_string()),
+            kes_shard: PartialEncryptedKey("KesShardFromMerchant".to_string()),
+        };
+        let my_shards = VssOutput {
+            peer_shard: PartialEncryptedKey("PeerShardFromCustomer".to_string()),
+            kes_shard: PartialEncryptedKey("KesShardFromCustomer".to_string()),
+        };
+        let peer_keys = MultisigKeyInfo { key: "CustomerMultisigKeyInfo".to_string() };
+        wallet_state = wallet_state
+            .prepare_multisig()
+            .await
+            .make_multisig(peer_info)
+            .await
+            .save_peer_shards(peer_shards)
+            .save_my_shards(my_shards)
+            .import_multisig_keys(peer_keys)
+            .await;
+        match &mut lc {
+            ChannelLifeCycle::Establishing(state) => state.update_wallet_state_sync(|_| wallet_state),
+            _ => panic!("Invalid state"),
+        }
         // The wallet negotiation is successful, and the wallet is created
         let event = LifeCycleEvent::OnMultiSigWalletCreated;
         lc = ChannelLifeCycle::log_and_consolidate(lc.stage(), lc.handle_event(event).await);
@@ -639,7 +688,7 @@ pub mod test {
         // Test invalid state transition. You can´t make a payment (channel update) while still in the New state
         env_logger::try_init().ok();
         let (mut lc, initial_state) = new_channel_state();
-        let new_balance = initial_state.initial_balances;
+        let new_balance = initial_state.channel_info.initial_balances;
         let update = DummyUpdateInfo { new_balance };
         let channel_name = lc.current_state().name();
         let info = ChannelUpdateInfo::new(channel_name, update);

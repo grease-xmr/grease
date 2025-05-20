@@ -5,9 +5,10 @@ use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::InvalidProposal;
 use crate::state_machine::establishing_channel::Balances;
 use crate::state_machine::traits::ChannelState;
-use crate::state_machine::LifecycleStage;
+use crate::state_machine::{ChannelMetadata, LifecycleStage};
 use digest::Digest;
 use log::debug;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,9 +20,11 @@ use thiserror::Error;
 /// structured around a builder pattern. Both merchant and customer get the necessary info from "somewhere". In
 /// practice, it'll be a QR code or deep link, or a direct RPC call from the customer.
 pub struct NewChannelBuilder<P: PublicKey> {
+    network: Option<Network>,
     channel_role: ChannelRole,
     my_public_key: P,
-    my_secret_key: P::SecretKey,
+    // This secret is used to decrypt the secret shares in the case of a dispute
+    my_decryption_key: P::SecretKey,
     kes_public_key: Option<P>,
     my_label: Option<String>,
     peer_public_key: Option<P>,
@@ -47,9 +50,10 @@ impl RejectNewChannelReason {
 impl<P: PublicKey> NewChannelBuilder<P> {
     pub fn new(channel_role: ChannelRole, my_public_key: P, my_secret_key: P::SecretKey) -> Self {
         NewChannelBuilder {
+            network: None,
             channel_role,
             my_public_key,
-            my_secret_key,
+            my_decryption_key: my_secret_key,
             kes_public_key: None,
             my_label: None,
             peer_public_key: None,
@@ -78,21 +82,30 @@ impl<P: PublicKey> NewChannelBuilder<P> {
             ChannelRole::Merchant => (self.my_label.clone().unwrap(), self.peer_label.clone().unwrap()),
             ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
         };
-        let channel_id = ChannelId::new::<D, _, _, _>(merchant_label, customer_label, salt, initial_balances);
+        let channel_id = ChannelId::new::<D, _, _, _>(
+            merchant_label.clone(), 
+            customer_label.clone(), 
+            salt, 
+            initial_balances
+        );
         let (merchant_pubkey, customer_pubkey) = match self.channel_role {
             ChannelRole::Merchant => (self.my_public_key.clone(), self.peer_public_key.clone().unwrap()),
             ChannelRole::Customer => (self.peer_public_key.clone().unwrap(), self.my_public_key.clone()),
         };
-        Some(NewChannelState {
+        let channel_info = ChannelMetadata {
+            network: self.network.unwrap_or(Network::Mainnet),
             role: self.channel_role,
+            decryption_key: self.my_decryption_key.clone(),
             merchant_pubkey,
             customer_pubkey,
             kes_public_key: self.kes_public_key.clone().unwrap(),
-            secret_key: self.my_secret_key.clone(),
             initial_balances,
-            customer_label: self.my_label.clone().unwrap(),
-            merchant_label: self.peer_label.clone().unwrap(),
             channel_id,
+        };
+        Some(NewChannelState {
+            channel_info,
+            customer_label,
+            merchant_label,
         })
     }
 
@@ -134,24 +147,10 @@ pub struct NewChannelState<P>
 where
     P: PublicKey,
 {
-    /// My role, whether customer or merchant
-    pub role: ChannelRole,
-    /// My secret key for the 2-of-2 multisig wallet
-    pub(crate) secret_key: P::SecretKey,
-    /// The public key of the merchant, for use in adaptor signatures
-    pub merchant_pubkey: P,
-    /// The public key of the customer, for use in adaptor signatures
-    pub customer_pubkey: P,
-    /// The public key of the KES key, for encrypting the secret share
-    pub kes_public_key: P,
-    /// The amount of money in the channel
-    pub initial_balances: Balances,
-    /// Salt used to derive the channel ID - customer portion
+    pub channel_info: ChannelMetadata<P>,
     pub customer_label: String,
     /// Salt used to derive the channel ID - merchant portion
     pub merchant_label: String,
-    /// The channel ID
-    pub channel_id: ChannelId,
 }
 
 impl<P: PublicKey> NewChannelState<P> {
@@ -159,22 +158,22 @@ impl<P: PublicKey> NewChannelState<P> {
     /// her initially.
     pub fn review_proposal(&self, proposal: &ProposedChannelInfo<P>) -> Result<(), InvalidProposal> {
         debug!("Internal sanity check on proposal info");
-        if self.role != proposal.role {
+        if self.channel_info.role != proposal.role {
             return Err(InvalidProposal::IncompatibleRoles);
         }
-        if self.initial_balances != proposal.initial_balances {
+        if self.channel_info.initial_balances != proposal.initial_balances {
             return Err(InvalidProposal::MismatchedBalances);
         }
-        if self.merchant_pubkey != proposal.merchant_pubkey {
+        if self.channel_info.merchant_pubkey != proposal.merchant_pubkey {
             return Err(InvalidProposal::MismatchedMerchantPublicKey);
         }
-        if self.customer_pubkey != proposal.customer_pubkey {
+        if self.channel_info.customer_pubkey != proposal.customer_pubkey {
             return Err(InvalidProposal::MismatchedCustomerPublicKey);
         }
-        if self.kes_public_key != proposal.kes_public_key {
+        if self.channel_info.kes_public_key != proposal.kes_public_key {
             return Err(InvalidProposal::MismatchedKesPublicKey);
         }
-        if self.channel_id != proposal.channel_id {
+        if self.channel_info.channel_id != proposal.channel_id {
             return Err(InvalidProposal::MismatchedChannelId);
         }
         Ok(())
@@ -183,25 +182,25 @@ impl<P: PublicKey> NewChannelState<P> {
     /// Convert this state (which contains a secret key) into a proposal (which does not).
     pub fn for_proposal(&self) -> ProposedChannelInfo<P> {
         ProposedChannelInfo {
-            role: self.role,
-            merchant_pubkey: self.merchant_pubkey.clone(),
-            customer_pubkey: self.customer_pubkey.clone(),
-            kes_public_key: self.kes_public_key.clone(),
-            initial_balances: self.initial_balances,
+            role: self.channel_info.role,
+            merchant_pubkey: self.channel_info.merchant_pubkey.clone(),
+            customer_pubkey: self.channel_info.customer_pubkey.clone(),
+            kes_public_key: self.channel_info.kes_public_key.clone(),
+            initial_balances: self.channel_info.initial_balances,
             customer_label: self.customer_label.clone(),
             merchant_label: self.merchant_label.clone(),
-            channel_id: self.channel_id.clone(),
+            channel_id: self.channel_info.channel_id.clone(),
         }
     }
 }
 
 impl<P: PublicKey> ChannelState for NewChannelState<P> {
     fn channel_id(&self) -> &ChannelId {
-        &self.channel_id
+        &self.channel_info.channel_id
     }
 
     fn role(&self) -> ChannelRole {
-        self.role
+        self.channel_info.role
     }
 }
 

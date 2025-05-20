@@ -12,7 +12,7 @@ use futures::channel::{
 };
 use futures::{SinkExt, StreamExt};
 use libgrease::crypto::traits::PublicKey;
-use libgrease::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
+use libgrease::monero::data_objects::{MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo};
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
@@ -75,10 +75,10 @@ pub struct EventLoop<P: PublicKey + 'static> {
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
     pending_new_channel_proposals: HashMap<OutboundRequestId, oneshot::Sender<ChannelProposalResult<P>>>,
     pending_multisig_inits:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<MultiSigInitInfo>, String>>>,
+        HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<MultiSigInitInfo>, String>>>,
     pending_multisig_keys:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<MultisigKeyInfo>, String>>>,
-    pending_address_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<RequestEnvelope<bool>, String>>>,
+        HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<MsKeyAndVssInfo>, String>>>,
+    pending_address_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<bool>, String>>>,
     pending_shutdown: Option<oneshot::Sender<bool>>,
     status: AtomicUsize,
     connections: HashSet<ConnectionId>,
@@ -569,24 +569,23 @@ impl<P: PublicKey + Send> EventLoop<P> {
     }
 
     async fn handle_command(&mut self, command: ClientCommand<P>) {
+        if let Err(()) = self.command_handler(command).await {
+            // Preserve the knowledge that the command was rejected.
+            warn!("💡  A client command was not handled successfully – see logs above for details");
+        }
+    }
+    async fn command_handler(&mut self, command: ClientCommand<P>) -> Result<(), ()> {
         match command {
             ClientCommand::StartListening { addr, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not going to start listening now.");
-                    let _ = sender.send(Err(PeerConnectionError::EventLoopShuttingDown));
-                    return;
-                }
+                let sender = self.abort_if_shutting_down(sender, PeerConnectionError::EventLoopShuttingDown)?;
                 let _ = match self.swarm.listen_on(addr) {
                     Ok(_) => sender.send(Ok(())),
                     Err(e) => sender.send(Err(PeerConnectionError::TransportError(e))),
                 };
+                Ok(())
             }
             ClientCommand::Dial { peer_id, peer_addr, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not going to dial anyone now.");
-                    let _ = sender.send(Err(PeerConnectionError::EventLoopShuttingDown));
-                    return;
-                }
+                let sender = self.abort_if_shutting_down(sender, PeerConnectionError::EventLoopShuttingDown)?;
                 if let hash_map::Entry::Vacant(e) = self.pending_dial.entry(peer_id) {
                     match self.swarm.dial(peer_addr.with(Protocol::P2p(peer_id))) {
                         Ok(()) => {
@@ -599,12 +598,14 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 } else {
                     debug!("Dialing already in progress for peer {peer_id}. Ignoring additional dial attempt.");
                 }
+                Ok(())
             }
             ClientCommand::ResponseToRequest { res, return_chute } => {
                 if let Err(response) = self.swarm.behaviour_mut().json.send_response(return_chute, res) {
                     error!("Failed to send response to request. {response}");
                     // todo: retry logic
                 }
+                Ok(())
             }
             ClientCommand::ProposeChannelRequest { peer_id, data, sender } => {
                 if !self.is_running() {
@@ -612,16 +613,18 @@ impl<P: PublicKey + Send> EventLoop<P> {
                     let reason = RejectReason::NotSent("Event loop is shutting down.".to_string());
                     let rejection = RejectChannelProposal::new(reason, RetryOptions::close_only());
                     let _ = sender.send(ChannelProposalResult::Rejected(rejection));
-                    return;
+                    return Err(());
                 }
                 let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ProposeNewChannel(data));
                 self.pending_new_channel_proposals.insert(id, sender);
                 info!("New channel proposal sent to {peer_id}");
+                Ok(())
             }
             ClientCommand::ConnectedPeers { sender } => {
                 debug!("Connected peers requested.");
                 let peers = self.swarm.connected_peers().cloned().collect();
                 let _ = sender.send(peers);
+                Ok(())
             }
             ClientCommand::Shutdown(sender) => {
                 info!("Shutting down event loop.");
@@ -631,42 +634,48 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 for id in connections {
                     self.swarm.close_connection(id);
                 }
+                Ok(())
             }
             // MultiSig wallet prep commands
             ClientCommand::MultiSigInitRequest { peer_id, envelope, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not setting up wallets now.");
-                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
-                    return;
-                }
+                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
                 let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::MsInit(envelope));
                 self.pending_multisig_inits.insert(id, sender);
+                Ok(())
             }
             ClientCommand::MultiSigKeyRequest { peer_id, envelope, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not setting up wallets now.");
-                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
-                    return;
-                }
+                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
                 let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::MsKeyExchange(envelope));
                 self.pending_multisig_keys.insert(id, sender);
+                Ok(())
             }
             ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not confirming multisig addresses now.");
-                    let _ = sender.send(Err("Event loop is shutting down.".to_string()));
-                    return;
-                }
+                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
                 let id =
                     self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ConfirmMsAddress(envelope));
                 self.pending_address_confirmations.insert(id, sender);
+                Ok(())
             }
-            ClientCommand::KesReadyNotification { .. } => {}
-            ClientCommand::AckKesReadyNotification { .. } => {}
-            ClientCommand::FundingTxRequestStart { .. } => {}
-            ClientCommand::FundingTxFinalizeRequest { .. } => {}
-            ClientCommand::FundingTxBroadcastNotification { .. } => {}
-            ClientCommand::AckFundingTxBroadcastNotification { .. } => {}
+            ClientCommand::KesReadyNotification { .. } => Err(()),
+            ClientCommand::AckKesReadyNotification { .. } => Err(()),
+            ClientCommand::FundingTxRequestStart { .. } => Err(()),
+            ClientCommand::FundingTxFinalizeRequest { .. } => Err(()),
+            ClientCommand::FundingTxBroadcastNotification { .. } => Err(()),
+            ClientCommand::AckFundingTxBroadcastNotification { .. } => Err(()),
+        }
+    }
+
+    fn abort_if_shutting_down<T, E>(
+        &self,
+        sender: oneshot::Sender<Result<T, E>>,
+        err: E,
+    ) -> Result<oneshot::Sender<Result<T, E>>, ()> {
+        if !self.is_running() {
+            info!("Event loop is shutting down. I'm not accepting any more instructions right now.");
+            let _ = sender.send(Err(err));
+            Err(())
+        } else {
+            Ok(sender)
         }
     }
 }

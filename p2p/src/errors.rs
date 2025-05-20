@@ -1,4 +1,7 @@
 use futures::channel::{mpsc, oneshot};
+use libgrease::kes::error::KesError;
+use libgrease::monero::error::MoneroWalletError;
+use libgrease::state_machine::error::LifeCycleError;
 use libp2p::{noise, TransportError};
 use std::convert::Infallible;
 use thiserror::Error;
@@ -33,4 +36,34 @@ pub enum PaymentChannelError {
     IOError(#[from] std::io::Error),
     #[error("Error serializing channel. {0}")]
     SerializationError(#[from] ron::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum ChannelServerError {
+    #[error("Channel is not in the Merchant role.")]
+    NotMerchantRole,
+    #[error("Channel is not in the Customer role.")]
+    NotCustomerRole,
+    #[error("Channel is in an invalid state. {0}")]
+    InvalidState(String),
+    #[error("Channel not found.")]
+    ChannelNotFound,
+    #[error("Error Setting up wallet. {0}")]
+    WalletSetup(#[from] MoneroWalletError),
+    #[error("Secret sharing failure. {0}")]
+    VssFailure(String),
+    #[error("Error communicating with peer. {0}")]
+    PeerConnectionError(#[from] PeerConnectionError),
+    #[error("The peer rejected the protocol. {0}")]
+    PeerCommsError(String),
+    #[error("Lifecycle state machine error. {0}")]
+    LifeCycleError(#[from] LifeCycleError),
+    #[error("An error Occurred with the KES. {0}")]
+    KesError(#[from] KesError),
+}
+
+#[derive(Error, Debug)]
+#[error("Verifiable Secret Sharing failure due to {reason}")]
+pub struct VssError {
+    pub reason: String,
 }

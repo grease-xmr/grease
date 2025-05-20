@@ -1,24 +1,13 @@
-use crate::state_machine::Balances;
+use crate::kes::data_objects::KesInitializationResult;
+use crate::kes::error::KesError;
+use crate::kes::KesInitializationRecord;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
-use thiserror::Error;
-
-pub struct PartialEncryptedKey(pub String);
-
-pub struct KesIinitializationRecord {
-    pub kes_public_key: String,
-    pub channel_id: String,
-    pub initial_balances: Balances,
-    pub merchant_key: PartialEncryptedKey,
-    pub customer_key: PartialEncryptedKey,
-}
-
-#[derive(Clone, Debug, Error)]
-pub enum KesError {
-    #[error("KES initialization failed: {0}")]
-    InitializationError(String),
-}
 
 pub trait KeyEscrowService: Serialize + for<'de> Deserialize<'de> + Send + Sync {
-    fn initialize(init: KesIinitializationRecord) -> impl Future<Output = Result<Self, KesError>> + Send;
+    /// Create a new escrow with the information in `init`.
+    fn initialize(
+        &self,
+        init: KesInitializationRecord,
+    ) -> impl Future<Output = Result<KesInitializationResult, KesError>> + Send;
 }

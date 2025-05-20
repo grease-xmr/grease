@@ -6,7 +6,9 @@ use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
 use libgrease::crypto::traits::PublicKey;
-use libgrease::monero::data_objects::{MoneroAddress, MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
+use libgrease::monero::data_objects::{
+    MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
+};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::request_response::ResponseChannel;
@@ -118,9 +120,9 @@ impl<P: PublicKey> Client<P> {
         peer_id: PeerId,
         channel: String,
         multisig_init: MultiSigInitInfo,
-    ) -> Result<Result<RequestEnvelope<MultiSigInitInfo>, String>, PeerConnectionError> {
+    ) -> Result<Result<MessageEnvelope<MultiSigInitInfo>, String>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        let envelope = RequestEnvelope::new(channel, multisig_init);
+        let envelope = MessageEnvelope::new(channel, multisig_init);
         self.sender.send(ClientCommand::MultiSigInitRequest { peer_id, envelope, sender }).await?;
         let res = receiver.await?;
         Ok(res)
@@ -131,9 +133,9 @@ impl<P: PublicKey> Client<P> {
         peer_id: PeerId,
         channel: String,
         multisig_key: MultisigKeyInfo,
-    ) -> Result<Result<RequestEnvelope<MultisigKeyInfo>, String>, PeerConnectionError> {
+    ) -> Result<Result<MessageEnvelope<MsKeyAndVssInfo>, String>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        let envelope = RequestEnvelope::new(channel, multisig_key);
+        let envelope = MessageEnvelope::new(channel, multisig_key);
         self.sender.send(ClientCommand::MultiSigKeyRequest { peer_id, envelope, sender }).await?;
         let res = receiver.await?;
         Ok(res)
@@ -143,10 +145,10 @@ impl<P: PublicKey> Client<P> {
         &mut self,
         peer_id: PeerId,
         channel: String,
-        address: MoneroAddress,
-    ) -> Result<Result<RequestEnvelope<bool>, String>, PeerConnectionError> {
+        confirmation: WalletConfirmation,
+    ) -> Result<Result<MessageEnvelope<bool>, String>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        let envelope = RequestEnvelope::new(channel, address);
+        let envelope = MessageEnvelope::new(channel, confirmation);
         self.sender.send(ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender }).await?;
         let res = receiver.await?;
         Ok(res)

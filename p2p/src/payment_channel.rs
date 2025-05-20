@@ -2,7 +2,7 @@ use crate::errors::PaymentChannelError;
 use crate::message_types::NewChannelProposal;
 use crate::ContactInfo;
 use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::KeyEscrowService;
+use libgrease::kes::{KesInitializationResult, KeyEscrowService};
 use libgrease::monero::{MultiSigWallet, WalletState};
 use libgrease::payment_channel::ActivePaymentChannel;
 use libgrease::state_machine::error::LifeCycleError;
@@ -135,6 +135,14 @@ where
         Ok(state.wallet_state())
     }
 
+    /// A synchronous version of `wallet_preparation`
+    pub fn update_wallet_state(&mut self, update: impl FnOnce(WalletState<W>) -> WalletState<W>) {
+        let Some(ChannelLifeCycle::Establishing(state)) = &mut self.state else {
+            return;
+        };
+        state.update_wallet_state_sync(update);
+    }
+
     /// Returns the channel name, which is identical to `channel_id.name()`
     pub fn name(&self) -> String {
         self.state().current_state().name()
@@ -181,6 +189,10 @@ where
     /// Accept a newly created and verified Multisig wallet and move the state from `Establishing` to `WalletCreated`
     pub async fn accept_new_wallet(&mut self) -> Result<(), LifeCycleError> {
         self.handle_event(LifeCycleEvent::OnMultiSigWalletCreated).await
+    }
+
+    pub fn save_kes_result(&mut self, kes: KesInitializationResult) -> Result<(), LifeCycleError> {
+        todo!("Check correct state and store the KES record")
     }
 }
 

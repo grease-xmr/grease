@@ -44,7 +44,7 @@ impl InteractiveApp {
         let key_manager = MoneroKeyManager::new(secret);
         let id_path = config.identities_file.clone().unwrap_or_else(|| config.base_path().join("identities.yml"));
         let identity = assign_identity(&id_path, config.preferred_identity.as_ref())?;
-        let delegate = DummyDelegate;
+        let delegate = DummyDelegate::default();
         let channels = PaymentChannels::load(config.channel_directory())?;
         let server = MoneroNetworkServer::new(identity.clone(), channels, delegate, key_manager)?;
         let app =
