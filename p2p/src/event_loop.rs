@@ -569,9 +569,11 @@ impl<P: PublicKey + Send> EventLoop<P> {
     }
 
     async fn handle_command(&mut self, command: ClientCommand<P>) {
-        self.command_handler(command).await.unwrap_or(())
+        if let Err(()) = self.command_handler(command).await {
+            // Preserve the knowledge that the command was rejected.
+            warn!("💡  A client command was not handled successfully – see logs above for details");
+        }
     }
-
     async fn command_handler(&mut self, command: ClientCommand<P>) -> Result<(), ()> {
         match command {
             ClientCommand::StartListening { addr, sender } => {
