@@ -13,6 +13,10 @@ use crate::monero::error::MoneroWalletError;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 
+pub type MoneroPrivateKey = monero::PrivateKey;
+pub type MoneroKeyPair = monero::KeyPair;
+pub use monero::Network;
+
 /// Interface for a 2-of-2 Monero multisig wallet implementation
 #[allow(async_fn_in_trait)]
 pub trait MultiSigWallet: Clone + Serialize + for<'de> Deserialize<'de> + Send + Sync {
@@ -57,6 +61,13 @@ pub trait MultiSigWallet: Clone + Serialize + for<'de> Deserialize<'de> + Send +
     fn get_address(&self) -> impl Future<Output = MoneroAddress> + Send;
     async fn get_view_key(&self) -> MoneroViewKey;
     async fn get_balance(&self) -> Result<WalletBalance, MoneroWalletError>;
+
+    /// Generate a new key pair for the wallet. This is used for the multisig protocol.
+    fn generate_key_pair(&self) -> MoneroKeyPair;
+
+    fn address_from_keypair(&self, network: Network, keypair: &MoneroKeyPair) -> MoneroAddress {
+        MoneroAddress::from_keypair(network, keypair)
+    }
 
     async fn get_seed(&self) -> Result<MultiSigSeed, MoneroWalletError>;
     async fn restore_from_seed(seed: MultiSigSeed) -> Result<Self, MoneroWalletError>;

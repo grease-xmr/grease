@@ -3,14 +3,15 @@ use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
-use libgrease::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, RequestEnvelope};
+use libgrease::monero::data_objects::{
+    MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
+};
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelSeedInfo, ProposedChannelInfo};
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
-use log::warn;
-use monero::Address as MoneroAddress;
+use log::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -20,12 +21,13 @@ use std::fmt::{Display, Formatter};
 #[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
 pub enum GreaseRequest<P: PublicKey> {
     ProposeNewChannel(NewChannelProposal<P>),
-    /// A request from the merchant to begin initializing the commit transaction wallet (Prep phase).
-    MsInit(RequestEnvelope<MultiSigInitInfo>),
-    /// A request from the merchant to exchange multisig keys (Prep phase).
-    MsKeyExchange(RequestEnvelope<MultisigKeyInfo>),
-    /// A request from the merchant to confirm that the multisig address was set up correctly (Prep phase).
-    ConfirmMsAddress(RequestEnvelope<MoneroAddress>),
+    /// Merchant initiates the creation of a new 2-of-2 multisig wallet (Prep phase).
+    MsInit(MessageEnvelope<MultiSigInitInfo>),
+    /// The merchant sends its multisig wallet key and expects the keys and split secrets as a response (Prep phase).
+    MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
+    /// The merchant wants customer to confirm that the wallet is created corectly by checking the address of the
+    /// 2-of-2 wallet, and send over the split secrets at the same time (Final prep phase).
+    ConfirmMsAddress(MessageEnvelope<WalletConfirmation>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -34,12 +36,13 @@ pub enum GreaseRequest<P: PublicKey> {
 pub enum GreaseResponse<P: PublicKey> {
     ChannelProposalResult(ChannelProposalResult<P>),
     /// The customer's response to the MS init request. The customer's Init info is included in the response.
-    MsInit(Result<RequestEnvelope<MultiSigInitInfo>, String>),
-    /// The customer's response to the MS key exchange request. The customer's key info is included in the response.
-    MsKeyExchange(Result<RequestEnvelope<MultisigKeyInfo>, String>),
+    MsInit(Result<MessageEnvelope<MultiSigInitInfo>, String>),
+    /// The customer's response to the MS key exchange request. The customer's key info and split secrets are
+    /// included in the response.
+    MsKeyExchange(Result<MessageEnvelope<MsKeyAndVssInfo>, String>),
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
-    ConfirmMsAddress(RequestEnvelope<bool>),
+    ConfirmMsAddress(MessageEnvelope<bool>),
     ChannelClosed,
     ChannelNotFound,
     Error(String),
@@ -69,11 +72,8 @@ where
             GreaseResponse::MsKeyExchange(Ok(_)) => write!(f, "MultisigKeyExchange(***)"),
             GreaseResponse::MsKeyExchange(Err(e)) => write!(f, "MultisigKeyExchangeError({e})"),
             GreaseResponse::ConfirmMsAddress(env) => {
-                write!(
-                    f,
-                    "Multisig address confirmation: {}",
-                    if env.payload { "OK" } else { "NOT OK" }
-                )
+                let status = if env.payload { "OK" } else { "NOT OK" };
+                write!(f, "Multisig address confirmation: {status}")
             }
             GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
             GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
@@ -124,18 +124,18 @@ pub enum ClientCommand<P: PublicKey> {
     },
     MultiSigInitRequest {
         peer_id: PeerId,
-        envelope: RequestEnvelope<MultiSigInitInfo>,
-        sender: oneshot::Sender<Result<RequestEnvelope<MultiSigInitInfo>, String>>,
+        envelope: MessageEnvelope<MultiSigInitInfo>,
+        sender: oneshot::Sender<Result<MessageEnvelope<MultiSigInitInfo>, String>>,
     },
     MultiSigKeyRequest {
         peer_id: PeerId,
-        envelope: RequestEnvelope<MultisigKeyInfo>,
-        sender: oneshot::Sender<Result<RequestEnvelope<MultisigKeyInfo>, String>>,
+        envelope: MessageEnvelope<MultisigKeyInfo>,
+        sender: oneshot::Sender<Result<MessageEnvelope<MsKeyAndVssInfo>, String>>,
     },
     ConfirmMultiSigAddressRequest {
         peer_id: PeerId,
-        envelope: RequestEnvelope<MoneroAddress>,
-        sender: oneshot::Sender<Result<RequestEnvelope<bool>, String>>,
+        envelope: MessageEnvelope<WalletConfirmation>,
+        sender: oneshot::Sender<Result<MessageEnvelope<bool>, String>>,
     },
     KesReadyNotification {
         peer_id: PeerId,

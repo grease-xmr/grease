@@ -15,7 +15,7 @@ blake2 = { workspace = true }
 curve25519-dalek = { version = "4.1.3", features = ["digest"] }
 digest = "0.10.7"
 hex = "0.4.3"
-monero = { workspace = true }
+monero = { workspace = true, features = ["serde"] }
 rand = { workspace = true }
 thiserror = "2.0.12"
 log = "0.4.27"

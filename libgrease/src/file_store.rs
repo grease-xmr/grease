@@ -69,7 +69,7 @@ mod test {
         let path = PathBuf::from("./test_data");
         let mut store = FileStore::new(path).expect("directory to exist");
         let (mut lc, initial_state) = new_channel_state();
-        let name = initial_state.channel_id.name();
+        let name = initial_state.channel_info.channel_id.name();
         store.write_channel(&lc).expect("Failed to write channel");
         lc = store.load_channel(&name).expect("Failed to load channel");
         lc = accept_proposal(lc, &initial_state).await;

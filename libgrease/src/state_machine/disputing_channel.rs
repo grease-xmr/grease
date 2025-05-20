@@ -4,7 +4,7 @@ use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::traits::ChannelState;
-use crate::state_machine::{ClosingChannelState, EstablishedChannelState};
+use crate::state_machine::{ChannelMetadata, ClosingChannelState, EstablishedChannelState};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
@@ -19,10 +19,10 @@ where
 {
     pub(crate) origin: DisputeOrigin,
     pub(crate) reason: String,
-    pub(crate) secret: P::SecretKey,
     pub(crate) payment_channel: C,
     pub(crate) wallet: W,
     pub(crate) kes: KES,
+    pub(crate) channel_info: ChannelMetadata<P>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,10 +69,10 @@ where
         DisputingChannelState {
             origin: info.origin,
             reason: info.reason,
-            secret: open_state.channel_info.secret_key,
             payment_channel: open_state.payment_channel,
             wallet: open_state.wallet,
             kes: open_state.kes,
+            channel_info: open_state.channel_info,
         }
     }
 
@@ -80,10 +80,10 @@ where
         DisputingChannelState {
             origin: info.origin,
             reason: info.reason,
-            secret: closing_state.channel_info.secret_key,
             payment_channel: closing_state.payment_channel,
             wallet: closing_state.wallet,
             kes: closing_state.kes,
+            channel_info: closing_state.channel_info,
         }
     }
 }
