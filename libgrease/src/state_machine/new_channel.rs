@@ -78,6 +78,11 @@ impl<P: PublicKey> NewChannelBuilder<P> {
         let customer_initial = self.customer_amount.unwrap_or_default();
         let initial_balances = Balances::new(merchant_initial, customer_initial);
 
+        // Total balance may not be zero
+        if initial_balances.total().is_zero() {
+            return None;
+        }
+
         let (merchant_label, customer_label) = match self.channel_role {
             ChannelRole::Merchant => (self.my_label.clone().unwrap(), self.peer_label.clone().unwrap()),
             ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
@@ -152,6 +157,9 @@ impl<P: PublicKey> NewChannelState<P> {
         debug!("Internal sanity check on proposal info");
         if self.channel_info.role != proposal.role {
             return Err(InvalidProposal::IncompatibleRoles);
+        }
+        if self.channel_info.initial_balances.total().is_zero() {
+            return Err(InvalidProposal::ZeroTotalValue);
         }
         if self.channel_info.initial_balances != proposal.initial_balances {
             return Err(InvalidProposal::MismatchedBalances);

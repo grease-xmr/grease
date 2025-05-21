@@ -1,15 +1,19 @@
 use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
-use crate::kes::{KesInitializationRecord, KesInitializationResult, KeyEscrowService, PartialEncryptedKey};
+use crate::kes::{
+    FundingTransaction, KesInitializationRecord, KesInitializationResult, KeyEscrowService, PartialEncryptedKey,
+};
 use crate::monero::error::MoneroWalletError;
 use crate::monero::{MoneroKeyPair, MultiSigWallet, WalletState};
 use crate::payment_channel::ActivePaymentChannel;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::traits::ChannelState;
+use log::warn;
 use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -231,6 +235,10 @@ where
     pub kes_info: KesInitializationRecord<P>,
     pub wallet: W,
     pub kes: KES,
+    /// The transaction ID of the merchant's funding transaction
+    pub merchant_funding_tx: Option<FundingTransaction>,
+    /// The transaction ID of the customer's funding transaction
+    pub customer_funding_tx: Option<FundingTransaction>,
 }
 
 impl<P, W, KES> KesVerifiedState<P, W, KES>
@@ -241,6 +249,40 @@ where
 {
     pub fn kes_info(&self) -> KesInitializationRecord<P> {
         self.kes_info.clone()
+    }
+
+    pub fn save_funding_transaction(&mut self, tx: FundingTransaction) {
+        match tx.role {
+            ChannelRole::Merchant => {
+                if let Some(old) = self.merchant_funding_tx.replace(tx) {
+                    warn!(
+                        "Merchant funding txid was already set to {} and has been replaced.",
+                        old.transaction_id.id
+                    );
+                }
+            }
+            ChannelRole::Customer => {
+                if let Some(old) = self.customer_funding_tx.replace(tx) {
+                    warn!(
+                        "Customer funding txid was already set to {} and has been replaced",
+                        old.transaction_id.id
+                    );
+                }
+            }
+        }
+    }
+    /// Returns true if all necessary funding transactions are confirmed.
+    ///
+    /// This means that:
+    /// - The merchant's funding transaction is confirmed (if the merchant's initial balance is not zero)
+    /// - The customer's funding transaction is confirmed (if the customer's initial balance is not zero)
+    pub fn are_funding_txs_confirmed(&self) -> bool {
+        let initial_balances = self.channel_info.initial_balances;
+        let merchant_ready = initial_balances.merchant.is_zero() || self.merchant_funding_tx.is_some();
+        let customer_ready = initial_balances.customer.is_zero() || self.customer_funding_tx.is_some();
+        // This is redundant, strictly speaking, because we don't allow both initial balances to be zero.
+        let at_least_one_tx = self.merchant_funding_tx.is_some() || self.customer_funding_tx.is_some();
+        merchant_ready && customer_ready && at_least_one_tx
     }
 }
 

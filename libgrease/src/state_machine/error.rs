@@ -18,6 +18,8 @@ pub enum InvalidProposal {
     IncompatibleRoles,
     #[error("Mismatched initial balances proposed")]
     MismatchedBalances,
+    #[error("The total value of the channel cannot be zero")]
+    ZeroTotalValue,
     #[error("The merchant's public key in the proposal does not match the one that was expected")]
     MismatchedMerchantPublicKey,
     #[error("The customer's public key in the proposal does not match the one that was expected")]

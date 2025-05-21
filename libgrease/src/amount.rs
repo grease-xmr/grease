@@ -12,6 +12,11 @@ pub struct MoneroAmount {
 }
 
 impl MoneroAmount {
+    /// Returns true if the amount is zero.
+    pub(crate) fn is_zero(&self) -> bool {
+        self.amount == 0
+    }
+
     /// Creates a new `MoneroAmount` from a value in piconero.
     pub fn from_piconero(amount: u64) -> Self {
         MoneroAmount { amount }
