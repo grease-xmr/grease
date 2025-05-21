@@ -32,13 +32,11 @@ pub fn new_network<P: PublicKey + 'static>(
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
         .with_behaviour(|key| {
-            // todo - take this from config
             let config = identify::Config::new("/grease-channel/id/1".to_string(), key.public())
                 .with_interval(Duration::from_secs(5 * 60));
             let identify = identify::Behaviour::new(config);
-            // todo - take this from config
             let config = RequestResponseConfig::default()
-                .with_request_timeout(Duration::from_secs(20))
+                .with_request_timeout(Duration::from_secs(60))
                 .with_max_concurrent_streams(2);
             let protocols = [(StreamProtocol::new("/grease-channel/comms/1"), ProtocolSupport::Full)];
             let json = json::Behaviour::new(protocols, config);

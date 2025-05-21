@@ -11,7 +11,7 @@ use futures::future::join;
 use futures::StreamExt;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::{KesInitializationRecord, KeyEscrowService};
+use libgrease::kes::{KesInitializationResult, KeyEscrowService};
 use libgrease::monero::data_objects::{
     MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
 };
@@ -110,7 +110,7 @@ where
     }
 
     pub async fn channel_status(&self, name: &str) -> Option<LifecycleStage> {
-        self.inner.channels.try_peek(name).await.map(|channel| channel.state().stage())
+        self.inner.channels.peek(name).await.map(|channel| channel.state().stage())
     }
 
     pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
@@ -153,7 +153,7 @@ where
                     Err(err) => warn!("😢 We cannot accept the channel creation terms: {err}"),
                 }
                 let name = channel.name();
-                // We add the channel evn if we're rejecting it, because the merchant may want to send messages related
+                // We add the channel even when rejecting it, because the merchant may want to send messages related
                 // to it, and we need to be able to remind ourselves of what happened.
                 self.add_channel(channel).await;
                 Ok(name)
@@ -319,11 +319,18 @@ where
                 self.customer_add_ms_key_and_split_secrets(envelope).await.unwrap_or_else(|early| early)
             }
             GreaseRequest::ConfirmMsAddress(envelope) => {
-                trace!("🖥️  Confirm multisig address request received");
+                trace!("🖥️  Customer: Confirm multisig address request received");
                 let (channel_name, confirmation) = envelope.open();
                 let response = self.compare_address_and_save_vss(&channel_name, confirmation).await.unwrap_or(false);
                 let envelope = MessageEnvelope::new(channel_name, response);
                 GreaseResponse::ConfirmMsAddress(envelope)
+            }
+            GreaseRequest::VerifyKes(envelope) => {
+                trace!("🖥️  Customer: Verify KES request received");
+                let (channel_name, kes_info) = envelope.open();
+                let response = self.verify_kes(&channel_name, kes_info).await.unwrap_or(false);
+                let envelope = MessageEnvelope::new(channel_name, response);
+                GreaseResponse::AcceptKes(envelope)
             }
         }
     }
@@ -363,7 +370,7 @@ where
         channel.wallet_preparation(|wallet_state| Box::pin(wallet_state.make_multisig(merchant_info))).await.map_err(
             |err| {
                 warn!("🖥️  Error making multisig wallet: {err}");
-                return GreaseResponse::MsInit(Err("Customer could not create wallet".into()));
+                GreaseResponse::MsInit(Err("Customer could not create wallet".into()))
             },
         )?;
         drop(channel);
@@ -386,16 +393,17 @@ where
             .await
             .map_err(|err| {
                 warn!("Error importing multisig keys: {err}");
-                return GreaseResponse::MsKeyExchange(Err("Customer could not import keys".into()));
+                GreaseResponse::MsKeyExchange(Err("Customer could not import keys".into()))
             })?;
+        drop(channel);
         trace!("🖥️  Customer: Peer multisig keys imported.");
 
         // Generate the VSS info that we return to the merchant
-        let secrets = self.get_vss_info(&name).await.map_err(|err| {
+        let secrets = self.get_vss_info_for_customer(&name).await.map_err(|err| {
             warn!("🖥️  Error getting VSS info: {err}");
             GreaseResponse::MsKeyExchange(Err("Customer could not get VSS info".into()))
         })?;
-        let shards_for_merchant = self.delegate.split_and_encrypt_keys(secrets).await.map_err(|err| {
+        let shards_for_merchant = self.delegate.create_vss(secrets).await.map_err(|err| {
             warn!("🖥️  Error splitting and encrypting keys: {err}");
             GreaseResponse::MsKeyExchange(Err("Customer could not split and encrypt keys".into()))
         })?;
@@ -410,7 +418,7 @@ where
             .ok_or_else(|| GreaseResponse::MsKeyExchange(Err("Customer could not generate MultisigKey".into())))?;
         channel.update_wallet_state(|state| state.save_peer_shards(shards_for_merchant.clone()));
 
-        let response = MsKeyAndVssInfo { multisig_key, shards_for_merchant: shards_for_merchant };
+        let response = MsKeyAndVssInfo { multisig_key, shards_for_merchant };
         trace!("🖥️ Customer: VSS complete. Responding to merchant.");
         let envelope = MessageEnvelope::new(name, response);
         Ok(GreaseResponse::MsKeyExchange(Ok(envelope)))
@@ -422,7 +430,7 @@ where
     /// Otherwise, it returns `false` and the merchant will close the channel.
     async fn compare_address_and_save_vss(&self, channel: &str, confirmation: WalletConfirmation) -> Option<bool> {
         let mut channel = self.channels.checkout(channel).await?;
-        let address = channel.wallet_state().ok()?.get_address().await?;
+        let address = channel.wallet_state().ok()?.get_address()?;
         let addresses_match = address == confirmation.address;
         if addresses_match {
             channel.update_wallet_state(|state| state.save_my_shards(confirmation.merchant_vss_info));
@@ -431,6 +439,28 @@ where
             warn!("🖥️  Customer: The derived address for the merchant's wallet doesn't match ours. This channel will be closed.");
         }
         Some(addresses_match)
+    }
+
+    async fn verify_kes(&self, channel: &str, kes_info: KesInitializationResult) -> Option<bool> {
+        let mut channel = self.channels.checkout(channel).await?;
+        channel
+            .save_kes_result(kes_info.clone())
+            .await
+            .map_err(|err| {
+                warn!("🖥️  Error saving KES result: {err}");
+            })
+            .ok()?;
+        let kes = self
+            .delegate
+            .with_kes()
+            .map_err(|e| warn!("🖥️  Customer: KES delegate function was not available: {e}"))
+            .ok()?;
+        let accepted = kes
+            .verify(kes_info)
+            .await
+            .map_err(|e| warn!("🖥️  Customer: KES delegate function did not return successfully: {e}"))
+            .ok()?;
+        Some(accepted)
     }
 
     //------------------------------ State machine handling functions (Merchant) ------------------------------------//
@@ -470,14 +500,14 @@ where
 
     async fn close_channel(&self, channel_name: String, reason: String) -> Result<(), ChannelServerError> {
         info!("🖥️  Closing channel {channel_name}. {reason}");
-        // TODO - complete this
+        // TODO - initiate co-operative channel closing
         Ok(())
     }
 
     /// Returns the channel metadata for the given channel name, if the current lifecycle state has the information
     /// available.
     async fn get_channel_metadata(&self, channel_name: &str) -> Option<ChannelMetadata<P>> {
-        let lock = self.channels.try_peek(channel_name).await?;
+        let lock = self.channels.peek(channel_name).await?;
         lock.state().channel_info().cloned()
     }
 
@@ -495,32 +525,19 @@ where
     }
 
     async fn establish_kes(&self, channel_name: &str) -> Result<(), ChannelServerError> {
-        let channel = self.channels.try_peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let kes_info =
             channel.state().kes_info().ok_or(ChannelServerError::InvalidState("KES info not available".to_string()))?;
         drop(channel);
-        let result = self.delegate.initialize_kes(kes_info).await.map_err(|err| ChannelServerError::KesError(err))?;
+        let result = self.delegate.initialize_kes(kes_info).await.map_err(ChannelServerError::KesError)?;
         let mut channel = self.channels.checkout(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        channel.save_kes_result(result)?;
+        channel.save_kes_result(result).await?;
         Ok(())
     }
 
     async fn create_funding_transaction(&self, channel_name: &str) -> Result<(), ChannelServerError> {
+        // todo: implement funding transaction creation
         Ok(())
-    }
-
-    async fn create_kes(&self, channel_name: String, init: KesInitializationRecord) -> NextAction {
-        debug!("🖥️  Initiating new KES for channel {channel_name}");
-        match self.delegate.initialize_kes(init).await {
-            Ok(kes_result) => {
-                info!("🖥️  KES initialized successfully");
-                NextAction::Continue
-            }
-            Err(err) => {
-                warn!("🖥️  KES initialization failed: {err}");
-                NextAction::Abort { channel_name, reason: "KES initialization failed".to_string() }
-            }
-        }
     }
 
     /// Creates a new multisig wallet and prepares it for use.
@@ -529,16 +546,16 @@ where
     /// The VSS record has also been sent to the customer.
     async fn prepare_multisig_wallet(&self, channel_name: &str) -> Result<(), ChannelServerError> {
         // Pre creation sanity checks and get the required channel info from the state machine
-        let (network, channel_id, peer) = self.pre_wallet_checks(&channel_name).await?;
+        let (network, channel_id, peer) = self.pre_wallet_checks(channel_name).await?;
         let (mut wallet_state, info) = Self::init_new_wallet(network, channel_name, &channel_id).await?;
         let mut client = self.network_client.clone();
         wallet_state = Self::share_init_info_with_peer(channel_name, &peer, wallet_state, &info, &mut client).await?;
         wallet_state = Self::share_key_info_with_peer(channel_name, &peer, &mut client, wallet_state).await?;
         wallet_state =
-            Self::confirm_wallet_address_and_share_vss(&self, channel_name, peer, wallet_state, &mut client).await?;
+            Self::confirm_wallet_address_and_share_vss(self, channel_name, peer, wallet_state, &mut client).await?;
         trace!("🖥️  Merchant: Address confirmed. Accepting new wallet and moving to next state");
-        let mut channel = self.channels.checkout(&channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         // Inject this wallet state machine
+        let mut channel = self.channels.checkout(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         channel.wallet_preparation(|_state| future::ready(wallet_state)).await?;
         channel.accept_new_wallet().await?;
         Ok(())
@@ -550,7 +567,7 @@ where
         channel_name: &str,
         channel_id: &ChannelId,
     ) -> Result<(WalletState<W>, MultiSigInitInfo), ChannelServerError> {
-        let wallet = W::new(&channel_id)?;
+        let wallet = W::new(channel_id)?;
         let mut wallet_state = WalletState::new(network, wallet);
         trace!("🖥️  Merchant: Preparing multisig wallet");
         wallet_state = wallet_state.prepare_multisig().await;
@@ -576,7 +593,7 @@ where
         let (peer_channel, peer_info) = client
             .send_multisig_init(peer.peer_id, channel_name.to_owned(), info.clone())
             .await?
-            .map_err(|s| ChannelServerError::PeerCommsError(s))?
+            .map_err(ChannelServerError::PeerCommsError)?
             .open();
 
         if peer_channel != channel_name {
@@ -607,7 +624,7 @@ where
         let (peer_channel, customer_keys) = client
             .send_multisig_key(peer.peer_id, channel_name.to_owned(), key)
             .await?
-            .map_err(|s| ChannelServerError::PeerCommsError(s))?
+            .map_err(ChannelServerError::PeerCommsError)?
             .open();
 
         if peer_channel != channel_name {
@@ -628,29 +645,27 @@ where
         &self,
         channel_name: &str,
         peer: ContactInfo,
-        wallet_state: WalletState<W>,
+        mut wallet_state: WalletState<W>,
         client: &mut Client<P>,
     ) -> Result<WalletState<W>, ChannelServerError> {
         trace!("🖥️  Merchant: Fetching address");
-        let address = wallet_state.get_address().await.ok_or_else(|| {
-            ChannelServerError::InvalidState(format!("Channel {channel_name}'s wallet state is not 'Prepared'"))
+        let address = wallet_state.get_address().ok_or_else(|| {
+            ChannelServerError::InvalidState(format!(
+                "No address. {channel_name}'s wallet has not generated a keypair yet."
+            ))
         })?;
-        let secrets = self.get_vss_info(&channel_name).await?;
+        trace!("🖥️  Merchant: Getting VSS input record for {channel_name}.");
+        let secrets = self.get_vss_info_for_merchant(channel_name, &wallet_state).await?;
+        trace!("🖥️  Merchant: Creating VSS shards for customer for {channel_name}.");
         let shards_for_customer = self.create_vss(secrets).await?;
-
-        let mut channel = self.channels.checkout(&channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        channel.update_wallet_state(|state| state.save_peer_shards(shards_for_customer.clone()));
-        drop(channel);
-
-        trace!(
-            "🖥️  Merchant: Sending wallet confirmation for {} to customer",
-            address.to_string()
-        );
+        trace!("🖥️  Merchant: Saving customer shards locally.");
+        wallet_state = wallet_state.save_peer_shards(shards_for_customer.clone());
+        trace!("🖥️  Merchant: Sending wallet confirmation for {address} to customer");
         let confirmation = WalletConfirmation { address, merchant_vss_info: shards_for_customer };
         let (peer_channel, addresses_match) = client
             .confirm_multisig_address(peer.peer_id, channel_name.to_owned(), confirmation)
             .await?
-            .map_err(|s| ChannelServerError::PeerCommsError(s))?
+            .map_err(ChannelServerError::PeerCommsError)?
             .open();
         if peer_channel != channel_name {
             return Err(ChannelServerError::PeerCommsError(format!(
@@ -667,17 +682,35 @@ where
 
     // ------------------------------   State machine handling functions (Common)   ----------------------------------//
 
-    async fn get_vss_info(&self, channel_name: &str) -> Result<ChannelInitSecrets<P>, ChannelServerError> {
-        let channel = self.channels.try_peek(&channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        let vss_info = match channel.state() {
-            ChannelLifeCycle::WalletCreated(state) => state.vss_info(),
-            _ => {
-                return Err(ChannelServerError::InvalidState(format!(
-                    "Channel {channel_name} is not in the WalletCreated state"
-                )))
-            }
-        }?;
+    async fn get_vss_info_for_customer(&self, channel_name: &str) -> Result<ChannelInitSecrets<P>, ChannelServerError> {
+        let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let vss_info = channel.state().vss_info().ok_or(ChannelServerError::ChannelNotFound)?;
         Ok(vss_info)
+    }
+
+    async fn get_vss_info_for_merchant(
+        &self,
+        name: &str,
+        state: &WalletState<W>,
+    ) -> Result<ChannelInitSecrets<P>, ChannelServerError> {
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let (kes_public_key, peer_public_key) = channel
+            .state()
+            .channel_info()
+            .ok_or(ChannelServerError::InvalidState(format!(
+                "Channel {name} is not carrying ChannelMetadata"
+            )))
+            .map(|info| (info.kes_public_key.clone(), info.customer_pubkey.clone()))?;
+        let wallet_secret = state.keypair().cloned().ok_or(ChannelServerError::InvalidState(format!(
+            "Channel {name} is not carrying a wallet secret"
+        )))?;
+        let channel_name = name.to_owned();
+        Ok(ChannelInitSecrets::new(
+            channel_name,
+            wallet_secret,
+            peer_public_key,
+            kes_public_key,
+        ))
     }
 
     async fn create_vss(&self, vss_info: ChannelInitSecrets<P>) -> Result<VssOutput, ChannelServerError> {
@@ -746,8 +779,7 @@ where
         &self,
         channel_name: &str,
     ) -> Result<(Network, ChannelId, ContactInfo), ChannelServerError> {
-        trace!("Peeking at channel {channel_name}");
-        match self.channels.try_peek(channel_name).await {
+        match self.channels.peek(channel_name).await {
             Some(channel) => match channel.state() {
                 ChannelLifeCycle::Establishing(state) => {
                     let role = state.channel_info.role;

@@ -191,8 +191,9 @@ where
         self.handle_event(LifeCycleEvent::OnMultiSigWalletCreated).await
     }
 
-    pub fn save_kes_result(&mut self, kes: KesInitializationResult) -> Result<(), LifeCycleError> {
-        todo!("Check correct state and store the KES record")
+    pub async fn save_kes_result(&mut self, kes: KesInitializationResult) -> Result<(), LifeCycleError> {
+        let event = LifeCycleEvent::OnKesCreated(Box::new(kes));
+        self.handle_event(event).await
     }
 }
 
@@ -264,6 +265,7 @@ where
     /// Add a new channel to the list of channels.
     pub async fn add(&self, channel: PaymentChannel<P, C, W, KES>) {
         let key = channel.name();
+        trace!("Adding channel {key}");
         let channel = Arc::new(RwLock::new(channel));
         let mut lock = self.channels.write().await;
         if lock.insert(key.clone(), channel).is_some() {
@@ -275,30 +277,32 @@ where
     /// If the channel is already checked out, this method will block until the channel is available.
     /// If the channel does not exist, `checkout` returns None.
     pub async fn checkout(&self, channel_name: &str) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>> {
+        trace!("Trying to check out channel {channel_name}");
         let lock = self.channels.read().await;
         match lock.get(channel_name) {
             Some(lock) => {
                 let channel = lock.clone().write_owned().await;
+                trace!("Check out channel {channel_name} success");
                 Some(channel)
             }
             None => None,
         }
     }
 
-    /// Try and check the channel out for writing.
-    ///
-    /// If it does not exist or is already checked out, this method will return None.
-    pub async fn try_checkout(
-        &self,
-        channel_name: &str,
-    ) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>> {
-        let lock = self.channels.read().await;
-        lock.get(channel_name).cloned().and_then(|lock| lock.try_write_owned().ok())
-    }
-
-    pub async fn try_peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel<P, C, W, KES>>> {
-        let lock = self.channels.read().await;
-        lock.get(channel_name).cloned().and_then(|lock| lock.try_read_owned().ok())
+    pub async fn peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel<P, C, W, KES>>> {
+        trace!("Trying to peek at channel {channel_name}");
+        let map_lock = self.channels.read().await;
+        match map_lock.get(channel_name) {
+            Some(lock) => {
+                let channel = lock.clone().read_owned().await;
+                trace!("Peek for {channel_name} success");
+                Some(channel)
+            }
+            None => {
+                trace!("Channel {channel_name} not found");
+                None
+            }
+        }
     }
 
     /// Stores the in-memory channels to the configured channel directory, overwriting any existing files.

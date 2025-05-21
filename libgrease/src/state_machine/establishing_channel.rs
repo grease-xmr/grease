@@ -1,7 +1,7 @@
 use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
-use crate::kes::{KeyEscrowService, PartialEncryptedKey};
+use crate::kes::{KesInitializationRecord, KesInitializationResult, KeyEscrowService, PartialEncryptedKey};
 use crate::monero::error::MoneroWalletError;
 use crate::monero::{MoneroKeyPair, MultiSigWallet, WalletState};
 use crate::payment_channel::ActivePaymentChannel;
@@ -139,6 +139,11 @@ where
         serialize_with = "crate::monero::helpers::serialize_keypair"
     )]
     pub wallet_secret: MoneroKeyPair,
+    /// The encrypted secrets of *my* multisig wallet spend key
+    pub peer_shards: VssOutput,
+    /// The encrypted secrets of *my peer's* multisig wallet spend key
+    pub my_shards: VssOutput,
+    pub kes_verify_info: Option<KesInitializationResult>,
     pub wallet: W,
 }
 
@@ -173,10 +178,34 @@ where
         };
         Ok(ChannelInitSecrets {
             channel_name: self.name(),
-            wallet_secret: self.wallet_secret.clone(),
+            wallet_secret: self.wallet_secret,
             peer_public_key,
             kes_public_key: self.channel_info.kes_public_key.clone(),
         })
+    }
+
+    /// Returns a records that can be used to interact and/or verify the KES state, if it has been created.
+    pub fn kes_verify_info(&self) -> Option<&KesInitializationResult> {
+        self.kes_verify_info.as_ref()
+    }
+
+    /// Returns the struct that can be passed to the delegate so that it can create the KES
+    pub fn kes_init_info(&self) -> KesInitializationRecord<P> {
+        let (merchant_key, customer_key) = match self.channel_info.role {
+            ChannelRole::Merchant => (self.my_shards.kes_shard.clone(), self.peer_shards.kes_shard.clone()),
+            ChannelRole::Customer => (self.peer_shards.kes_shard.clone(), self.my_shards.kes_shard.clone()),
+        };
+        KesInitializationRecord {
+            kes_public_key: self.channel_info.kes_public_key.clone(),
+            channel_id: self.channel_info.channel_id.name(),
+            initial_balances: self.channel_info.initial_balances,
+            merchant_key,
+            customer_key,
+        }
+    }
+
+    pub fn save_kes_verify_info(&mut self, kes_verify_info: KesInitializationResult) {
+        self.kes_verify_info = Some(kes_verify_info);
     }
 }
 
@@ -190,8 +219,29 @@ where
     KES: KeyEscrowService,
 {
     pub channel_info: ChannelMetadata<P>,
+    #[serde(
+        deserialize_with = "crate::monero::helpers::deserialize_keypair",
+        serialize_with = "crate::monero::helpers::serialize_keypair"
+    )]
+    pub wallet_secret: MoneroKeyPair,
+    /// The encrypted secrets of *my* multisig wallet spend key
+    pub peer_shards: PartialEncryptedKey,
+    /// The encrypted secrets of *my peer's* multisig wallet spend key
+    pub my_shards: PartialEncryptedKey,
+    pub kes_info: KesInitializationRecord<P>,
     pub wallet: W,
     pub kes: KES,
+}
+
+impl<P, W, KES> KesVerifiedState<P, W, KES>
+where
+    P: PublicKey,
+    W: MultiSigWallet,
+    KES: KeyEscrowService,
+{
+    pub fn kes_info(&self) -> KesInitializationRecord<P> {
+        self.kes_info.clone()
+    }
 }
 
 impl<P, W, KES> ChannelState for KesVerifiedState<P, W, KES>
@@ -255,11 +305,20 @@ where
 {
     pub channel_name: String,
     /// My portion of the 2-of-2 multisig secret that needs to be split
-    wallet_secret: MoneroKeyPair,
+    pub wallet_secret: MoneroKeyPair,
     /// The public key of the peer
     pub peer_public_key: P,
     /// The public key of the KES. One secret shard will be encrypted to this key.
     pub kes_public_key: P,
+}
+
+impl<P> ChannelInitSecrets<P>
+where
+    P: PublicKey,
+{
+    pub fn new(channel_name: String, wallet_secret: MoneroKeyPair, peer_public_key: P, kes_public_key: P) -> Self {
+        ChannelInitSecrets { channel_name, wallet_secret, peer_public_key, kes_public_key }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -31,19 +31,13 @@ where
 
     fn initialize_kes(
         &self,
-        init: KesInitializationRecord,
+        init: KesInitializationRecord<P>,
     ) -> impl Future<Output = Result<KesInitializationResult, KesError>> + Send {
-        let fut = async move {
+        async move {
             let kes = self.with_kes()?;
             kes.initialize(init).await
-        };
-        fut
+        }
     }
-
-    fn split_and_encrypt_keys(
-        &self,
-        secrets: ChannelInitSecrets<P>,
-    ) -> impl Future<Output = Result<VssOutput, KesError>> + Send;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -73,19 +67,6 @@ impl GreaseChannelDelegate<Curve25519PublicKey, DummyActiveChannel, DummyWallet,
 
     fn with_kes(&self) -> Result<&DummyKes, KesError> {
         Ok(&self.kes)
-    }
-
-    fn split_and_encrypt_keys(
-        &self,
-        secrets: ChannelInitSecrets<Curve25519PublicKey>,
-    ) -> impl Future<Output = Result<VssOutput, KesError>> + Send {
-        async {
-            let result = VssOutput {
-                peer_shard: PartialEncryptedKey("DemoEncryptedKeyForPeer".to_string()),
-                kes_shard: PartialEncryptedKey("DemoEncryptedKeyForKes".to_string()),
-            };
-            Ok(result)
-        }
     }
 }
 

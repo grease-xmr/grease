@@ -9,11 +9,11 @@ where
     if encoded.len() != 128 {
         return Err(serde::de::Error::custom("Invalid length"));
     }
-    let mut bytes = hex::decode(encoded).map_err(serde::de::Error::custom)?;
-    let spend = PrivateKey::from_slice(&mut bytes[0..32])
-        .map_err(|_| serde::de::Error::custom("Invalid spend key encoding"))?;
-    let view = PrivateKey::from_slice(&mut bytes[32..64])
-        .map_err(|_| serde::de::Error::custom("Invalid view key encoding"))?;
+    let bytes = hex::decode(encoded).map_err(serde::de::Error::custom)?;
+    let spend =
+        PrivateKey::from_slice(&bytes[0..32]).map_err(|_| serde::de::Error::custom("Invalid spend key encoding"))?;
+    let view =
+        PrivateKey::from_slice(&bytes[32..64]).map_err(|_| serde::de::Error::custom("Invalid view key encoding"))?;
     Ok(KeyPair { spend, view })
 }
 
@@ -22,8 +22,8 @@ where
     S: serde::Serializer,
 {
     let mut bytes = [0u8; 64];
-    bytes[0..32].copy_from_slice(&key.spend.as_bytes());
-    bytes[32..64].copy_from_slice(&key.view.as_bytes());
+    bytes[0..32].copy_from_slice(key.spend.as_bytes());
+    bytes[32..64].copy_from_slice(key.view.as_bytes());
     let encoded = hex::encode(bytes);
     s.serialize_str(&encoded)
 }
