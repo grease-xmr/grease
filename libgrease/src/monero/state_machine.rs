@@ -4,8 +4,8 @@ use crate::monero::data_objects::{MoneroAddress, MultiSigInitInfo, MultisigKeyIn
 use crate::monero::error::MoneroWalletError;
 use crate::monero::{MoneroKeyPair, MultiSigWallet};
 use crate::state_machine::VssOutput;
-use log::trace;
-use monero::{KeyPair, Network};
+use log::*;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 
 /// ```mermaid
@@ -78,16 +78,6 @@ where
         }
     }
 
-    pub(crate) fn keypair(&self) -> Option<&KeyPair> {
-        match self {
-            WalletState::Preparation(_) => None,
-            WalletState::Prepared(w) => Some(&w.keypair),
-            WalletState::MultisigMade(w) => Some(&w.keypair),
-            WalletState::Ready(w) => Some(&w.keypair),
-            WalletState::Aborted(_) => None,
-        }
-    }
-
     pub async fn prepare_multisig(self) -> Self {
         match self {
             WalletState::Preparation(state) => state.prepare_multisig().await,
@@ -126,11 +116,10 @@ where
     }
 
     /// Get the address of the wallet. If the wallet is not ready, return None.
-    pub async fn get_address(&self) -> Option<MoneroAddress> {
-        match self {
-            WalletState::Ready(w) => Some(w.wallet().get_address().await),
-            _ => None,
-        }
+    pub fn get_address(&self) -> Option<MoneroAddress> {
+        let wallet = self.wallet();
+        let network = self.network();
+        self.keypair().map(|key| wallet.address_from_keypair(network, key))
     }
 
     pub fn init_info(&self) -> Option<&MultiSigInitInfo> {
@@ -171,6 +160,16 @@ where
         }
     }
 
+    pub fn wallet(&self) -> &W {
+        match self {
+            WalletState::Preparation(w) => &w.wallet,
+            WalletState::Prepared(w) => &w.wallet,
+            WalletState::MultisigMade(w) => &w.wallet,
+            WalletState::Ready(w) => &w.wallet,
+            WalletState::Aborted(w) => &w.wallet,
+        }
+    }
+
     pub fn to_wallet(self) -> W {
         match self {
             WalletState::Preparation(w) => w.wallet,
@@ -178,6 +177,16 @@ where
             WalletState::MultisigMade(w) => w.wallet,
             WalletState::Ready(w) => w.wallet,
             WalletState::Aborted(w) => w.wallet,
+        }
+    }
+
+    pub fn keypair(&self) -> Option<&MoneroKeyPair> {
+        match self {
+            WalletState::Preparation(_) => None,
+            WalletState::Prepared(p) => Some(&p.keypair),
+            WalletState::MultisigMade(w) => Some(&w.keypair),
+            WalletState::Ready(w) => Some(&w.keypair),
+            WalletState::Aborted(_) => None,
         }
     }
 }
@@ -285,6 +294,7 @@ impl<W: MultiSigWallet> MadeWallet<W> {
     }
 
     pub fn save_my_shards(mut self, my_shards: VssOutput) -> WalletState<W> {
+        trace!("Wallet state machine: Save my shards");
         if self.imported_multisigkeys && self.peer_shards.is_some() {
             WalletState::Ready(ReadyWallet::new(
                 self.network,
@@ -301,6 +311,7 @@ impl<W: MultiSigWallet> MadeWallet<W> {
     }
 
     pub fn save_peer_shards(mut self, peer_shards: VssOutput) -> WalletState<W> {
+        trace!("Wallet state machine: Save peer shards");
         if self.imported_multisigkeys && self.my_shards.is_some() {
             WalletState::Ready(ReadyWallet::new(
                 self.network,
@@ -311,6 +322,11 @@ impl<W: MultiSigWallet> MadeWallet<W> {
                 self.my_shards.unwrap(),
             ))
         } else {
+            trace!(
+                "Wallet state machine: Saving peer shards. MY shards saved: {}, keys imported: {}",
+                self.my_shards.is_some(),
+                self.imported_multisigkeys
+            );
             self.peer_shards = Some(peer_shards);
             WalletState::MultisigMade(self)
         }
@@ -321,10 +337,15 @@ impl<W: MultiSigWallet> MadeWallet<W> {
         let import_result = self.wallet.prep_import_ms_keys(peer_info).await;
         match (import_result, self.my_shards.is_some() && self.peer_shards.is_some()) {
             (Ok(()), false) => {
+                debug!(
+                    "👛 Multisig partial key imported, but the wallet is not ready yet. Waiting on VSS share \
+                information."
+                );
                 self.imported_multisigkeys = true;
                 WalletState::MultisigMade(self)
             }
             (Ok(()), true) => {
+                debug!("👛 Multisig wallet is Ready. All keys shared and secret shards created.");
                 let my_shards = self.my_shards.expect("we've just checked that my_shards exist");
                 let peer_shards = self.peer_shards.expect("we've just checked that peer_shards exist");
                 WalletState::Ready(ReadyWallet::new(
@@ -345,22 +366,24 @@ impl<W: MultiSigWallet> MadeWallet<W> {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "W: MultiSigWallet + for<'d> Deserialize<'d>"))]
 pub struct ReadyWallet<W: MultiSigWallet> {
-    peer_partial_key: MultisigKeyInfo,
+    /// The partial key of my peer. used in setting up the multisig wallet
+    pub(crate) peer_partial_key: MultisigKeyInfo,
     #[serde(
         deserialize_with = "crate::monero::helpers::deserialize_keypair",
         serialize_with = "crate::monero::helpers::serialize_keypair"
     )]
-    keypair: MoneroKeyPair,
+    /// My 1-of-2 spend key for the channel wallet
+    pub(crate) keypair: MoneroKeyPair,
     #[serde(
         deserialize_with = "crate::monero::helpers::deserialize_network",
         serialize_with = "crate::monero::helpers::serialize_network"
     )]
-    network: Network,
+    pub(crate) network: Network,
     /// The encrypted secrets of *my* multisig wallet spend key
-    peer_shards: VssOutput,
+    pub(crate) peer_shards: VssOutput,
     /// The encrypted secrets of *my peer's* multisig wallet spend key
-    my_shards: VssOutput,
-    wallet: W,
+    pub(crate) my_shards: VssOutput,
+    pub(crate) wallet: W,
 }
 
 impl<W: MultiSigWallet> ReadyWallet<W> {
@@ -372,7 +395,7 @@ impl<W: MultiSigWallet> ReadyWallet<W> {
         peer_shards: VssOutput,
         my_shards: VssOutput,
     ) -> Self {
-        trace!("Wallet state machine: New ready wallet created");
+        trace!("👛 Wallet state machine: New ready wallet created");
         Self { network, wallet, peer_partial_key, keypair, peer_shards, my_shards }
     }
 
@@ -384,7 +407,7 @@ impl<W: MultiSigWallet> ReadyWallet<W> {
         let address = monero::Address::from_keypair(self.network, &self.keypair);
         WalletInfo {
             address,
-            keypair: self.keypair.clone(),
+            keypair: self.keypair,
             peer_vss_info: self.peer_shards.clone(),
             my_vss_info: self.my_shards.clone(),
         }

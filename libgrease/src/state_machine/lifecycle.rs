@@ -1,7 +1,7 @@
 use crate::crypto::traits::PublicKey;
-use crate::kes::{KesInitializationRecord, KeyEscrowService};
+use crate::kes::{KesInitializationRecord, KesInitializationResult, KeyEscrowService};
 use crate::monero::data_objects::TransactionId;
-use crate::monero::MultiSigWallet;
+use crate::monero::{MultiSigWallet, WalletState};
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::closed_channel::ClosedChannelState;
 use crate::state_machine::closing_channel::{ClosingChannelState, StartCloseInfo, SuccessfulCloseInfo};
@@ -13,7 +13,7 @@ use crate::state_machine::establishing_channel::{
 use crate::state_machine::new_channel::{NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason};
 use crate::state_machine::open_channel::{ChannelUpdateInfo, EstablishedChannelState, UpdateResult};
 use crate::state_machine::traits::ChannelState;
-use crate::state_machine::ChannelClosedReason;
+use crate::state_machine::{ChannelClosedReason, ChannelInitSecrets};
 use log::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -49,6 +49,7 @@ where
     OnRejectNewChannel(Box<RejectNewChannelReason>),
     OnTimeout(Box<TimeoutReason>),
     OnMultiSigWalletCreated,
+    OnKesCreated(Box<KesInitializationResult>),
     OnKesVerified(Box<KES>),
     OnFundingTxConfirmed(Box<TransactionId>),
     OnUpdateChannel(Box<ChannelUpdateInfo<C>>),
@@ -68,8 +69,9 @@ where
         match self {
             LifeCycleEvent::OnAckNewChannel(_) => write!(f, "OnAckNewChannel"),
             LifeCycleEvent::OnTimeout(_) => write!(f, "OnTimeout"),
-            LifeCycleEvent::OnMultiSigWalletCreated => write!(f, "MultiSigWalletCreated"),
-            LifeCycleEvent::OnKesVerified(_) => write!(f, "MultiSigWalletCreated"),
+            LifeCycleEvent::OnMultiSigWalletCreated => write!(f, "OnMultiSigWalletCreated"),
+            LifeCycleEvent::OnKesCreated(_) => write!(f, "OnKesCreated"),
+            LifeCycleEvent::OnKesVerified(_) => write!(f, "OnKesVerified"),
             LifeCycleEvent::OnFundingTxConfirmed(_) => write!(f, "FundingTxConfirmed"),
             LifeCycleEvent::OnUpdateChannel(_) => write!(f, "OnUpdateChannel"),
             LifeCycleEvent::OnStartClose(_) => write!(f, "OnStartClose"),
@@ -210,26 +212,47 @@ where
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
         let state = *establishing_state;
-        let wallet_secret =
-            state.wallet_state.as_ref().and_then(|wallet_state| wallet_state.keypair()).cloned().ok_or_else(|| {
-                (
-                    Self::Establishing(Box::new(state.clone())),
-                    LifeCycleError::InvalidStateTransition,
-                )
-            })?;
+        if !matches!(&state.wallet_state, Some(WalletState::Ready(_))) {
+            warn!("Wallet not ready, cannot transition to WalletCreated");
+            return Err((Self::Establishing(Box::new(state)), LifeCycleError::InvalidStateTransition));
+        }
+        let (wallet_secret, peer_shards, my_shards, wallet) =
+            if let Some(WalletState::Ready(ready_state)) = state.wallet_state {
+                let wallet_secret = ready_state.keypair;
+                let peer_shards = ready_state.peer_shards;
+                let my_shards = ready_state.my_shards;
+                let wallet = ready_state.wallet;
+                (wallet_secret, peer_shards, my_shards, wallet)
+            } else {
+                panic!("Wallet not ready, but we've just checked it");
+            };
         let channel_info = state.channel_info;
-        let wallet = state.wallet_state.expect("wallet state MUST contain a wallet").to_wallet();
-        let wallet_created = WalletCreatedState { channel_info, wallet, wallet_secret };
+        let wallet_created =
+            WalletCreatedState { channel_info, wallet, wallet_secret, peer_shards, my_shards, kes_verify_info: None };
         let new_state = ChannelLifeCycle::WalletCreated(Box::new(wallet_created));
         Ok(new_state)
+    }
+
+    fn save_kes_info(self, kes: KesInitializationResult) -> Result<Self, (Self, LifeCycleError)> {
+        let Self::WalletCreated(mut wallet_created_state) = self else {
+            warn!("Cannot save KES information before Wallet has been created");
+            return Err((self, LifeCycleError::InvalidStateTransition));
+        };
+        wallet_created_state.save_kes_verify_info(kes);
+        Ok(Self::WalletCreated(wallet_created_state))
     }
 
     fn wallet_created_to_kes_verified(self, kes: KES) -> Result<Self, (Self, LifeCycleError)> {
         let Self::WalletCreated(wallet_created_state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
+        let kes_info = wallet_created_state.kes_init_info();
         let kes_verified = KesVerifiedState {
             channel_info: wallet_created_state.channel_info,
+            wallet_secret: wallet_created_state.wallet_secret,
+            peer_shards: wallet_created_state.peer_shards.peer_shard,
+            my_shards: wallet_created_state.my_shards.kes_shard,
+            kes_info,
             wallet: wallet_created_state.wallet,
             kes,
         };
@@ -367,6 +390,7 @@ where
             (New, OnRejectNewChannel(reason)) => self.reject_new_channel(*reason),
             (New | Establishing | WalletCreated | KesVerified, OnTimeout(reason)) => self.timeout(*reason),
             (Establishing, OnMultiSigWalletCreated) => self.establishing_to_wallet_created(),
+            (WalletCreated, OnKesCreated(kes)) => self.save_kes_info(*kes),
             (WalletCreated, OnKesVerified(kes)) => self.wallet_created_to_kes_verified(*kes),
             (KesVerified, OnFundingTxConfirmed(txid)) => self.kes_verified_to_open(*txid),
             (Open, OnUpdateChannel(info)) => self.update_channel(*info),
@@ -416,13 +440,38 @@ where
         }
     }
 
-    pub fn kes_info(&self) -> Option<KesInitializationRecord> {
-        // match self {
-        //     ChannelLifeCycle::WalletCreated(state) => state.kes_info(),
-        //     ChannelLifeCycle::KesVerified(state) => state.kes_info(),
-        //     _ => None,
-        // }
-        todo!()
+    pub fn vss_info(&self) -> Option<ChannelInitSecrets<P>> {
+        trace!("VSS info retrieval");
+        let (channel_name, peer_public_key, kes_public_key) = self.channel_info().map(|info| {
+            let peer_pubkey = match info.role() {
+                ChannelRole::Customer => info.merchant_pubkey.clone(),
+                ChannelRole::Merchant => info.customer_pubkey.clone(),
+            };
+            (info.channel_id.name(), peer_pubkey, info.kes_public_key.clone())
+        })?;
+        trace!("VSS info retrieval: Channel info covered.");
+        let wallet_secret = *match self {
+            ChannelLifeCycle::Establishing(state) => state.wallet_state.as_ref().and_then(|w| w.keypair()),
+            ChannelLifeCycle::WalletCreated(state) => Some(&state.wallet_secret),
+            _ => {
+                warn!("Trying to read VSS info and in particular, the wallet keypair from an incompatible state.");
+                None
+            }
+        }?;
+        Some(ChannelInitSecrets::new(
+            channel_name,
+            wallet_secret,
+            peer_public_key,
+            kes_public_key,
+        ))
+    }
+
+    pub fn kes_info(&self) -> Option<KesInitializationRecord<P>> {
+        match self {
+            ChannelLifeCycle::WalletCreated(state) => Some(state.kes_init_info()),
+            ChannelLifeCycle::KesVerified(state) => Some(state.kes_info()),
+            _ => None,
+        }
     }
 }
 

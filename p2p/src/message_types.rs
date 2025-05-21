@@ -3,6 +3,7 @@ use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
+use libgrease::kes::KesInitializationResult;
 use libgrease::monero::data_objects::{
     MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
 };
@@ -25,9 +26,12 @@ pub enum GreaseRequest<P: PublicKey> {
     MsInit(MessageEnvelope<MultiSigInitInfo>),
     /// The merchant sends its multisig wallet key and expects the keys and split secrets as a response (Prep phase).
     MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
-    /// The merchant wants customer to confirm that the wallet is created corectly by checking the address of the
+    /// The merchant wants customer to confirm that the wallet is created correctly by checking the address of the
     /// 2-of-2 wallet, and send over the split secrets at the same time (Final prep phase).
     ConfirmMsAddress(MessageEnvelope<WalletConfirmation>),
+    /// The merchant has established the KES and is giving the customer the opportunity to verify and then
+    /// accept/reject it.
+    VerifyKes(MessageEnvelope<KesInitializationResult>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -43,6 +47,7 @@ pub enum GreaseResponse<P: PublicKey> {
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(MessageEnvelope<bool>),
+    AcceptKes(MessageEnvelope<bool>),
     ChannelClosed,
     ChannelNotFound,
     Error(String),
@@ -75,6 +80,10 @@ where
                 let status = if env.payload { "OK" } else { "NOT OK" };
                 write!(f, "Multisig address confirmation: {status}")
             }
+            GreaseResponse::AcceptKes(env) => {
+                let status = if env.payload { "ACCEPTED" } else { "DID NOT ACCEPT" };
+                write!(f, "KES verification. Customer {status} the KES.")
+            }
             GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
             GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
         }
@@ -91,6 +100,7 @@ where
             GreaseRequest::MsInit(env) => env.channel_name(),
             GreaseRequest::MsKeyExchange(env) => env.channel_name(),
             GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
+            GreaseRequest::VerifyKes(env) => env.channel_name(),
         }
     }
 }
@@ -139,26 +149,22 @@ pub enum ClientCommand<P: PublicKey> {
     },
     KesReadyNotification {
         peer_id: PeerId,
-        kes_ready: usize, // todo
-        sender: oneshot::Sender<AckKesNotification>,
-    },
-    AckKesReadyNotification {
-        res: AckKesNotification,
-        channel: ResponseChannel<GreaseResponse<P>>,
+        envelope: MessageEnvelope<KesInitializationResult>,
+        sender: oneshot::Sender<Result<MessageEnvelope<bool>, String>>,
     },
     FundingTxRequestStart {
         peer_id: PeerId,
-        funding_tx: usize, // todo
+        funding_tx: usize, // todo: FundingTxRequestStart
         sender: oneshot::Sender<FundingTxStartResponse>,
     },
     FundingTxFinalizeRequest {
         peer_id: PeerId,
-        funding_tx: usize, // todo
+        funding_tx: usize, // todo: FundingTxFinalizeRequest
         sender: oneshot::Sender<FundingTxFinalizeResponse>,
     },
     FundingTxBroadcastNotification {
         peer_id: PeerId,
-        funding_tx: usize, // todo
+        funding_tx: usize, // todo: FundingTxBroadcastNotification
         sender: oneshot::Sender<AckFundingTxBroadcast>,
     },
     AckFundingTxBroadcastNotification {
@@ -181,9 +187,6 @@ pub struct FundingTxFinalizeResponse;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AckFundingTxBroadcast;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AckKesNotification;
 
 #[derive(Debug)]
 pub enum PeerConnectionEvent<P: PublicKey> {

@@ -78,7 +78,7 @@ pub struct EventLoop<P: PublicKey + 'static> {
         HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<MultiSigInitInfo>, String>>>,
     pending_multisig_keys:
         HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<MsKeyAndVssInfo>, String>>>,
-    pending_address_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<bool>, String>>>,
+    pending_boolean_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<bool>, String>>>,
     pending_shutdown: Option<oneshot::Sender<bool>>,
     status: AtomicUsize,
     connections: HashSet<ConnectionId>,
@@ -98,7 +98,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
             pending_new_channel_proposals: Default::default(),
             pending_multisig_inits: Default::default(),
             pending_multisig_keys: Default::default(),
-            pending_address_confirmations: Default::default(),
+            pending_boolean_confirmations: Default::default(),
             pending_shutdown: None,
             status: AtomicUsize::new(RUNNING),
             connections: Default::default(),
@@ -281,12 +281,20 @@ impl<P: PublicKey + Send> EventLoop<P> {
                         let _ = sender.send(key);
                     }
                     GreaseResponse::ConfirmMsAddress(confirmed) => {
-                        let pending = self.pending_address_confirmations.remove(&request_id);
+                        let pending = self.pending_boolean_confirmations.remove(&request_id);
                         let Some(sender) = pending else {
                             error!("Received response for unknown multisig address confirmation request. Request id: {request_id}");
                             return;
                         };
                         let _ = sender.send(Ok(confirmed));
+                    }
+                    GreaseResponse::AcceptKes(accepted) => {
+                        let pending = self.pending_boolean_confirmations.remove(&request_id);
+                        let Some(sender) = pending else {
+                            error!("Received response for unknown accept kes request. Request id: {request_id}");
+                            return;
+                        };
+                        let _ = sender.send(Ok(accepted));
                     }
                     GreaseResponse::ChannelClosed => {}
                     GreaseResponse::ChannelNotFound => {}
@@ -324,7 +332,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
         if let Some(sender) = self.pending_multisig_keys.remove(&request_id) {
             let _ = sender.send(Err(format!("Outbound request failed: {error}")));
         }
-        if let Some(sender) = self.pending_address_confirmations.remove(&request_id) {
+        if let Some(sender) = self.pending_boolean_confirmations.remove(&request_id) {
             let _ = sender.send(Err(format!("Outbound request failed: {error}")));
         }
     }
@@ -653,11 +661,15 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
                 let id =
                     self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ConfirmMsAddress(envelope));
-                self.pending_address_confirmations.insert(id, sender);
+                self.pending_boolean_confirmations.insert(id, sender);
                 Ok(())
             }
-            ClientCommand::KesReadyNotification { .. } => Err(()),
-            ClientCommand::AckKesReadyNotification { .. } => Err(()),
+            ClientCommand::KesReadyNotification { peer_id, envelope, sender } => {
+                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
+                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::VerifyKes(envelope));
+                self.pending_boolean_confirmations.insert(id, sender);
+                Ok(())
+            }
             ClientCommand::FundingTxRequestStart { .. } => Err(()),
             ClientCommand::FundingTxFinalizeRequest { .. } => Err(()),
             ClientCommand::FundingTxBroadcastNotification { .. } => Err(()),
