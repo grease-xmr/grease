@@ -261,7 +261,7 @@ where
         Ok(new_state)
     }
 
-    fn kes_verified_to_open(mut self, tx: FundingTransaction) -> Result<Self, (Self, LifeCycleError)> {
+    fn kes_verified_to_open(self, tx: FundingTransaction) -> Result<Self, (Self, LifeCycleError)> {
         let Self::KesVerified(mut state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
