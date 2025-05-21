@@ -1,4 +1,6 @@
 use crate::crypto::traits::PublicKey;
+use crate::monero::data_objects::TransactionId;
+use crate::payment_channel::ChannelRole;
 use crate::state_machine::Balances;
 use serde::{Deserialize, Serialize};
 
@@ -26,5 +28,17 @@ pub struct KesInitializationResult {
 impl From<String> for KesId {
     fn from(channel_id: String) -> Self {
         KesId(channel_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingTransaction {
+    pub role: ChannelRole,
+    pub transaction_id: TransactionId,
+}
+
+impl FundingTransaction {
+    pub fn new(role: ChannelRole, txid: impl Into<String>) -> Self {
+        FundingTransaction { role, transaction_id: TransactionId::new(txid) }
     }
 }

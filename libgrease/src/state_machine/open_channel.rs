@@ -39,7 +39,10 @@ where
     pub(crate) payment_channel: C,
     pub(crate) wallet: W,
     pub(crate) kes: KES,
-    pub(crate) funding_tx: TransactionId,
+    // These are only optional because if one party has an initial balance of zero, no funding transaction is required
+    // But we guarantee that at least one of them is Some
+    pub(crate) merchant_funding_tx: Option<TransactionId>,
+    pub(crate) customer_funding_tx: Option<TransactionId>,
 }
 
 impl<P, C, W, KES> EstablishedChannelState<P, C, W, KES>

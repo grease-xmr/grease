@@ -1,6 +1,5 @@
 use crate::crypto::traits::PublicKey;
-use crate::kes::{KesInitializationRecord, KesInitializationResult, KeyEscrowService};
-use crate::monero::data_objects::TransactionId;
+use crate::kes::{FundingTransaction, KesInitializationRecord, KesInitializationResult, KeyEscrowService};
 use crate::monero::{MultiSigWallet, WalletState};
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::closed_channel::ClosedChannelState;
@@ -51,7 +50,7 @@ where
     OnMultiSigWalletCreated,
     OnKesCreated(Box<KesInitializationResult>),
     OnKesVerified(Box<KES>),
-    OnFundingTxConfirmed(Box<TransactionId>),
+    OnFundingTxConfirmed(Box<FundingTransaction>),
     OnUpdateChannel(Box<ChannelUpdateInfo<C>>),
     OnStartClose(Box<StartCloseInfo>),
     OnForceClose(Box<ForceCloseInfo>),
@@ -255,31 +254,42 @@ where
             kes_info,
             wallet: wallet_created_state.wallet,
             kes,
+            merchant_funding_tx: None,
+            customer_funding_tx: None,
         };
         let new_state = ChannelLifeCycle::KesVerified(Box::new(kes_verified));
         Ok(new_state)
     }
 
-    fn kes_verified_to_open(self, txid: TransactionId) -> Result<Self, (Self, LifeCycleError)> {
-        let Self::KesVerified(state) = self else {
+    fn kes_verified_to_open(self, tx: FundingTransaction) -> Result<Self, (Self, LifeCycleError)> {
+        let Self::KesVerified(mut state) = self else {
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
-        let state = *state;
-        let channel = C::new(
-            state.channel_info.channel_id.clone(),
-            state.channel_info.role,
-            state.channel_info.initial_balances,
-        );
 
-        let open_state = EstablishedChannelState {
-            channel_info: state.channel_info,
-            payment_channel: channel,
-            wallet: state.wallet,
-            kes: state.kes,
-            funding_tx: txid,
-        };
-        let new_state = ChannelLifeCycle::Open(Box::new(open_state));
-        Ok(new_state)
+        state.save_funding_transaction(tx);
+        if state.are_funding_txs_confirmed() {
+            trace!("Funding transactions confirmed. Transitioning to EstablishedChannelState");
+            let state = *state;
+            let channel = C::new(
+                state.channel_info.channel_id.clone(),
+                state.channel_info.role,
+                state.channel_info.initial_balances,
+            );
+
+            let open_state = EstablishedChannelState {
+                channel_info: state.channel_info,
+                payment_channel: channel,
+                wallet: state.wallet,
+                kes: state.kes,
+                customer_funding_tx: state.customer_funding_tx.map(|tx| tx.transaction_id),
+                merchant_funding_tx: state.merchant_funding_tx.map(|tx| tx.transaction_id),
+            };
+            let new_state = ChannelLifeCycle::Open(Box::new(open_state));
+            Ok(new_state)
+        } else {
+            debug!("Funding transactions not confirmed yet");
+            Ok(Self::KesVerified(state))
+        }
     }
 
     fn update_channel(self, info: ChannelUpdateInfo<C>) -> Result<Self, (Self, LifeCycleError)> {
@@ -392,7 +402,7 @@ where
             (Establishing, OnMultiSigWalletCreated) => self.establishing_to_wallet_created(),
             (WalletCreated, OnKesCreated(kes)) => self.save_kes_info(*kes),
             (WalletCreated, OnKesVerified(kes)) => self.wallet_created_to_kes_verified(*kes),
-            (KesVerified, OnFundingTxConfirmed(txid)) => self.kes_verified_to_open(*txid),
+            (KesVerified, OnFundingTxConfirmed(tx)) => self.kes_verified_to_open(*tx),
             (Open, OnUpdateChannel(info)) => self.update_channel(*info),
             (Open, OnStartClose(info)) => self.open_to_closing(*info),
             (Open, OnForceClose(info)) => self.open_to_dispute(*info),
@@ -480,8 +490,8 @@ pub mod test {
     use crate::amount::MoneroAmount;
     use crate::crypto::keys::Curve25519PublicKey;
     use crate::kes::dummy_impl::DummyKes;
-    use crate::kes::PartialEncryptedKey;
-    use crate::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo, TransactionId};
+    use crate::kes::{FundingTransaction, PartialEncryptedKey};
+    use crate::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo};
     use crate::monero::dummy_impl::DummyWallet;
     use crate::monero::WalletState;
     use crate::payment_channel::dummy_impl::{DummyActiveChannel, DummyUpdateInfo};
@@ -514,7 +524,7 @@ pub mod test {
         let kes_pubkey =
             Curve25519PublicKey::from_hex("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634").unwrap();
         let initial_customer_amount = MoneroAmount::from_xmr("1.25").unwrap();
-        let initial_merchant_amount = MoneroAmount::from_xmr("0.25").unwrap();
+        let initial_merchant_amount = MoneroAmount::from_xmr("0.0").unwrap();
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer, my_pubkey.clone(), my_secret);
         let initial_state = initial_state
             .with_kes_public_key(kes_pubkey.clone())
@@ -600,7 +610,7 @@ pub mod test {
 
     pub async fn open_channel(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The funding tx has been broadcast
-        let txid = TransactionId::new("DummyMoneroTx");
+        let txid = FundingTransaction::new(ChannelRole::Customer, "DummyMoneroTx");
         let event = LifeCycleEvent::OnFundingTxConfirmed(Box::new(txid));
         lc = ChannelLifeCycle::log_and_consolidate(lc.stage(), lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::Open);
@@ -691,7 +701,7 @@ pub mod test {
         lc = successful_close(lc).await;
         let final_balance = lc.closed_channel().unwrap().final_balance();
         assert_eq!(final_balance.customer, MoneroAmount::from_xmr("0.65").unwrap());
-        assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.85").unwrap());
+        assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.60").unwrap());
     }
 
     #[tokio::test]
@@ -764,7 +774,7 @@ pub mod test {
         lc = uncontested_force_close(lc).await;
         let final_balance = lc.closed_channel().unwrap().final_balance();
         assert_eq!(final_balance.customer, MoneroAmount::from_xmr("0.65").unwrap());
-        assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.85").unwrap());
+        assert_eq!(final_balance.merchant, MoneroAmount::from_xmr("0.60").unwrap());
     }
 
     #[tokio::test]
