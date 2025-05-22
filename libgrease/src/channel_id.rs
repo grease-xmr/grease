@@ -5,23 +5,25 @@ use std::fmt::{Debug, Display};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChannelId {
-    merchant_id: Vec<u8>,
-    customer_id: Vec<u8>,
+    merchant_id: String,
+    customer_id: String,
     initial_balance: Balances,
+    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     salt: Vec<u8>,
+    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     hashed_id: Vec<u8>,
 }
 
 impl ChannelId {
     pub fn new<D, S1, S2, S3>(merchant: S1, customer: S2, salt: S3, initial_balance: Balances) -> Self
     where
-        S1: AsRef<[u8]>,
-        S2: AsRef<[u8]>,
+        S1: Into<String>,
+        S2: Into<String>,
         S3: AsRef<[u8]>,
         D: Digest,
     {
-        let merchant_id = merchant.as_ref().to_vec();
-        let customer_id = customer.as_ref().to_vec();
+        let merchant_id = merchant.into();
+        let customer_id = customer.into();
         let salt = salt.as_ref().to_vec();
         let amount_mer = initial_balance.merchant.to_piconero().to_le_bytes();
         let amount_cust = initial_balance.customer.to_piconero().to_le_bytes();
@@ -36,12 +38,12 @@ impl ChannelId {
         ChannelId { merchant_id, customer_id, initial_balance, salt, hashed_id }
     }
 
-    pub fn merchant(&self) -> String {
-        String::from_utf8(self.merchant_id.clone()).unwrap_or_else(|_| "Merchant".to_string())
+    pub fn merchant(&self) -> &str {
+        &self.merchant_id
     }
 
-    pub fn customer(&self) -> String {
-        String::from_utf8(self.customer_id.clone()).unwrap_or_else(|_| "Customer".to_string())
+    pub fn customer(&self) -> &str {
+        &self.customer_id
     }
 
     pub fn initial_balance(&self) -> Balances {
@@ -122,5 +124,25 @@ mod test {
         assert_ne!(id1, id6);
         assert_ne!(id1, id7);
         assert_ne!(id1, id8);
+    }
+
+    const SERIALIZED_CHANNEL_ID: &str = r#"(merchant_id:"merchant",customer_id:"customer",initial_balance:(merchant:1250000000000,customer:750000000000),salt:"74657374",hashed_id:"a2edd1f8091cc375b12357b427a748ba")"#;
+    #[test]
+    fn serialize() {
+        let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
+        let id = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance);
+        let serialized = ron::to_string(&id).unwrap();
+        assert_eq!(serialized, SERIALIZED_CHANNEL_ID);
+    }
+
+    #[test]
+    fn deserialize() {
+        let deserialized: ChannelId = ron::from_str(SERIALIZED_CHANNEL_ID).unwrap();
+        assert_eq!(deserialized.merchant(), "merchant");
+        assert_eq!(deserialized.customer(), "customer");
+        assert_eq!(deserialized.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
+        assert_eq!(deserialized.initial_balance().customer.to_piconero(), 750_000_000_000);
+        assert_eq!(deserialized.salt, b"test".to_vec());
+        assert_eq!(deserialized.hashed_id, hex::decode("a2edd1f8091cc375b12357b427a748ba").unwrap());
     }
 }
