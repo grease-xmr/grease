@@ -1,9 +1,7 @@
 use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
-use crate::kes::{
-    FundingTransaction, KesInitializationRecord, KesInitializationResult, PartialEncryptedKey,
-};
+use crate::kes::{FundingTransaction, KesInitializationRecord, KesInitializationResult, PartialEncryptedKey};
 use crate::monero::error::MoneroWalletError;
 use crate::monero::{MoneroKeyPair, MultiSigWallet, WalletState};
 use crate::payment_channel::ActivePaymentChannel;

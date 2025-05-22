@@ -199,6 +199,7 @@ This will kick off the channel negotiation procedure. This includes:
 * The establishment of a new 2-of-2 multisig Monero wallet.
 * The establishment as validation of a new Key Escrow service.
 * The sharing of encrypted keys and channel state information.
+* Watching for confirmation of the funding transaction on the Monero blockchain.
 
 If you have set the `RUST_LOG` environment variable to `info`, you will see the channel negotiation process in the logs.
 
