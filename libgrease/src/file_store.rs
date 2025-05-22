@@ -1,5 +1,4 @@
 use crate::crypto::traits::PublicKey;
-use crate::kes::KeyEscrowService;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::ActivePaymentChannel;
 use crate::state_machine::traits::StateStore;
@@ -33,14 +32,13 @@ impl FileStore {
     }
 }
 
-impl<P, C, W, KES> StateStore<P, C, W, KES> for FileStore
+impl<P, C, W> StateStore<P, C, W> for FileStore
 where
     P: PublicKey,
     C: ActivePaymentChannel,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
-    fn write_channel(&mut self, state: &ChannelLifeCycle<P, C, W, KES>) -> Result<(), anyhow::Error> {
+    fn write_channel(&mut self, state: &ChannelLifeCycle<P, C, W>) -> Result<(), anyhow::Error> {
         let file_path = self.path.join(format!("{}.ron", state.current_state().name()));
         let config = PrettyConfig::new().compact_arrays(true).compact_maps(true);
         let val = ron::ser::to_string_pretty(state, config)?;
@@ -48,10 +46,10 @@ where
         Ok(())
     }
 
-    fn load_channel(&self, name: &str) -> Result<ChannelLifeCycle<P, C, W, KES>, anyhow::Error> {
+    fn load_channel(&self, name: &str) -> Result<ChannelLifeCycle<P, C, W>, anyhow::Error> {
         let file_path = self.path.join(format!("{}.ron", name));
         let val = fs::read_to_string(&file_path)?;
-        let channel: ChannelLifeCycle<P, C, W, KES> = ron::de::from_str(&val)?;
+        let channel: ChannelLifeCycle<P, C, W> = ron::de::from_str(&val)?;
         Ok(channel)
     }
 }

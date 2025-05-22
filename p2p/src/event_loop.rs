@@ -670,10 +670,6 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 self.pending_boolean_confirmations.insert(id, sender);
                 Ok(())
             }
-            ClientCommand::FundingTxRequestStart { .. } => Err(()),
-            ClientCommand::FundingTxFinalizeRequest { .. } => Err(()),
-            ClientCommand::FundingTxBroadcastNotification { .. } => Err(()),
-            ClientCommand::AckFundingTxBroadcastNotification { .. } => Err(()),
         }
     }
 

@@ -11,7 +11,8 @@ use futures::future::join;
 use futures::StreamExt;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::{KesInitializationResult, KeyEscrowService};
+use libgrease::kes::error::KesError;
+use libgrease::kes::{FundingTransaction, KesInitializationResult, KeyEscrowService};
 use libgrease::monero::data_objects::{
     MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
 };
@@ -28,12 +29,13 @@ use monero::Network;
 use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::future;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
 
-pub type WritableState<P, C, W, KES> = OwnedRwLockWriteGuard<PaymentChannel<P, C, W, KES>>;
+pub type WritableState<P, C, W> = OwnedRwLockWriteGuard<PaymentChannel<P, C, W>>;
 
 pub struct NetworkServer<P, C, W, KES, D, K>
 where
@@ -61,7 +63,7 @@ where
 {
     pub fn new(
         id: ConversationIdentity,
-        channels: PaymentChannels<P, C, W, KES>,
+        channels: PaymentChannels<P, C, W>,
         delegate: D,
         key_delegate: K,
     ) -> Result<Self, PeerConnectionError> {
@@ -77,7 +79,7 @@ where
                 trace!("libp2p network event received.");
                 match ev {
                     PeerConnectionEvent::InboundRequest { request, response } => {
-                        debug!("Inbound grease request received");
+                        trace!("Inbound grease request received");
                         inner_clone.handle_incoming_grease_request(request, response).await;
                     }
                 }
@@ -86,6 +88,10 @@ where
             }
         });
         Ok(Self { id, inner, event_loop_handle, event_handler_handle })
+    }
+
+    pub fn controller(&self) -> InnerEventHandler<P, C, W, KES, D, K> {
+        self.inner.clone()
     }
 
     pub fn key_manager(&self) -> &K {
@@ -113,11 +119,15 @@ where
         self.inner.channels.peek(name).await.map(|channel| channel.state().stage())
     }
 
+    pub async fn channel_metadata(&self, name: &str) -> Option<ChannelMetadata<P>> {
+        self.inner.get_channel_metadata(name).await
+    }
+
     pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
         self.inner.channels.save_channels(path).await
     }
 
-    pub async fn add_channel(&self, channel: PaymentChannel<P, C, W, KES>) {
+    pub async fn add_channel(&self, channel: PaymentChannel<P, C, W>) {
         self.inner.channels.add(channel).await
     }
 
@@ -166,7 +176,22 @@ where
         Ok(result)
     }
 
-    fn create_new_state(&self, secret: P::SecretKey, prop: NewChannelProposal<P>) -> ChannelLifeCycle<P, C, W, KES> {
+    /// Submit a funding transaction to the channel. This will potentially trigger a transition to the Established
+    /// state if all the criteria are met.
+    ///
+    /// No validation is done on the transaction, so it is up to the caller to ensure that the transaction is valid
+    /// **before** calling this function.
+    pub async fn submit_funding_transaction(
+        &self,
+        channel_name: &str,
+        tx: FundingTransaction,
+    ) -> Result<(), ChannelServerError> {
+        let mut channel =
+            self.inner.channels.checkout(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        channel.submit_funding_transaction(tx).await
+    }
+
+    fn create_new_state(&self, secret: P::SecretKey, prop: NewChannelProposal<P>) -> ChannelLifeCycle<P, C, W> {
         let new_state = NewChannelBuilder::new(prop.seed.role, prop.proposer_pubkey, secret)
             .with_my_user_label(&prop.proposer_label)
             .with_peer_label(&prop.seed.user_label)
@@ -180,7 +205,7 @@ where
     }
 }
 
-struct InnerEventHandler<P, C, W, KES, D, K>
+pub struct InnerEventHandler<P, C, W, KES, D, K>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
@@ -190,10 +215,11 @@ where
     K: KeyManager,
 {
     network_client: Client<P>,
-    channels: PaymentChannels<P, C, W, KES>,
+    channels: PaymentChannels<P, C, W>,
     delegate: D,
     key_manager: K,
     todo_list: Arc<RwLock<VecDeque<TodoListItem>>>,
+    _kes: PhantomData<KES>,
 }
 
 impl<P, C, W, KES, D, K> Clone for InnerEventHandler<P, C, W, KES, D, K>
@@ -212,6 +238,7 @@ where
             delegate: self.delegate.clone(),
             key_manager: self.key_manager.clone(),
             todo_list: Arc::clone(&self.todo_list),
+            _kes: PhantomData::<KES>,
         }
     }
 }
@@ -225,14 +252,28 @@ where
     D: GreaseChannelDelegate<P, C, W, KES>,
     K: KeyManager<PublicKey = P>,
 {
-    fn new(client: Client<P>, channels: PaymentChannels<P, C, W, KES>, delegate: D, key_manager: K) -> Self {
+    fn new(client: Client<P>, channels: PaymentChannels<P, C, W>, delegate: D, key_manager: K) -> Self {
         Self {
             network_client: client,
             channels,
             delegate,
             key_manager,
             todo_list: Arc::new(RwLock::new(VecDeque::new())),
+            _kes: PhantomData::<KES>,
         }
+    }
+
+    /// Submit a funding transaction receipt directly to the request handler.
+    ///
+    /// It is assumed that this transaction completely funds the relevant side of the channel. No verifications or
+    /// validations are done here.
+    pub async fn submit_funding_transaction(
+        &self,
+        channel_name: &str,
+        tx: FundingTransaction,
+    ) -> Result<(), ChannelServerError> {
+        let mut channel = self.channels.checkout(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        channel.submit_funding_transaction(tx).await
     }
 
     async fn add_todo_list_item(&self, item: TodoListItem) {
@@ -438,28 +479,35 @@ where
         } else {
             warn!("🖥️  Customer: The derived address for the merchant's wallet doesn't match ours. This channel will be closed.");
         }
+        if let Err(err) = channel.accept_new_wallet().await {
+            error!("🖥️  Customer: Could not transition wallet state: {err}");
+        }
         Some(addresses_match)
     }
 
-    async fn verify_kes(&self, channel: &str, kes_info: KesInitializationResult) -> Option<bool> {
-        let mut channel = self.channels.checkout(channel).await?;
-        channel
-            .save_kes_result(kes_info.clone())
-            .await
-            .map_err(|err| {
-                warn!("🖥️  Error saving KES result: {err}");
-            })
-            .ok()?;
+    /// Called by the customer when the merchant sends KES data over for the customer to verify.
+    ///
+    /// Calls out to the delegate to verify the KES data, and returns the decision whether the customer ratified the
+    /// KES or not.
+    async fn verify_kes(&self, channel_name: &str, kes_info: KesInitializationResult) -> Option<bool> {
         let kes = self
             .delegate
             .with_kes()
             .map_err(|e| warn!("🖥️  Customer: KES delegate function was not available: {e}"))
             .ok()?;
         let accepted = kes
-            .verify(kes_info)
+            .verify(kes_info.clone())
             .await
             .map_err(|e| warn!("🖥️  Customer: KES delegate function did not return successfully: {e}"))
             .ok()?;
+        if accepted {
+            let mut channel = self.channels.checkout(channel_name).await?;
+            channel
+                .save_verified_kes_result(kes_info)
+                .await
+                .map_err(|e| warn!("🖥️  Customer: failed to handle KES verification event. {e}"))
+                .ok()?;
+        }
         Some(accepted)
     }
 
@@ -519,20 +567,71 @@ where
         info!(" 🖥️  New Multisig wallet for {channel_name} created.");
         self.establish_kes(&channel_name).await?;
         info!(" 🖥️  KES established for {channel_name}.");
-        self.create_funding_transaction(&channel_name).await?;
-        info!(" 🖥️  Funding transaction created for {channel_name}.");
+        self.notify_customer_of_kes(&channel_name).await?;
+        info!(" 🖥️  Waiting for funding transaction(s) for {channel_name}.");
         Ok(())
     }
 
+    async fn notify_customer_of_kes(&self, channel_name: &str) -> Result<(), ChannelServerError> {
+        let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let peer = channel.peer_id();
+        let kes_info = channel
+            .state()
+            .kes_result_info()
+            .ok_or(ChannelServerError::InvalidState("KES info not available".to_string()))?;
+        let mut client = self.network_client.clone();
+        let envelope = client.send_kes_info(peer, channel_name.into(), kes_info).await
+            .map_err(|err| {
+                warn!("🖥️  Error sending KES info to customer: {err}");
+                ChannelServerError::PeerCommsError(err.to_string())
+            })?
+        .map_err(|err| {
+            warn!(" 🖥️  There was an issue delivering the KES verification request to the customer: {err} (In future,\
+             this may be a recoverable error");
+            ChannelServerError::PeerCommsError(err.to_string())
+        })?;
+        let (channel, ratified) = envelope.open();
+        if channel != channel_name {
+            return Err(ChannelServerError::PeerCommsError(format!(
+                "Mismatched channel names. Expected {channel_name}, Received {channel}"
+            )));
+        }
+        match ratified {
+            true => {
+                info!(" 🖥️  The customer ratified the KES. We can start watching for funding transactions.");
+                Ok(())
+            }
+            false => {
+                warn!(" 🖥️  The customer rejected the KES. Closing channel.");
+                Err(ChannelServerError::KesError(KesError::KesRejected))
+            }
+        }
+    }
+
+    /// Called when the merchant needs to establish the KES for a channel.
     async fn establish_kes(&self, channel_name: &str) -> Result<(), ChannelServerError> {
         let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        let kes_info =
-            channel.state().kes_info().ok_or(ChannelServerError::InvalidState("KES info not available".to_string()))?;
+        let kes_info = channel
+            .state()
+            .kes_init_info()
+            .ok_or(ChannelServerError::InvalidState("KES info not available".to_string()))?;
         drop(channel);
         let result = self.delegate.initialize_kes(kes_info).await.map_err(ChannelServerError::KesError)?;
+        // Verify the KES result. Perhaps we could skip this step, since the merchant has just created it, but for
+        // completeness, we do it anyway.
+        let kes_verified = self.delegate.with_kes()?.verify(result.clone()).await?;
         let mut channel = self.channels.checkout(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        channel.save_kes_result(result).await?;
-        Ok(())
+        match kes_verified {
+            true => {
+                info!(" 🖥️  KES verified successfully.");
+                channel.save_verified_kes_result(result).await?;
+                Ok(())
+            }
+            false => {
+                warn!(" 🖥️  KES verification failed. Closing channel.");
+                Err(ChannelServerError::KesError(KesError::KesRejected))
+            }
+        }
     }
 
     async fn create_funding_transaction(&self, channel_name: &str) -> Result<(), ChannelServerError> {
@@ -727,7 +826,7 @@ where
     fn verify_proposal_and_create_channel(
         &self,
         data: &NewChannelProposal<P>,
-    ) -> Result<PaymentChannel<P, C, W, KES>, GreaseResponse<P>> {
+    ) -> Result<PaymentChannel<P, C, W>, GreaseResponse<P>> {
         // Check that the public key passed in the proposal matches our keypair
         let (my_secret, my_pubkey) = self.check_pubkey_matches(data)?;
         // Let the delegate do their checks

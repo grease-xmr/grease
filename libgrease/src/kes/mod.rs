@@ -4,5 +4,7 @@ pub mod dummy_impl;
 pub mod error;
 mod traits;
 
-pub use data_objects::{FundingTransaction, KesInitializationRecord, KesInitializationResult, PartialEncryptedKey};
+pub use data_objects::{
+    FundingTransaction, KesId, KesInitializationRecord, KesInitializationResult, PartialEncryptedKey,
+};
 pub use traits::KeyEscrowService;

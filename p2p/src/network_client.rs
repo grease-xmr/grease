@@ -6,6 +6,7 @@ use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
 use libgrease::crypto::traits::PublicKey;
+use libgrease::kes::KesInitializationResult;
 use libgrease::monero::data_objects::{
     MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
 };
@@ -148,6 +149,19 @@ impl<P: PublicKey> Client<P> {
         let (sender, receiver) = oneshot::channel();
         let envelope = MessageEnvelope::new(channel, confirmation);
         self.sender.send(ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender }).await?;
+        let res = receiver.await?;
+        Ok(res)
+    }
+
+    pub async fn send_kes_info(
+        &mut self,
+        peer_id: PeerId,
+        channel: String,
+        info: KesInitializationResult,
+    ) -> Result<Result<MessageEnvelope<bool>, String>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        let envelope = MessageEnvelope::new(channel, info);
+        self.sender.send(ClientCommand::KesReadyNotification { peer_id, envelope, sender }).await?;
         let res = receiver.await?;
         Ok(res)
     }

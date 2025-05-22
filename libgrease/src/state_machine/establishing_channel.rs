@@ -2,7 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
 use crate::kes::{
-    FundingTransaction, KesInitializationRecord, KesInitializationResult, KeyEscrowService, PartialEncryptedKey,
+    FundingTransaction, KesInitializationRecord, KesInitializationResult, PartialEncryptedKey,
 };
 use crate::monero::error::MoneroWalletError;
 use crate::monero::{MoneroKeyPair, MultiSigWallet, WalletState};
@@ -216,11 +216,10 @@ where
 //------------------------------------       KES Verified State      ------------------------------------------------//
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>"))]
-pub struct KesVerifiedState<P, W, KES>
+pub struct KesVerifiedState<P, W>
 where
     P: PublicKey,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     pub channel_info: ChannelMetadata<P>,
     #[serde(
@@ -233,19 +232,18 @@ where
     /// The encrypted secrets of *my peer's* multisig wallet spend key
     pub my_shards: PartialEncryptedKey,
     pub kes_info: KesInitializationRecord<P>,
+    pub kes_verify_info: KesInitializationResult,
     pub wallet: W,
-    pub kes: KES,
     /// The transaction ID of the merchant's funding transaction
     pub merchant_funding_tx: Option<FundingTransaction>,
     /// The transaction ID of the customer's funding transaction
     pub customer_funding_tx: Option<FundingTransaction>,
 }
 
-impl<P, W, KES> KesVerifiedState<P, W, KES>
+impl<P, W> KesVerifiedState<P, W>
 where
     P: PublicKey,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     pub fn kes_info(&self) -> KesInitializationRecord<P> {
         self.kes_info.clone()
@@ -284,13 +282,18 @@ where
         let at_least_one_tx = self.merchant_funding_tx.is_some() || self.customer_funding_tx.is_some();
         merchant_ready && customer_ready && at_least_one_tx
     }
+
+    /// Returns a record that can be used to interact and/or verify the KES state. Since the KES has already been
+    /// verified, this record is always available.
+    pub fn kes_verify_info(&self) -> KesInitializationResult {
+        self.kes_verify_info.clone()
+    }
 }
 
-impl<P, W, KES> ChannelState for KesVerifiedState<P, W, KES>
+impl<P, W> ChannelState for KesVerifiedState<P, W>
 where
     P: PublicKey,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     fn channel_id(&self) -> &ChannelId {
         &self.channel_info.channel_id

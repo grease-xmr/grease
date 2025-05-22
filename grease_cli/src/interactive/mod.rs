@@ -15,6 +15,8 @@ use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use grease_p2p::message_types::NewChannelProposal;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::kes::FundingTransaction;
+use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage};
 use log::*;
 use menus::*;
@@ -124,6 +126,8 @@ impl InteractiveApp {
                 LIST_IDENTITIES => handle_response(self.list_identities()),
                 SHARE_MERCHANT_INFO => handle_response(self.share_merchant_info()),
                 PROPOSE_CHANNEL => handle_response(self.propose_new_channel().await),
+                SUBMIT_FUNDING_TX => handle_response(self.submit_funding_tx().await),
+                CONNECT_TO_CHANNEL => handle_response(self.connect_to_channel().await),
                 CLOSE_CHANNEL => println!("Coming soon"),
                 DISPUTE_CHANNEL_CLOSE => println!("Coming soon"),
                 FORCE_CLOSE_CHANNEL => println!("Coming soon"),
@@ -140,6 +144,44 @@ impl InteractiveApp {
         let name = dialoguer::Input::<String>::new().with_prompt("Enter new identity name").interact()?;
         let id = create_identity(&self.config, Some(name))?;
         Ok(id.to_string())
+    }
+
+    async fn connect_to_channel(&mut self) -> Result<String> {
+        let channel = self.select_channel().await?;
+        self.current_channel = Some(channel.clone());
+        Ok("Channel {channel} selected".to_string())
+    }
+
+    async fn submit_funding_tx(&mut self) -> Result<String> {
+        if self.current_channel.is_none() {
+            return Err(anyhow!("No channel selected"));
+        }
+        let name = self.current_channel.clone().unwrap();
+        let info = self.server.channel_metadata(&name).await.ok_or_else(|| anyhow!("No channel metadata found"))?;
+        let balances = info.initial_balances;
+        if !balances.customer.is_zero() {
+            let controller = self.server.controller();
+            println!("Watching for customer funding tx..");
+            let cn = name.clone();
+            // Completely unnecessary, but demonstrating that this can be done async
+            tokio::spawn(async move {
+                let tx = FundingTransaction::new(ChannelRole::Customer, "customer0001");
+                controller.submit_funding_transaction(&cn, tx.clone()).await.unwrap();
+                println!("Detected funding transaction: {}", tx.transaction_id.id);
+            });
+        }
+        if !balances.merchant.is_zero() {
+            let controller = self.server.controller();
+            println!("Watching for merchant funding tx..");
+            tokio::spawn(async move {
+                let tx = FundingTransaction::new(ChannelRole::Merchant, "merchant0001");
+                controller.submit_funding_transaction(&name.clone(), tx.clone()).await.unwrap();
+                println!("Detected funding transaction: {}", tx.transaction_id.id);
+            });
+        }
+        println!("Submitted funding transactions. Hang on...");
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        Ok("Ready".to_string())
     }
 
     async fn print_channel_names(&self) {
