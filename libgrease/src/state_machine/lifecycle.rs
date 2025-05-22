@@ -1,5 +1,5 @@
 use crate::crypto::traits::PublicKey;
-use crate::kes::{FundingTransaction, KesInitializationRecord, KesInitializationResult, KeyEscrowService};
+use crate::kes::{FundingTransaction, KesInitializationRecord, KesInitializationResult};
 use crate::monero::{MultiSigWallet, WalletState};
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
 use crate::state_machine::closed_channel::ClosedChannelState;
@@ -38,18 +38,16 @@ pub enum LifecycleStage {
     Disputing,
 }
 
-pub enum LifeCycleEvent<P, C, KES>
+pub enum LifeCycleEvent<P, C>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    KES: KeyEscrowService,
 {
     OnAckNewChannel(Box<ProposedChannelInfo<P>>),
     OnRejectNewChannel(Box<RejectNewChannelReason>),
     OnTimeout(Box<TimeoutReason>),
     OnMultiSigWalletCreated,
-    OnKesCreated(Box<KesInitializationResult>),
-    OnKesVerified(Box<KES>),
+    OnKesVerified(Box<KesInitializationResult>),
     OnFundingTxConfirmed(Box<FundingTransaction>),
     OnUpdateChannel(Box<ChannelUpdateInfo<C>>),
     OnStartClose(Box<StartCloseInfo>),
@@ -58,18 +56,16 @@ where
     OnSuccessfulClose(Box<SuccessfulCloseInfo>),
 }
 
-impl<P, C, KES> Display for LifeCycleEvent<P, C, KES>
+impl<P, C> Display for LifeCycleEvent<P, C>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
-    KES: KeyEscrowService,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             LifeCycleEvent::OnAckNewChannel(_) => write!(f, "OnAckNewChannel"),
             LifeCycleEvent::OnTimeout(_) => write!(f, "OnTimeout"),
             LifeCycleEvent::OnMultiSigWalletCreated => write!(f, "OnMultiSigWalletCreated"),
-            LifeCycleEvent::OnKesCreated(_) => write!(f, "OnKesCreated"),
             LifeCycleEvent::OnKesVerified(_) => write!(f, "OnKesVerified"),
             LifeCycleEvent::OnFundingTxConfirmed(_) => write!(f, "FundingTxConfirmed"),
             LifeCycleEvent::OnUpdateChannel(_) => write!(f, "OnUpdateChannel"),
@@ -99,32 +95,30 @@ impl Display for LifecycleStage {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>, W: MultiSigWallet + for<'d> Deserialize<'d>"))]
-pub enum ChannelLifeCycle<P, C, W, KES>
+pub enum ChannelLifeCycle<P, C, W>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     New(Box<NewChannelState<P>>),
     /// The channel is in the process of being created.
     Establishing(Box<EstablishingState<P, W>>),
     WalletCreated(Box<WalletCreatedState<P, W>>),
-    KesVerified(Box<KesVerifiedState<P, W, KES>>),
+    KesVerified(Box<KesVerifiedState<P, W>>),
     /// The channel is open and ready to use.
-    Open(Box<EstablishedChannelState<P, C, W, KES>>),
+    Open(Box<EstablishedChannelState<P, C, W>>),
     /// The channel is closed and cannot be used anymore.
-    Closing(Box<ClosingChannelState<P, C, W, KES>>),
+    Closing(Box<ClosingChannelState<P, C, W>>),
     Closed(Box<ClosedChannelState<P, W, C::Finalized>>),
-    Disputing(Box<DisputingChannelState<P, C, W, KES>>),
+    Disputing(Box<DisputingChannelState<P, C, W>>),
 }
 
-impl<P, C, W, KES> ChannelLifeCycle<P, C, W, KES>
+impl<P, C, W> ChannelLifeCycle<P, C, W>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     pub fn new(state: NewChannelState<P>) -> Self {
         ChannelLifeCycle::New(Box::new(state))
@@ -229,20 +223,16 @@ where
         let wallet_created =
             WalletCreatedState { channel_info, wallet, wallet_secret, peer_shards, my_shards, kes_verify_info: None };
         let new_state = ChannelLifeCycle::WalletCreated(Box::new(wallet_created));
+        debug!("Transitioning from Establishing to WalletCreated state");
         Ok(new_state)
     }
 
-    fn save_kes_info(self, kes: KesInitializationResult) -> Result<Self, (Self, LifeCycleError)> {
-        let Self::WalletCreated(mut wallet_created_state) = self else {
-            warn!("Cannot save KES information before Wallet has been created");
-            return Err((self, LifeCycleError::InvalidStateTransition));
-        };
-        wallet_created_state.save_kes_verify_info(kes);
-        Ok(Self::WalletCreated(wallet_created_state))
-    }
-
-    fn wallet_created_to_kes_verified(self, kes: KES) -> Result<Self, (Self, LifeCycleError)> {
+    fn wallet_created_to_kes_verified(
+        self,
+        kes_verify_info: KesInitializationResult,
+    ) -> Result<Self, (Self, LifeCycleError)> {
         let Self::WalletCreated(wallet_created_state) = self else {
+            warn!("Cannot save KES information before Wallet has been created");
             return Err((self, LifeCycleError::InvalidStateTransition));
         };
         let kes_info = wallet_created_state.kes_init_info();
@@ -252,12 +242,13 @@ where
             peer_shards: wallet_created_state.peer_shards.peer_shard,
             my_shards: wallet_created_state.my_shards.kes_shard,
             kes_info,
+            kes_verify_info,
             wallet: wallet_created_state.wallet,
-            kes,
             merchant_funding_tx: None,
             customer_funding_tx: None,
         };
         let new_state = ChannelLifeCycle::KesVerified(Box::new(kes_verified));
+        debug!("Transitioning from WalletCreated to KesVerified state");
         Ok(new_state)
     }
 
@@ -280,11 +271,20 @@ where
                 channel_info: state.channel_info,
                 payment_channel: channel,
                 wallet: state.wallet,
-                kes: state.kes,
                 customer_funding_tx: state.customer_funding_tx.map(|tx| tx.transaction_id),
                 merchant_funding_tx: state.merchant_funding_tx.map(|tx| tx.transaction_id),
             };
+            let name = open_state.channel_info.channel_id.name();
+            let bal = open_state.payment_channel.balances();
+            info!(
+                "Channel {name} is now open and ready to transact payments. \
+            Initial balances: Customer: {}, Merchant: {},  Total: {} ",
+                bal.customer,
+                bal.merchant,
+                bal.total()
+            );
             let new_state = ChannelLifeCycle::Open(Box::new(open_state));
+            debug!("Transitioning from KesVerified to Open state");
             Ok(new_state)
         } else {
             debug!("Funding transactions not confirmed yet");
@@ -311,6 +311,7 @@ where
         // Carry out the co-operative close channel protocol
         let closing_state = ClosingChannelState::from_open(*open_state);
         let new_state = ChannelLifeCycle::Closing(Box::new(closing_state));
+        debug!("Transitioning from Open to Closing state");
         Ok(new_state)
     }
 
@@ -322,6 +323,7 @@ where
         let wallet = closing_state.wallet;
         let channel = closing_state.payment_channel.finalize();
         let closed_state = ClosedChannelState::new(reason, channel, wallet);
+        debug!("Transitioning from Closing to Closed state");
         Ok(ChannelLifeCycle::Closed(Box::new(closed_state)))
     }
 
@@ -336,6 +338,7 @@ where
             info.reason
         );
         let dispute_state = DisputingChannelState::from_open(*open_state, info);
+        debug!("Transitioning from Open to Disputing state");
         Ok(ChannelLifeCycle::Disputing(Box::new(dispute_state)))
     }
 
@@ -350,6 +353,7 @@ where
             info.reason
         );
         let dispute_state = DisputingChannelState::from_closing(*closing_state, info);
+        debug!("Transitioning from Closing to Disputing state");
         Ok(ChannelLifeCycle::Disputing(Box::new(dispute_state)))
     }
 
@@ -363,6 +367,7 @@ where
         let channel_id = self.current_state().channel_id().clone();
         let channel_role = self.current_state().role();
         let state = ClosedChannelState::empty(timeout, channel_id, channel_role);
+        debug!("Transitioning to Closed state");
         Ok(ChannelLifeCycle::Closed(Box::new(state)))
     }
 
@@ -375,6 +380,7 @@ where
         let channel = disputing_state.payment_channel;
         let closed_channel = channel.finalize();
         let state = ClosedChannelState::new(reason, closed_channel, wallet);
+        debug!("Transitioning from Disputing to Closed state");
         Ok(ChannelLifeCycle::Closed(Box::new(state)))
     }
 
@@ -392,7 +398,7 @@ where
         }
     }
 
-    pub async fn handle_event(self, event: LifeCycleEvent<P, C, KES>) -> Result<Self, (Self, LifeCycleError)> {
+    pub async fn handle_event(self, event: LifeCycleEvent<P, C>) -> Result<Self, (Self, LifeCycleError)> {
         use LifeCycleEvent::*;
         use LifecycleStage::*;
         match (self.stage(), event) {
@@ -400,7 +406,6 @@ where
             (New, OnRejectNewChannel(reason)) => self.reject_new_channel(*reason),
             (New | Establishing | WalletCreated | KesVerified, OnTimeout(reason)) => self.timeout(*reason),
             (Establishing, OnMultiSigWalletCreated) => self.establishing_to_wallet_created(),
-            (WalletCreated, OnKesCreated(kes)) => self.save_kes_info(*kes),
             (WalletCreated, OnKesVerified(kes)) => self.wallet_created_to_kes_verified(*kes),
             (KesVerified, OnFundingTxConfirmed(tx)) => self.kes_verified_to_open(*tx),
             (Open, OnUpdateChannel(info)) => self.update_channel(*info),
@@ -476,11 +481,32 @@ where
         ))
     }
 
-    pub fn kes_info(&self) -> Option<KesInitializationRecord<P>> {
+    pub fn kes_init_info(&self) -> Option<KesInitializationRecord<P>> {
         match self {
             ChannelLifeCycle::WalletCreated(state) => Some(state.kes_init_info()),
             ChannelLifeCycle::KesVerified(state) => Some(state.kes_info()),
             _ => None,
+        }
+    }
+
+    pub fn kes_result_info(&self) -> Option<KesInitializationResult> {
+        match self {
+            ChannelLifeCycle::New(_) => None,
+            ChannelLifeCycle::Establishing(_) => None,
+            ChannelLifeCycle::WalletCreated(state) => state.kes_verify_info().cloned(),
+            ChannelLifeCycle::KesVerified(state) => Some(state.kes_verify_info()),
+            ChannelLifeCycle::Open(_) => {
+                todo!()
+            }
+            ChannelLifeCycle::Closing(_) => {
+                todo!()
+            }
+            ChannelLifeCycle::Closed(_) => {
+                todo!()
+            }
+            ChannelLifeCycle::Disputing(_) => {
+                todo!()
+            }
         }
     }
 }
@@ -489,8 +515,7 @@ where
 pub mod test {
     use crate::amount::MoneroAmount;
     use crate::crypto::keys::Curve25519PublicKey;
-    use crate::kes::dummy_impl::DummyKes;
-    use crate::kes::{FundingTransaction, PartialEncryptedKey};
+    use crate::kes::{FundingTransaction, KesId, KesInitializationResult, PartialEncryptedKey};
     use crate::monero::data_objects::{MultiSigInitInfo, MultisigKeyInfo};
     use crate::monero::dummy_impl::DummyWallet;
     use crate::monero::WalletState;
@@ -511,8 +536,8 @@ pub mod test {
     use log::*;
     use monero::Network;
 
-    type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet, DummyKes>;
-    type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel, DummyKes>;
+    type DummyLifecycle = ChannelLifeCycle<Curve25519PublicKey, DummyActiveChannel, DummyWallet>;
+    type DummyEvent = LifeCycleEvent<Curve25519PublicKey, DummyActiveChannel>;
 
     pub fn new_channel_state() -> (DummyLifecycle, NewChannelState<Curve25519PublicKey>) {
         // All this info is known, or can be scanned in from a QR code etc
@@ -601,8 +626,8 @@ pub mod test {
 
     pub async fn verify_kes(mut lc: DummyLifecycle) -> DummyLifecycle {
         // The KES creation is successful, and the KES is verified
-        let kes = DummyKes;
-        let event = LifeCycleEvent::OnKesVerified(Box::new(kes));
+        let kes_result = KesInitializationResult { id: KesId::from("DummyKesId") };
+        let event = LifeCycleEvent::OnKesVerified(Box::new(kes_result));
         lc = ChannelLifeCycle::log_and_consolidate(lc.stage(), lc.handle_event(event).await);
         assert_eq!(lc.stage(), LifecycleStage::KesVerified);
         lc

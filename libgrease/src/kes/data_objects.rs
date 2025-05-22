@@ -25,9 +25,9 @@ pub struct KesInitializationResult {
     pub id: KesId,
 }
 
-impl From<String> for KesId {
-    fn from(channel_id: String) -> Self {
-        KesId(channel_id)
+impl<S: Into<String>> From<S> for KesId {
+    fn from(channel_id: S) -> Self {
+        KesId(channel_id.into())
     }
 }
 

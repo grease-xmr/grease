@@ -23,6 +23,8 @@ pub mod commands {
     pub const PROPOSE_CHANNEL: &str = "Initiate new channel";
     pub const REMOVE_IDENTITY: &str = "Remove identity";
     pub const SHARE_MERCHANT_INFO: &str = "Display new channel QR code";
+    // Debugging commands only
+    pub const SUBMIT_FUNDING_TX: &str = "Submit funding transactions";
 }
 
 pub use commands::*;
@@ -39,9 +41,10 @@ pub const IDENTITY_MENU: [&str; 7] = [
     EXIT,
 ];
 
-pub const CUSTOMER_MENU: [&str; 11] = [
+pub const CUSTOMER_MENU: [&str; 12] = [
     CONNECT_TO_CHANNEL,
     PROPOSE_CHANNEL,
+    SUBMIT_FUNDING_TX,
     LIST_CHANNELS,
     PAYMENT_SEND,
     PAYMENT_REQUEST,
@@ -53,7 +56,7 @@ pub const CUSTOMER_MENU: [&str; 11] = [
     EXIT,
 ];
 
-pub const MERCHANT_MENU: [&str; 11] = [
+pub const MERCHANT_MENU: [&str; 12] = [
     CONNECT_TO_CHANNEL,
     SHARE_MERCHANT_INFO,
     LIST_CHANNELS,
@@ -65,6 +68,8 @@ pub const MERCHANT_MENU: [&str; 11] = [
     FORCE_CLOSE_CHANNEL,
     DISPUTE_CHANNEL_CLOSE,
     EXIT,
+    // Debugging commands only
+    SUBMIT_FUNDING_TX,
 ];
 
 pub fn top_menu() -> &'static Menu {

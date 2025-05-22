@@ -296,6 +296,7 @@ impl<W: MultiSigWallet> MadeWallet<W> {
     pub fn save_my_shards(mut self, my_shards: VssOutput) -> WalletState<W> {
         trace!("Wallet state machine: Save my shards");
         if self.imported_multisigkeys && self.peer_shards.is_some() {
+            trace!("Wallet state moving to Ready");
             WalletState::Ready(ReadyWallet::new(
                 self.network,
                 self.wallet,
@@ -305,6 +306,7 @@ impl<W: MultiSigWallet> MadeWallet<W> {
                 my_shards,
             ))
         } else {
+            trace!("Saved my shards, but missing peer shards or multisig keys, so staying in MultisigMade");
             self.my_shards = Some(my_shards);
             WalletState::MultisigMade(self)
         }

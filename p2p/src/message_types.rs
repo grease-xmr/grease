@@ -47,6 +47,8 @@ pub enum GreaseResponse<P: PublicKey> {
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(MessageEnvelope<bool>),
+    /// The customer's response to the VerifyKes request. The response is a boolean indicating whether the KES was
+    /// ratified by the customer or not. If false, the channel establishment will be aborted.
     AcceptKes(MessageEnvelope<bool>),
     ChannelClosed,
     ChannelNotFound,
@@ -111,21 +113,11 @@ where
 #[derive(Debug)]
 pub enum ClientCommand<P: PublicKey> {
     /// Start listening on a given address. Executed via [`crate::Client::start_listening`].
-    StartListening {
-        addr: Multiaddr,
-        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
-    },
+    StartListening { addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
     /// Dial a peer at a given address. Executed via [`Client::dial`].
-    Dial {
-        peer_id: PeerId,
-        peer_addr: Multiaddr,
-        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
-    },
+    Dial { peer_id: PeerId, peer_addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
     /// Generalised response message to peers for all requests.
-    ResponseToRequest {
-        res: GreaseResponse<P>,
-        return_chute: ResponseChannel<GreaseResponse<P>>,
-    },
+    ResponseToRequest { res: GreaseResponse<P>, return_chute: ResponseChannel<GreaseResponse<P>> },
     /// Request with a proposal to open a payment channel with a peer. Executed via [`crate::Client::new_channel_proposal`].
     ProposeChannelRequest {
         peer_id: PeerId,
@@ -152,29 +144,8 @@ pub enum ClientCommand<P: PublicKey> {
         envelope: MessageEnvelope<KesInitializationResult>,
         sender: oneshot::Sender<Result<MessageEnvelope<bool>, String>>,
     },
-    FundingTxRequestStart {
-        peer_id: PeerId,
-        funding_tx: usize, // todo: FundingTxRequestStart
-        sender: oneshot::Sender<FundingTxStartResponse>,
-    },
-    FundingTxFinalizeRequest {
-        peer_id: PeerId,
-        funding_tx: usize, // todo: FundingTxFinalizeRequest
-        sender: oneshot::Sender<FundingTxFinalizeResponse>,
-    },
-    FundingTxBroadcastNotification {
-        peer_id: PeerId,
-        funding_tx: usize, // todo: FundingTxBroadcastNotification
-        sender: oneshot::Sender<AckFundingTxBroadcast>,
-    },
-    AckFundingTxBroadcastNotification {
-        res: AckFundingTxBroadcast,
-        channel: ResponseChannel<GreaseResponse<P>>,
-    },
     /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
-    ConnectedPeers {
-        sender: oneshot::Sender<Vec<PeerId>>,
-    },
+    ConnectedPeers { sender: oneshot::Sender<Vec<PeerId>> },
     /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
     Shutdown(oneshot::Sender<bool>),
 }

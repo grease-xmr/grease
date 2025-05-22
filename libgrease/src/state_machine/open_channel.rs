@@ -1,6 +1,5 @@
 use crate::channel_id::ChannelId;
 use crate::crypto::traits::PublicKey;
-use crate::kes::KeyEscrowService;
 use crate::monero::data_objects::TransactionId;
 use crate::monero::MultiSigWallet;
 use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
@@ -28,29 +27,26 @@ where
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
-pub struct EstablishedChannelState<P, C, W, KES>
+pub struct EstablishedChannelState<P, C, W>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     pub(crate) channel_info: ChannelMetadata<P>,
     pub(crate) payment_channel: C,
     pub(crate) wallet: W,
-    pub(crate) kes: KES,
     // These are only optional because if one party has an initial balance of zero, no funding transaction is required
     // But we guarantee that at least one of them is Some
     pub(crate) merchant_funding_tx: Option<TransactionId>,
     pub(crate) customer_funding_tx: Option<TransactionId>,
 }
 
-impl<P, C, W, KES> EstablishedChannelState<P, C, W, KES>
+impl<P, C, W> EstablishedChannelState<P, C, W>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     /// Updates the channel state from the given update information.
     ///
@@ -78,12 +74,11 @@ where
     }
 }
 
-impl<P, C, W, KES> ChannelState for EstablishedChannelState<P, C, W, KES>
+impl<P, C, W> ChannelState for EstablishedChannelState<P, C, W>
 where
     P: PublicKey,
     C: ActivePaymentChannel,
     W: MultiSigWallet,
-    KES: KeyEscrowService,
 {
     fn channel_id(&self) -> &ChannelId {
         self.payment_channel.channel_id()

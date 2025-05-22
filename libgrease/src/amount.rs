@@ -13,7 +13,7 @@ pub struct MoneroAmount {
 
 impl MoneroAmount {
     /// Returns true if the amount is zero.
-    pub(crate) fn is_zero(&self) -> bool {
+    pub fn is_zero(&self) -> bool {
         self.amount == 0
     }
 
