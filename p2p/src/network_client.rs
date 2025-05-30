@@ -1,14 +1,15 @@
 use crate::behaviour::ConnectionBehavior;
-use crate::errors::PeerConnectionError;
+use crate::data_objects::TransactionRecord;
+use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::message_types::{ChannelProposalResult, NewChannelProposal};
 use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
-use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KesInitializationResult;
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
+    ChannelUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, StartChannelUpdateConfirmation,
+    TransactionId,
 };
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -18,17 +19,18 @@ use libp2p::{
     request_response::{json, Config as RequestResponseConfig, ProtocolSupport},
     tcp, yamux, Multiaddr, PeerId, StreamProtocol,
 };
+use log::*;
 use std::time::Duration;
 
-pub type PeerConnection<P> = libp2p::Swarm<ConnectionBehavior<P>>;
+pub type PeerConnection = libp2p::Swarm<ConnectionBehavior>;
 /// Creates the network components, namely:
 ///
 /// - The network [`Client`] to interact with the event loop from anywhere within your application.
 /// - The network event stream, e.g. for incoming requests.
 /// - The main [`EventLoop`] driving the network itself.
-pub fn new_network<P: PublicKey + 'static>(
+pub fn new_network(
     key: Keypair,
-) -> Result<(Client<P>, impl Stream<Item = PeerConnectionEvent<P>>, EventLoop<P>), PeerConnectionError> {
+) -> Result<(Client, impl Stream<Item = PeerConnectionEvent>, EventLoop), PeerConnectionError> {
     let swarm = libp2p::SwarmBuilder::with_existing_identity(key)
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
@@ -59,8 +61,25 @@ pub fn new_network<P: PublicKey + 'static>(
 /// A sender interface to the network event loop. It can be cheaply cloned and shared among threads and multiple sets
 /// of peer-to-peer connections.
 #[derive(Clone)]
-pub struct Client<P: PublicKey> {
-    sender: mpsc::Sender<ClientCommand<P>>,
+pub struct Client {
+    sender: mpsc::Sender<ClientCommand>,
+}
+
+macro_rules! grease_request {
+    ($name:ident, $command:ident, $request: ty, $response:ty) => {
+        pub async fn $name(
+            &mut self,
+            peer_id: PeerId,
+            channel: &str,
+            req: $request,
+        ) -> Result<Result<MessageEnvelope<$response>, RemoteServerError>, PeerConnectionError> {
+            let (sender, receiver) = oneshot::channel();
+            let envelope = MessageEnvelope::new(channel.into(), req);
+            self.sender.send(ClientCommand::$command { peer_id, envelope, sender }).await?;
+            let res = receiver.await?;
+            Ok(res)
+        }
+    };
 }
 
 /// An abstraction layer that sits between the main business logic of the application and the network ([`EventLoop`]).
@@ -72,7 +91,7 @@ pub struct Client<P: PublicKey> {
 ///
 /// **Importantly**, this struct does not do any work.
 /// It simply forwards the [`ClientCommand`]s to the [`EventLoop`] and waits for the results.
-impl<P: PublicKey> Client<P> {
+impl Client {
     /// Listen for incoming connections on the given address.
     pub async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
@@ -105,60 +124,31 @@ impl<P: PublicKey> Client<P> {
 
     pub async fn new_channel_proposal(
         &mut self,
-        data: NewChannelProposal<P>,
-    ) -> Result<ChannelProposalResult<P>, PeerConnectionError> {
+        data: NewChannelProposal,
+    ) -> Result<ChannelProposalResult, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
         let peer_id = data.contact_info_proposee.peer_id;
+        trace!("NetworkClient: Sending new channel proposal to peer {peer_id}");
         self.sender.send(ClientCommand::ProposeChannelRequest { peer_id, data, sender }).await?;
-        let open_result = receiver.await?;
+        let open_result = receiver.await??;
         Ok(open_result)
     }
 
-    pub async fn send_multisig_init(
-        &mut self,
-        peer_id: PeerId,
-        channel: String,
-        multisig_init: MultiSigInitInfo,
-    ) -> Result<Result<MessageEnvelope<MultiSigInitInfo>, String>, PeerConnectionError> {
-        let (sender, receiver) = oneshot::channel();
-        let envelope = MessageEnvelope::new(channel, multisig_init);
-        self.sender.send(ClientCommand::MultiSigInitRequest { peer_id, envelope, sender }).await?;
-        let res = receiver.await?;
-        Ok(res)
-    }
-
-    pub async fn send_multisig_key(
-        &mut self,
-        peer_id: PeerId,
-        channel: String,
-        multisig_key: MultisigKeyInfo,
-    ) -> Result<Result<MessageEnvelope<MsKeyAndVssInfo>, String>, PeerConnectionError> {
-        let (sender, receiver) = oneshot::channel();
-        let envelope = MessageEnvelope::new(channel, multisig_key);
-        self.sender.send(ClientCommand::MultiSigKeyRequest { peer_id, envelope, sender }).await?;
-        let res = receiver.await?;
-        Ok(res)
-    }
-
-    pub async fn confirm_multisig_address(
-        &mut self,
-        peer_id: PeerId,
-        channel: String,
-        confirmation: WalletConfirmation,
-    ) -> Result<Result<MessageEnvelope<bool>, String>, PeerConnectionError> {
-        let (sender, receiver) = oneshot::channel();
-        let envelope = MessageEnvelope::new(channel, confirmation);
-        self.sender.send(ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender }).await?;
-        let res = receiver.await?;
-        Ok(res)
-    }
+    grease_request!(send_multisig_key, MultiSigKeyExchange, MultisigKeyInfo, MultisigKeyInfo);
+    grease_request!(
+        send_split_secrets,
+        MultiSigSplitSecretsRequest,
+        MultisigSplitSecrets,
+        MultisigSplitSecrets
+    );
+    grease_request!(send_wallet_confirmation, ConfirmMultiSigAddressRequest, String, bool);
 
     pub async fn send_kes_info(
         &mut self,
         peer_id: PeerId,
         channel: String,
         info: KesInitializationResult,
-    ) -> Result<Result<MessageEnvelope<bool>, String>, PeerConnectionError> {
+    ) -> Result<Result<MessageEnvelope<bool>, RemoteServerError>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
         let envelope = MessageEnvelope::new(channel, info);
         self.sender.send(ClientCommand::KesReadyNotification { peer_id, envelope, sender }).await?;
@@ -166,10 +156,47 @@ impl<P: PublicKey> Client<P> {
         Ok(res)
     }
 
+    pub async fn wait_for_funding_tx(&mut self, name: &str) -> Result<TransactionRecord, PeerConnectionError> {
+        trace!("⚡️ Waiting for funding transaction for channel {name}");
+        let (sender, receiver) = oneshot::channel();
+        self.sender.send(ClientCommand::WaitForFundingTx { channel: name.to_string(), sender }).await?;
+        let record = receiver.await?;
+        record
+    }
+
+    pub async fn notify_tx_mined(&mut self, tx: TransactionRecord) -> Result<(), PeerConnectionError> {
+        self.sender.send(ClientCommand::NotifyTxMined(tx)).await?;
+        Ok(())
+    }
+
+    /// This starts a new update balance request with the peer.
+    /// The necessary proofs for the update must already have been generated and be available in the `update` parameter.
+    /// We then send the update request to the remote peer.
+    /// and wait for the remote peer to confirm the update (or reject it).
+    pub async fn update_balance(
+        &mut self,
+        peer_id: PeerId,
+        channel: &str,
+        update: ChannelUpdate,
+    ) -> Result<StartChannelUpdateConfirmation, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        let envelope = MessageEnvelope::new(channel.into(), update);
+
+        trace!("⚡️ Sending channel update request for peer {} on channel {}", peer_id, channel);
+        self.sender.send(ClientCommand::InitiateNewUpdate { peer_id, envelope, sender }).await?;
+        let return_envelope = receiver.await??;
+        trace!("⚡️ Received channel update confirmation for peer {peer_id} on channel {channel}");
+        let (return_channel, result) = return_envelope.open();
+        if return_channel != channel {
+            return Err(PeerConnectionError::ChannelMismatch { expected: channel.into(), actual: return_channel });
+        }
+        Ok(result)
+    }
+
     pub async fn send_response_to_peer(
         &mut self,
-        res: GreaseResponse<P>,
-        return_chute: ResponseChannel<GreaseResponse<P>>,
+        res: GreaseResponse,
+        return_chute: ResponseChannel<GreaseResponse>,
     ) -> Result<(), PeerConnectionError> {
         self.sender.send(ClientCommand::ResponseToRequest { res, return_chute }).await?;
         Ok(())

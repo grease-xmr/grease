@@ -10,6 +10,14 @@ pub enum LifeCycleError {
     Proposal(#[from] InvalidProposal),
     #[error("Wallet error: {0}")]
     WalletError(#[from] MoneroWalletError),
+    #[error("The channel is not in the correct lifecycle state to call {0}")]
+    InvalidState(String),
+    #[error("There are not enough funds in the channel to effect the payment.")]
+    NotEnoughFunds,
+    #[error("The update count in the channel is incorrect. Expected {exp}, got {actual}")]
+    MismatchedUpdateCount { exp: u64, actual: u64 },
+    #[error("This is a bug. {0}")]
+    InternalError(String),
 }
 
 #[derive(Clone, Debug, Error, Serialize, Deserialize)]
@@ -28,4 +36,10 @@ pub enum InvalidProposal {
     MismatchedKesPublicKey,
     #[error("The channel ID in the proposal does not match the one that was expected")]
     MismatchedChannelId,
+}
+
+impl LifeCycleError {
+    pub fn invalid_state_for(func: &str) -> Self {
+        LifeCycleError::InvalidState(func.into())
+    }
 }

@@ -1,6 +1,8 @@
 //! A state machine implementation to handle the creation of a Monero multisig wallet
 
-use crate::monero::data_objects::{MoneroAddress, MultiSigInitInfo, MultisigKeyInfo, WalletInfo};
+use crate::monero::data_objects::{
+    ChannelSecrets, ChannelUpdate, MoneroAddress, MultiSigInitInfo, MultisigKeyInfo, WalletInfo,
+};
 use crate::monero::error::MoneroWalletError;
 use crate::monero::{MoneroKeyPair, MultiSigWallet};
 use crate::state_machine::VssOutput;
@@ -112,6 +114,14 @@ where
         match self {
             WalletState::MultisigMade(state) => state.save_peer_shards(peer_shards),
             _ => self.abort("Invalid state transition"),
+        }
+    }
+
+    /// Save the initial witness and proofs
+    pub fn save_initial_proofs(self, secrets: ChannelSecrets, proofs: ChannelUpdate) -> Self {
+        match self {
+            WalletState::Ready(state) => state.save_secrets(secrets, proofs),
+            _ => self.abort("Invalid state to save secrets"),
         }
     }
 
@@ -386,6 +396,8 @@ pub struct ReadyWallet<W: MultiSigWallet> {
     /// The encrypted secrets of *my peer's* multisig wallet spend key
     pub(crate) my_shards: VssOutput,
     pub(crate) wallet: W,
+    pub(crate) initial_secrets: Option<ChannelSecrets>,
+    pub(crate) initial_proofs: Option<ChannelUpdate>,
 }
 
 impl<W: MultiSigWallet> ReadyWallet<W> {
@@ -398,7 +410,16 @@ impl<W: MultiSigWallet> ReadyWallet<W> {
         my_shards: VssOutput,
     ) -> Self {
         trace!("👛 Wallet state machine: New ready wallet created");
-        Self { network, wallet, peer_partial_key, keypair, peer_shards, my_shards }
+        Self {
+            network,
+            wallet,
+            peer_partial_key,
+            keypair,
+            peer_shards,
+            my_shards,
+            initial_secrets: None,
+            initial_proofs: None,
+        }
     }
 
     pub fn wallet(&self) -> &W {
@@ -413,6 +434,12 @@ impl<W: MultiSigWallet> ReadyWallet<W> {
             peer_vss_info: self.peer_shards.clone(),
             my_vss_info: self.my_shards.clone(),
         }
+    }
+
+    pub fn save_secrets(mut self, secrets: ChannelSecrets, proofs: ChannelUpdate) -> WalletState<W> {
+        self.initial_secrets = Some(secrets);
+        self.initial_proofs = Some(proofs);
+        WalletState::Ready(self)
     }
 }
 
@@ -457,7 +484,7 @@ mod test {
     use crate::monero::data_objects::{MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo};
     use crate::monero::dummy_impl::DummyWallet;
     use crate::monero::error::MoneroWalletError;
-    use crate::monero::state_machine::WalletState;
+    use crate::state_machine::wallet_state_machine::WalletState;
     use crate::state_machine::VssOutput;
     use monero::Network;
 

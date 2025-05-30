@@ -3,16 +3,18 @@
 //! See [`EventLoop`] for more information.
 
 use crate::behaviour::ConnectionBehaviorEvent as Event;
-use crate::errors::PeerConnectionError;
-use crate::message_types::{ChannelProposalResult, RejectChannelProposal, RejectReason, RetryOptions};
+use crate::data_objects::TransactionRecord;
+use crate::errors::{PeerConnectionError, RemoteServerError};
+use crate::message_types::ChannelProposalResult;
 use crate::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnection, PeerConnectionEvent};
 use futures::channel::{
     mpsc::{Receiver, Sender},
     oneshot,
 };
 use futures::{SinkExt, StreamExt};
-use libgrease::crypto::traits::PublicKey;
-use libgrease::monero::data_objects::{MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo};
+use libgrease::monero::data_objects::{
+    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, StartChannelUpdateConfirmation,
+};
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
@@ -29,12 +31,13 @@ use std::num::NonZeroU32;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-pub type ReqResEvent<P> = BehaviourEvent<GreaseRequest<P>, GreaseResponse<P>>;
-pub type EventMessage<P> = Message<GreaseRequest<P>, GreaseResponse<P>>;
+pub type ReqResEvent = BehaviourEvent<GreaseRequest, GreaseResponse>;
+pub type EventMessage = Message<GreaseRequest, GreaseResponse>;
 
 const RUNNING: usize = 0;
-const SHUTTING_DOWN: usize = 1;
+
 const SHUTDOWN: usize = 2;
+const SHUTTING_DOWN: usize = 1;
 
 /// The main event loop handler for Grease p2p connections
 ///
@@ -68,43 +71,148 @@ const SHUTDOWN: usize = 2;
 /// The application layer carries out all the business logic and once it is done, it calls a suitable method on the
 /// [`Client`] instance, which will handle the creation of the correct [`ClientCommand`], packaging the result
 /// data and the `ResponseChannel` instance, and sending it to the event loop.
-pub struct EventLoop<P: PublicKey + 'static> {
-    swarm: PeerConnection<P>,
-    command_receiver: Receiver<ClientCommand<P>>,
-    event_sender: Sender<PeerConnectionEvent<P>>,
-    pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
-    pending_new_channel_proposals: HashMap<OutboundRequestId, oneshot::Sender<ChannelProposalResult<P>>>,
-    pending_multisig_inits:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<MultiSigInitInfo>, String>>>,
-    pending_multisig_keys:
-        HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<MsKeyAndVssInfo>, String>>>,
-    pending_boolean_confirmations: HashMap<OutboundRequestId, oneshot::Sender<Result<MessageEnvelope<bool>, String>>>,
-    pending_shutdown: Option<oneshot::Sender<bool>>,
-    status: AtomicUsize,
-    connections: HashSet<ConnectionId>,
+macro_rules! event_loop {
+    ($(Command($command:ident): $req_type:ident => $res_type:ident[$res_payload:ty]),*) => {
+        paste::paste!{pub struct EventLoop {
+            swarm: PeerConnection,
+            command_receiver: Receiver<ClientCommand>,
+            event_sender: Sender<PeerConnectionEvent>,
+            pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
+            pending_new_channel_proposals: HashMap<OutboundRequestId, oneshot::Sender<Result<ChannelProposalResult,RemoteServerError>>>,
+            pending_shutdown: Option<oneshot::Sender<bool>>,
+            pending_funding_tx: HashMap<String, oneshot::Sender<Result<TransactionRecord, PeerConnectionError>>>,
+            status: AtomicUsize,
+            connections: HashSet<ConnectionId>,
+            $([<pending_ $command:snake>]: HashMap<OutboundRequestId,oneshot::Sender<Result<MessageEnvelope<$res_payload>,RemoteServerError>>>),*
+        }}
+
+        impl EventLoop {
+            pub fn new(
+                swarm: PeerConnection,
+                command_receiver: Receiver<ClientCommand>,
+                event_sender: Sender<PeerConnectionEvent>,
+            ) -> Self {
+                paste::paste! {Self {
+                    swarm,
+                    command_receiver,
+                    event_sender,
+                    pending_dial: Default::default(),
+                    pending_funding_tx: Default::default(),
+                    pending_shutdown: None,
+                    status: AtomicUsize::new(RUNNING),
+                    connections: Default::default(),
+                    pending_new_channel_proposals: Default::default(),
+                    $([<pending_ $command:snake>]: Default::default()),*
+                }}
+            }
+
+            async fn handle_std_command(&mut self, command: ClientCommand) -> Result<(), ()> {
+                paste::paste! {match command {
+                    $(ClientCommand::$command { peer_id, envelope, sender } => {
+                        let sender = self.abort_if_shutting_down(sender, RemoteServerError::ServerShuttingDown)?;
+                        let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::$req_type(envelope));
+                        self.[<pending_ $command:snake>].insert(id, sender);
+                        Ok(())
+                    }
+                    )*
+                    c => {
+                        error!("Unknown command: {:?}", c);
+                        Err(())
+                    }
+                }}
+            }
+
+            /// Handle a [`GreaseResponse`] response message received from a peer. Usually this entails fetching a `Sender`
+            /// channel from the map of pending requests and passing the response through it.
+            async fn handle_message_response(&mut self, request_id: OutboundRequestId, response: GreaseResponse) {
+                match response {
+                    $(GreaseResponse::$res_type(response) => {
+                        paste::paste!{
+                            let pending = self.[< pending_ $command:snake>].remove(&request_id);
+                        }
+                        let Some(sender) = pending else {
+                            error!("Received response for unknown {} request. Request id: {request_id}", stringify! ($command));
+                            return;
+                        };
+                        let _ = sender.send(response);
+                    }
+                    )*
+                    GreaseResponse::ProposeChannelResponse(result) => {
+                        let pending = self.pending_new_channel_proposals.remove(&request_id);
+                        let Some(sender) = pending else {
+                            error!("Received response for unknown open channel request. Request id: {request_id}");
+                            return;
+                        };
+                        let _ = sender.send(result);
+                    }
+                    GreaseResponse::ChannelNotFound => {}
+                    GreaseResponse::ChannelClosed => {}
+                    GreaseResponse::Error(_) => {}
+                    GreaseResponse::NoResponse => {
+                        trace!("No response will be sent for request id: {request_id}");
+                    }
+                }
+            }
+
+            /// Handle a failed outbound request
+            ///
+            /// ## Parameters
+            /// * `peer` - The peer to whom the request was sent.
+            /// * `connection_id` - Identifier of the connection that the request was sent on.
+            /// * `request_id` - The (local) ID of the failed request.
+            /// * `error` - The error that happened.
+            fn on_outbound_failure(
+                &mut self,
+                peer: PeerId,
+                connection_id: ConnectionId,
+                request_id: OutboundRequestId,
+                error: OutboundFailure,
+            ) {
+                warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
+                paste::paste!{
+                    let send_result = $(if let Some(sender) = self.[<pending_ $command:snake>].remove(&request_id) {
+                        sender.send(Err(RemoteServerError::NetworkError))
+                        .map_err(|_value| {
+                            warn!("Failed to send error response for outbound request failure.");
+                        })
+                    })else*
+                    else if let Some(sender) = self.pending_new_channel_proposals.remove(&request_id) {
+                        sender.send(Err(RemoteServerError::NetworkError))
+                        .map_err(|_value| {
+                            warn!("Failed to send error response for channel request failure.");
+                        })
+                    }
+                    else if let Some(sender) = self.pending_dial.remove(&peer) {
+                        sender.send(Err(PeerConnectionError::OutboundFailure(error)))
+                        .map_err(|_value| {
+                            warn!("Failed to send error response for dial failure.");
+                        })
+                    }
+                    else {
+                        debug!("No pending request found for outbound failure. Request id: {request_id}");
+                        Ok(())
+                    };
+                }
+                if send_result.is_err() {
+                    warn!("Failed to send error response for outbound request failure. Request id: {request_id}");
+                }
+            }
+        }
+    };
 }
 
-impl<P: PublicKey + Send> EventLoop<P> {
-    pub fn new(
-        swarm: PeerConnection<P>,
-        command_receiver: Receiver<ClientCommand<P>>,
-        event_sender: Sender<PeerConnectionEvent<P>>,
-    ) -> Self {
-        Self {
-            swarm,
-            command_receiver,
-            event_sender,
-            pending_dial: Default::default(),
-            pending_new_channel_proposals: Default::default(),
-            pending_multisig_inits: Default::default(),
-            pending_multisig_keys: Default::default(),
-            pending_boolean_confirmations: Default::default(),
-            pending_shutdown: None,
-            status: AtomicUsize::new(RUNNING),
-            connections: Default::default(),
-        }
-    }
+// Links ClientCommand variants to their corresponding request and response types.
+// e.g. MultiSigKeyExchange generates a request of type `MsKeyExchange` which will result in a response of type `MsKeyExchange`
+// carrying a payload of type `MultisigKeyInfo`.
+event_loop!(
+    Command(MultiSigKeyExchange): MsKeyExchange => MsKeyExchange[MultisigKeyInfo],
+    Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecrets],
+    Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
+    Command(KesReadyNotification): VerifyKes => AcceptKes[bool],
+    Command(InitiateNewUpdate): StartChannelUpdate => ConfirmUpdate[StartChannelUpdateConfirmation]
+);
 
+impl EventLoop {
     pub async fn run(mut self) {
         loop {
             tokio::select! {
@@ -134,7 +242,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
     /// This function is called whenever a new event is received from the network.
     /// Both general network events ([SwarmEvent]) and specific events triggered by the payment channel state machine
     /// ([ReqResEvent]) are handled here.
-    async fn handle_event(&mut self, event: SwarmEvent<Event<P>>) {
+    async fn handle_event(&mut self, event: SwarmEvent<Event>) {
         match event {
             SwarmEvent::Behaviour(Event::Json(event)) => {
                 self.handle_request_response_event(event).await;
@@ -205,7 +313,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
         }
     }
 
-    async fn handle_request_response_event(&mut self, event: ReqResEvent<P>) {
+    async fn handle_request_response_event(&mut self, event: ReqResEvent) {
         match event {
             ReqResEvent::Message { peer, connection_id, message } => {
                 self.on_channel_message(peer, connection_id, message).await;
@@ -241,7 +349,7 @@ impl<P: PublicKey + Send> EventLoop<P> {
     }
 
     /// Respond to a new Request-Response Grease Channel message from the peer.
-    async fn on_channel_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: EventMessage<P>) {
+    async fn on_channel_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: EventMessage) {
         trace!("EVENT: Payment channel message received from {peer}. Connection id: {connection_id}.");
         match message {
             EventMessage::Request { request_id, request, channel } => {
@@ -253,87 +361,8 @@ impl<P: PublicKey + Send> EventLoop<P> {
             }
             EventMessage::Response { request_id, response } => {
                 trace!("EVENT: Response received. Peer: {peer}. Conn_id: {connection_id}. Req_id: {request_id}");
-                match response {
-                    GreaseResponse::ChannelProposalResult(result) => {
-                        let pending = self.pending_new_channel_proposals.remove(&request_id);
-                        let Some(sender) = pending else {
-                            error!("Received response for unknown open channel request. Request id: {request_id}");
-                            return;
-                        };
-                        let _ = sender.send(result);
-                    }
-                    GreaseResponse::MsInit(info) => {
-                        let pending = self.pending_multisig_inits.remove(&request_id);
-                        let Some(sender) = pending else {
-                            error!("Received response for unknown multisig init request. Request id: {request_id}");
-                            return;
-                        };
-                        let _ = sender.send(info);
-                    }
-                    GreaseResponse::MsKeyExchange(key) => {
-                        let pending = self.pending_multisig_keys.remove(&request_id);
-                        let Some(sender) = pending else {
-                            error!(
-                                "Received response for unknown multisig key exchange request. Request id: {request_id}"
-                            );
-                            return;
-                        };
-                        let _ = sender.send(key);
-                    }
-                    GreaseResponse::ConfirmMsAddress(confirmed) => {
-                        let pending = self.pending_boolean_confirmations.remove(&request_id);
-                        let Some(sender) = pending else {
-                            error!("Received response for unknown multisig address confirmation request. Request id: {request_id}");
-                            return;
-                        };
-                        let _ = sender.send(Ok(confirmed));
-                    }
-                    GreaseResponse::AcceptKes(accepted) => {
-                        let pending = self.pending_boolean_confirmations.remove(&request_id);
-                        let Some(sender) = pending else {
-                            error!("Received response for unknown accept kes request. Request id: {request_id}");
-                            return;
-                        };
-                        let _ = sender.send(Ok(accepted));
-                    }
-                    GreaseResponse::ChannelClosed => {}
-                    GreaseResponse::ChannelNotFound => {}
-                    GreaseResponse::Error(_) => {}
-                }
+                self.handle_message_response(request_id, response).await;
             }
-        }
-    }
-
-    /// Handle a failed outbound request
-    ///
-    /// ## Parameters
-    /// * `peer` - The peer to whom the request was sent.
-    /// * `connection_id` - Identifier of the connection that the request was sent on.
-    /// * `request_id` - The (local) ID of the failed request.
-    /// * `error` - The error that happened.
-    fn on_outbound_failure(
-        &mut self,
-        peer: PeerId,
-        connection_id: ConnectionId,
-        request_id: OutboundRequestId,
-        error: OutboundFailure,
-    ) {
-        warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
-        if let Some(sender) = self.pending_new_channel_proposals.remove(&request_id) {
-            let reason = RejectReason::NotSent(format!("Outbound request failed. Error: {error}"));
-            let response = RejectChannelProposal::new(reason, RetryOptions::close_only());
-            if sender.send(ChannelProposalResult::Rejected(response)).is_err() {
-                error!("Failed to send rejection response for request id: {request_id}.");
-            }
-        }
-        if let Some(sender) = self.pending_multisig_inits.remove(&request_id) {
-            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
-        }
-        if let Some(sender) = self.pending_multisig_keys.remove(&request_id) {
-            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
-        }
-        if let Some(sender) = self.pending_boolean_confirmations.remove(&request_id) {
-            let _ = sender.send(Err(format!("Outbound request failed: {error}")));
         }
     }
 
@@ -576,13 +605,15 @@ impl<P: PublicKey + Send> EventLoop<P> {
         debug!("EVENT: Non-fatal listener error: {listener_id} Error: {error}");
     }
 
-    async fn handle_command(&mut self, command: ClientCommand<P>) {
+    async fn handle_command(&mut self, command: ClientCommand) {
         if let Err(()) = self.command_handler(command).await {
             // Preserve the knowledge that the command was rejected.
-            warn!("💡  A client command was not handled successfully – see logs above for details");
+            warn!("💡️  A client command was not handled successfully – see logs above for details");
         }
     }
-    async fn command_handler(&mut self, command: ClientCommand<P>) -> Result<(), ()> {
+
+    async fn command_handler(&mut self, command: ClientCommand) -> Result<(), ()> {
+        // Handle non-std commands here. Standard commands are handled in the macro-generated method.
         match command {
             ClientCommand::StartListening { addr, sender } => {
                 let sender = self.abort_if_shutting_down(sender, PeerConnectionError::EventLoopShuttingDown)?;
@@ -615,19 +646,6 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 }
                 Ok(())
             }
-            ClientCommand::ProposeChannelRequest { peer_id, data, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not going to start opening channels.");
-                    let reason = RejectReason::NotSent("Event loop is shutting down.".to_string());
-                    let rejection = RejectChannelProposal::new(reason, RetryOptions::close_only());
-                    let _ = sender.send(ChannelProposalResult::Rejected(rejection));
-                    return Err(());
-                }
-                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ProposeNewChannel(data));
-                self.pending_new_channel_proposals.insert(id, sender);
-                info!("New channel proposal sent to {peer_id}");
-                Ok(())
-            }
             ClientCommand::ConnectedPeers { sender } => {
                 debug!("Connected peers requested.");
                 let peers = self.swarm.connected_peers().cloned().collect();
@@ -644,32 +662,32 @@ impl<P: PublicKey + Send> EventLoop<P> {
                 }
                 Ok(())
             }
-            // MultiSig wallet prep commands
-            ClientCommand::MultiSigInitRequest { peer_id, envelope, sender } => {
-                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
-                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::MsInit(envelope));
-                self.pending_multisig_inits.insert(id, sender);
-                Ok(())
-            }
-            ClientCommand::MultiSigKeyRequest { peer_id, envelope, sender } => {
-                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
-                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::MsKeyExchange(envelope));
-                self.pending_multisig_keys.insert(id, sender);
-                Ok(())
-            }
-            ClientCommand::ConfirmMultiSigAddressRequest { peer_id, envelope, sender } => {
-                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
+            ClientCommand::ProposeChannelRequest { peer_id, data, sender } => {
+                if !self.is_running() {
+                    info!("Event loop is shutting down. I'm not going to start opening channels.");
+                    let _ = sender.send(Err(RemoteServerError::ServerShuttingDown));
+                    return Err(());
+                }
                 let id =
-                    self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ConfirmMsAddress(envelope));
-                self.pending_boolean_confirmations.insert(id, sender);
+                    self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ProposeChannelRequest(data));
+                self.pending_new_channel_proposals.insert(id, sender);
+                info!("New channel proposal sent to {peer_id}");
                 Ok(())
             }
-            ClientCommand::KesReadyNotification { peer_id, envelope, sender } => {
-                let sender = self.abort_if_shutting_down(sender, "Event loop is shutting down.".to_string())?;
-                let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::VerifyKes(envelope));
-                self.pending_boolean_confirmations.insert(id, sender);
+            ClientCommand::WaitForFundingTx { channel, sender } => {
+                debug!("Waiting for funding transaction for channel {channel}");
+                self.pending_funding_tx.insert(channel, sender);
                 Ok(())
             }
+            ClientCommand::NotifyTxMined(record) => {
+                let name = &record.channel_name;
+                if let Some(sender) = self.pending_funding_tx.remove(name) {
+                    debug!("Notifying receiver that tx for {name} has been mined.");
+                    let _ = sender.send(Ok(record));
+                }
+                Ok(())
+            }
+            cmd => self.handle_std_command(cmd).await,
         }
     }
 

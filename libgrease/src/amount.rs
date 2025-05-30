@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use std::ops::{Add, AddAssign, SubAssign};
+use std::ops::{Add, AddAssign, Neg, SubAssign};
 
 pub const PICONERO: u64 = 1_000_000_000_000;
 
@@ -70,6 +70,16 @@ impl MoneroAmount {
         let fraction = self.amount % PICONERO;
         (whole, fraction)
     }
+
+    pub fn checked_apply_delta(&self, delta: MoneroDelta) -> Option<Self> {
+        if delta.amount < 0 && self.amount >= delta.amount.unsigned_abs() {
+            Some(MoneroAmount { amount: self.amount - delta.amount.unsigned_abs() })
+        } else if delta.amount >= 0 {
+            delta.amount.cast_unsigned().checked_add(self.amount).map(MoneroAmount::from_piconero)
+        } else {
+            None // No change or invalid operation
+        }
+    }
 }
 
 impl PartialOrd for MoneroAmount {
@@ -114,6 +124,33 @@ impl Display for MoneroAmount {
 impl From<u64> for MoneroAmount {
     fn from(amount: u64) -> Self {
         MoneroAmount::from_piconero(amount)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MoneroDelta {
+    /// The amount of money in the channel
+    pub amount: i64,
+}
+
+impl From<i64> for MoneroDelta {
+    fn from(amount: i64) -> Self {
+        MoneroDelta { amount }
+    }
+}
+
+impl From<MoneroAmount> for MoneroDelta {
+    fn from(amount: MoneroAmount) -> Self {
+        MoneroDelta { amount: amount.to_piconero() as i64 }
+    }
+}
+
+impl Neg for MoneroDelta {
+    type Output = MoneroDelta;
+
+    fn neg(self) -> Self::Output {
+        MoneroDelta { amount: -self.amount }
     }
 }
 

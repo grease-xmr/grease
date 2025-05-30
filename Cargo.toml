@@ -10,6 +10,7 @@ members = [
 [workspace.dependencies]
 grease-p2p = { version = "0.1.0", path = "./p2p" }
 libgrease = { version = "0.1.0", path = "./libgrease" }
+wallet = { version = "0.1.0", path = "./wallet" }
 
 anyhow = { version = "1.0.96" }
 blake2 = {  version = "0.10.6"}
@@ -28,3 +29,4 @@ serde_json = { version = "1.0.140" }
 serde_yml = {  version = "0.0.12" }
 thiserror = { version = "2.0.11" }
 tokio = { version = "1.38", default-features = false }
+zeroize = {  version = "1.8.1" }

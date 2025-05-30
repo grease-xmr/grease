@@ -1,7 +1,8 @@
+use crate::amount::MoneroAmount;
+use crate::balance::Balances;
 use crate::crypto::traits::PublicKey;
-use crate::monero::data_objects::TransactionId;
+use crate::monero::data_objects::{MultisigSplitSecrets, TransactionId};
 use crate::payment_channel::ChannelRole;
-use crate::state_machine::Balances;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +22,12 @@ pub struct KesInitializationRecord<P: PublicKey> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShardInfo {
+    pub my_shards: MultisigSplitSecrets,
+    pub their_shards: MultisigSplitSecrets,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KesInitializationResult {
     pub id: KesId,
 }
@@ -35,10 +42,11 @@ impl<S: Into<String>> From<S> for KesId {
 pub struct FundingTransaction {
     pub role: ChannelRole,
     pub transaction_id: TransactionId,
+    pub amount: MoneroAmount,
 }
 
 impl FundingTransaction {
-    pub fn new(role: ChannelRole, txid: impl Into<String>) -> Self {
-        FundingTransaction { role, transaction_id: TransactionId::new(txid) }
+    pub fn new(role: ChannelRole, txid: impl Into<String>, amount: impl Into<MoneroAmount>) -> Self {
+        FundingTransaction { role, transaction_id: TransactionId::new(txid), amount: amount.into() }
     }
 }

@@ -1,23 +1,20 @@
-use crate::channel_id::ChannelId;
+use crate::balance::Balances;
+use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::traits::PublicKey;
 use crate::monero::MultiSigWallet;
-use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
-use crate::state_machine::traits::ChannelState;
-use crate::state_machine::{ChannelMetadata, ClosingChannelState, EstablishedChannelState};
+use crate::state_machine::{ClosingChannelState, EstablishedChannelState};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
-pub struct DisputingChannelState<P, C, W>
+#[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>"))]
+pub struct DisputingChannelState<P, W>
 where
     P: PublicKey,
-    C: ActivePaymentChannel,
     W: MultiSigWallet,
 {
     pub(crate) origin: DisputeOrigin,
     pub(crate) reason: String,
-    pub(crate) payment_channel: C,
     pub(crate) wallet: W,
     pub(crate) channel_info: ChannelMetadata<P>,
 }
@@ -54,46 +51,32 @@ impl ForceCloseInfo {
     }
 }
 
-impl<P, C, W> DisputingChannelState<P, C, W>
+impl<P, W> DisputingChannelState<P, W>
 where
     P: PublicKey,
-    C: ActivePaymentChannel,
     W: MultiSigWallet,
 {
     /// Create a new disputing channel state
-    pub fn from_open(open_state: EstablishedChannelState<P, C, W>, info: ForceCloseInfo) -> Self {
+    pub fn from_open(open_state: EstablishedChannelState<P, W>, info: ForceCloseInfo) -> Self {
         DisputingChannelState {
             origin: info.origin,
             reason: info.reason,
-            payment_channel: open_state.payment_channel,
             wallet: open_state.wallet,
             channel_info: open_state.channel_info,
         }
     }
 
-    pub fn from_closing(closing_state: ClosingChannelState<P, C, W>, info: ForceCloseInfo) -> Self {
+    pub fn from_closing(closing_state: ClosingChannelState<P, W>, info: ForceCloseInfo) -> Self {
         DisputingChannelState {
             origin: info.origin,
             reason: info.reason,
-            payment_channel: closing_state.payment_channel,
             wallet: closing_state.wallet,
             channel_info: closing_state.channel_info,
         }
     }
-}
 
-impl<P, C, W> ChannelState for DisputingChannelState<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
-    fn channel_id(&self) -> &ChannelId {
-        self.payment_channel.channel_id()
-    }
-
-    fn role(&self) -> ChannelRole {
-        self.payment_channel.role()
+    pub fn current_balances(&self) -> Balances {
+        todo!("Implement current balances logic for closing channel state")
     }
 }
 

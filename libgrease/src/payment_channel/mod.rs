@@ -1,19 +1,22 @@
-#[cfg(feature = "dummy_channel")]
-pub mod dummy_impl;
-
 mod error;
-mod status;
-mod traits;
 
 pub use error::UpdateError;
 use serde::{Deserialize, Serialize};
-pub use status::{ChannelUpdateStatus, PaymentResponse};
-pub use traits::{ActivePaymentChannel, ChannelPayment, ClosedPaymentChannel};
+use std::fmt::Display;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelRole {
     Merchant,
     Customer,
+}
+
+impl Display for ChannelRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChannelRole::Merchant => write!(f, "Merchant"),
+            ChannelRole::Customer => write!(f, "Customer"),
+        }
+    }
 }
 
 impl ChannelRole {
