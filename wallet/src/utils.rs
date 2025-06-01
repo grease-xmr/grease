@@ -1,13 +1,13 @@
 use ciphersuite::group::ff::Field;
-use dalek_ff_group::{ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
+use dalek_ff_group::{EdwardsPoint, Scalar, ED25519_BASEPOINT_TABLE};
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::{
-    DEFAULT_LOCK_WINDOW, Scanner, ViewPair, WalletOutput,
     address::{AddressType, MoneroAddress, Network},
     block::Block,
     ringct::RctType,
     rpc::{FeeRate, Rpc},
     transaction::Transaction,
+    Scanner, ViewPair, WalletOutput, DEFAULT_LOCK_WINDOW,
 };
 use rand_core::{OsRng, RngCore};
 use std::ops::Deref;

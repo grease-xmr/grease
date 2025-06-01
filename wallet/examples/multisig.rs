@@ -1,5 +1,5 @@
 use ciphersuite::group::ff::PrimeField;
-use dalek_ff_group::{ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
+use dalek_ff_group::{EdwardsPoint, Scalar, ED25519_BASEPOINT_TABLE};
 use log::info;
 use monero_rpc::{Rpc, RpcError};
 use monero_serai::transaction::Transaction;
@@ -7,9 +7,7 @@ use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use serde::Deserialize;
 use serde_json::json;
-use wallet::virtual_wallet::{
-    MultisigWallet, WalletError,
-};
+use wallet::virtual_wallet::{MultisigWallet, WalletError};
 use zeroize::Zeroizing;
 
 #[tokio::main]
@@ -118,33 +116,31 @@ fn keys_from(s: &str) -> (Zeroizing<Scalar>, EdwardsPoint) {
     (Zeroizing::new(secret), public)
 }
 
-fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> impl Send + Future<Output = Result<(), RpcError>> {
-    async move {
-        #[allow(dead_code)]
-        #[derive(Debug, Deserialize)]
-        struct SendRawResponse {
-            status: String,
-            double_spend: bool,
-            fee_too_low: bool,
-            invalid_input: bool,
-            invalid_output: bool,
-            low_mixin: bool,
-            not_relayed: bool,
-            overspend: bool,
-            too_big: bool,
-            too_few_outputs: bool,
-            reason: String,
-        }
-
-        let res: SendRawResponse = rpc
-            .rpc_call(
-                "send_raw_transaction",
-                Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": true })),
-            )
-            .await?;
-
-        println!("{res:?}");
-
-        Ok(())
+async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Result<(), RpcError> {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct SendRawResponse {
+        status: String,
+        double_spend: bool,
+        fee_too_low: bool,
+        invalid_input: bool,
+        invalid_output: bool,
+        low_mixin: bool,
+        not_relayed: bool,
+        overspend: bool,
+        too_big: bool,
+        too_few_outputs: bool,
+        reason: String,
     }
+
+    let res: SendRawResponse = rpc
+        .rpc_call(
+            "send_raw_transaction",
+            Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": true })),
+        )
+        .await?;
+
+    println!("{res:?}");
+
+    Ok(())
 }

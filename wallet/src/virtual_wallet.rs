@@ -1,6 +1,6 @@
 use blake2::Digest;
 use dalek_ff_group::dalek::constants::ED25519_BASEPOINT_POINT;
-use dalek_ff_group::{EdwardsPoint, Scalar, dalek::Scalar as DScalar};
+use dalek_ff_group::{dalek::Scalar as DScalar, EdwardsPoint, Scalar};
 use modular_frost::curve::{Ciphersuite, Ed25519};
 use monero_simple_request_rpc::SimpleRequestRpc;
 use rand_chacha::ChaCha20Rng;
@@ -10,14 +10,14 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 use log::debug;
-use modular_frost::dkg::DkgError;
 use modular_frost::dkg::musig::musig;
+use modular_frost::dkg::DkgError;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare};
 use modular_frost::{FrostError, Participant, ThresholdKeys, ThresholdParams};
 use monero_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
-use monero_serai::ringct::RctType;
 use monero_serai::ringct::clsag::ClsagAddendum;
+use monero_serai::ringct::RctType;
 use monero_serai::transaction::Transaction;
 use monero_wallet::address::{AddressType, MoneroAddress, Network, SubaddressIndex};
 use monero_wallet::send::{
@@ -99,7 +99,7 @@ impl MultisigWallet {
             self.joint_public_view_key.0.clone(),
         )
     }
-    
+
     pub fn my_spend_key(&self) -> &Scalar {
         &self.my_spend_key
     }
@@ -180,14 +180,13 @@ impl MultisigWallet {
         const MAX_OUTPUTS: usize = 16;
         const MINIMUM_FEE: u64 = 1_500_000;
         // max payments must take change into account
-        if payments.len() + 1 >= MAX_OUTPUTS {
+        if payments.len() + 1 > MAX_OUTPUTS {
             return Err(WalletError::SendError(SendError::TooManyOutputs));
         }
         if self.known_outputs.is_empty() {
             return Err(WalletError::SendError(SendError::NoInputs));
         }
         let fee_rate = FeeRate::new(MINIMUM_FEE, 1000)?;
-
         // Get reference block
         let refblock_height = self.get_height().await? as usize - 1;
         let block = self.rpc.get_block_by_number(refblock_height).await?;
