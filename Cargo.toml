@@ -4,6 +4,7 @@ members = [
     "libgrease",
     "grease_cli",
     "p2p",
+    "wallet",
 ]
 
 [workspace.dependencies]
@@ -13,10 +14,11 @@ libgrease = { version = "0.1.0", path = "./libgrease" }
 anyhow = { version = "1.0.96" }
 blake2 = {  version = "0.10.6"}
 clap = { version = "4.5.31" }
+chrono = { version = "0.4.41", features = ["serde"] }
+hex = { version = "0.4.3" }
 env_logger = { version = "0.11.6" }
 futures = { version = "0.3" }
 libp2p = { version = "0.55", default-features = false }
-libp2p-request-response = { version = "0.28.0", default-features = false }
 log = { version = "0.4" }
 monero = { version = "0.21.0", features = ["serde"] }
 rand = { version = "0.9.0" }
