@@ -1,0 +1,72 @@
+[package]
+name = "wallet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+blake2 = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+rand_core = { version = "0.6.4" }
+tokio = { workspace = true }
+zeroize = {  version = "1.8.1" }
+rand_chacha = {  version = "0.3.1"   }
+log = "0.4.27"
+thiserror = { workspace = true }
+
+[dependencies.monero-wallet]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/networks/monero/wallet"
+features = ["multisig"]
+
+[dependencies.monero-rpc]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/networks/monero/rpc"
+
+[dependencies.monero-simple-request-rpc]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/networks/monero/rpc/simple-request"
+
+[dependencies.monero-serai]
+version = "0.1.4-alpha"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/networks/monero"
+
+[dependencies.modular-frost]
+version = "0.8.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/crypto/frost"
+features = ["tests"]
+
+[dependencies.ciphersuite]
+version = "0.4.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/crypto/ciphersuite"
+features = ["dalek"]
+
+[dependencies.dalek-ff-group]
+version = "0.4.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+#path = "../../../oss/serai/crypto/dalek-ff-group"
+
+[dev-dependencies]
+env_logger = "0.11.8"
+serde = {workspace = true}
+serde_json = {workspace = true}
