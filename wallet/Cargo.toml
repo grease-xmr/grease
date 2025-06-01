@@ -1,7 +1,10 @@
 [package]
 name = "wallet"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "MVP multisignature Monero wallet using MuSig and FROST"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/grease-xmr/grease"
 
 [dependencies]
 blake2 = { workspace = true }
