@@ -44,6 +44,9 @@ async fn main() -> Result<(), WalletError> {
     println!("Multisig wallet address for Alice: {}", wallet_a.address().to_string());
     println!("Multisig wallet address for Bob  : {}", wallet_b.address().to_string());
 
+    println!("Joint Secret view key: {}", hex::encode(wallet_a.joint_private_view_key().as_bytes()));
+    println!("Joint Public view key: {}", hex::encode(wallet_a.joint_public_view_key().0.compress().as_bytes()));
+    println!("Joint Public spend key: {}", hex::encode(wallet_a.joint_public_view_key().0.compress().as_bytes()));
     println!("Creating signing state machine...");
 
     // Pay Alice's external wallet
