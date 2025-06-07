@@ -20,11 +20,9 @@ fn VerifyWitness0(
     assert(nonce_peer != 0);
     assert(witness_0 != 0);
     assert(blinding != 0);
-    assert_lt(nonce_peer, library::L);
-    assert_lt(witness_0, library::L);
-    assert_lt(blinding, library::L);
-
-    library::VerifyTi(T_0, witness_0);
+    assert_lt(nonce_peer, library::BABY_JUBJUB_ORDER);
+    assert_lt(witness_0, library::BABY_JUBJUB_ORDER);
+    assert_lt(blinding, library::BABY_JUBJUB_ORDER);
 
     //Create hash (random oracle) from both peers' entropy to ensure uniqueness
     let constant_slice: [u8] = HASH_HEADER_CONSTANT.as_slice();
@@ -41,29 +39,31 @@ fn VerifyWitness0(
     let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
 
     //Clamp to Baby Jubjub order
-    let l_bignum: U256 = U256::from(library::L);
+    let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
 
     let witness_0_calc_bignum = hash_bignum.umod(l_bignum);
     let witness_0_calc_field = bignum::bignum::to_field(witness_0_calc_bignum);
 
-    assert_lt(witness_0_calc_field, library::L); //TODO: Is this necessary since the function has already been calculated?
+    assert_lt(witness_0_calc_field, library::BABY_JUBJUB_ORDER); //TODO: Is this necessary since the function has already been calculated?
     // Ensure the witness matches the reduced hash
     assert_eq(witness_0_calc_field, witness_0);
+
+    library::VerifyTi(T_0, witness_0);
+
 }
 
 /// Verify protocol conformance of using the Feldman 2-of-2 Verifiable Secret Share on `witness_0` and encryption of shares to peer and KES [given VerifyWitness0()]
 fn VerifyWitnessSharing(
     witness_0: Field,
     a_1: Field,
-    c_0: edwards::Curve<BabyJubJubParams>,
     c_1: edwards::Curve<BabyJubJubParams>,
     fi_1: edwards::Curve<BabyJubJubParams>,
-    enc_1: edwards::Curve<BabyJubJubParams>,
+    enc_1: Field,
     share_1: Field,
     r_1: Field,
     pubkey_peer: edwards::Curve<BabyJubJubParams>,
     fi_2: edwards::Curve<BabyJubJubParams>,
-    enc_2: edwards::Curve<BabyJubJubParams>,
+    enc_2: Field,
     share_2: Field,
     r_2: Field,
     pubkey_KES: edwards::Curve<BabyJubJubParams>,
@@ -78,12 +78,12 @@ fn VerifyWitnessSharing(
     assert_eq(share_2_calc, share_2);
 
     //Encrypt to peer
-    let (fi_1_calc, enc_1_calc) = library::encrypt_message(share_1, r_1, pubkey_peer);
+    let (fi_1_calc, enc_1_calc) = library::VerifyEncryptMessage_ECDH(share_1, r_1, pubkey_peer);
     assert_eq(fi_1_calc, fi_1);
     assert_eq(enc_1_calc, enc_1);
 
     //Encrypt to KES
-    let (fi_2_calc, enc_2_calc) = library::encrypt_message(share_2, r_2, pubkey_KES);
+    let (fi_2_calc, enc_2_calc) = library::VerifyEncryptMessage_ECDH(share_2, r_2, pubkey_KES);
     assert_eq(fi_2_calc, fi_2);
     assert_eq(enc_2_calc, enc_2);
 }
@@ -95,25 +95,29 @@ fn main(
     witness_0: Field,
     blinding: Field,
     a_1: Field,
-    c_0: pub edwards::Curve<BabyJubJubParams>,
     c_1: pub edwards::Curve<BabyJubJubParams>,
     fi_1: edwards::Curve<BabyJubJubParams>,
-    enc_1: edwards::Curve<BabyJubJubParams>,
+    enc_1: Field,
     share_1: Field,
     r_1: Field,
     pubkey_peer: pub edwards::Curve<BabyJubJubParams>,
     fi_2: edwards::Curve<BabyJubJubParams>,
-    enc_2: edwards::Curve<BabyJubJubParams>,
+    enc_2: Field,
     share_2: Field,
     r_2: Field,
     pubkey_KES: pub edwards::Curve<BabyJubJubParams>,
+    challenge_bytes: pub [u8; 32],
+    blinding_DLEQ: Field,
+    response_div_BabyJubJub: [u8; 32],
+    response_BabyJubJub: Field,
+    response_div_ed25519: [u8; 32],
+    response_ed25519: [u8; 32],
 ) {
     VerifyWitness0(nonce_peer, T_0, witness_0, blinding);
 
     VerifyWitnessSharing(
         witness_0,
         a_1,
-        c_0,
         c_1,
         fi_1,
         enc_1,
@@ -125,5 +129,15 @@ fn main(
         share_2,
         r_2,
         pubkey_KES,
+    );
+
+    library::VerifyEquivalentModulo(
+        challenge_bytes,
+        blinding_DLEQ,
+        witness_0,
+        response_div_BabyJubJub,
+        response_BabyJubJub,
+        response_div_ed25519,
+        response_ed25519
     );
 }

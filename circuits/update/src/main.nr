@@ -4,7 +4,8 @@ use dep::bignum::fields::U256::U256;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
-use std::hash::blake2s;
+use std::{hash::blake2s, ops::Mul};
+use dep::bignum::fields::U512::U512;
 
 // This is the constant for VCOF hashing
 global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32];//TODO: Create a domain-separation constant
@@ -32,7 +33,7 @@ fn VerifyCOF(
     let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
 
     //Clamp to Baby Jubjub order [251 bit value]
-    let l_bignum: U256 = U256::from(library::L);
+    let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
 
     let value_bignum = hash_bignum.umod(l_bignum);
     let value_field = bignum::bignum::to_field(value_bignum);
@@ -46,6 +47,22 @@ fn main(
     T_i: pub edwards::Curve<BabyJubJubParams>,
     witness_im1: Field,
     witness_i: Field,
+    challenge_bytes: pub [u8; 32],
+    blinding_DLEQ: Field,
+    response_div_BabyJubJub: [u8; 32],
+    response_BabyJubJub: Field,
+    response_div_ed25519: [u8; 32],
+    response_ed25519: [u8; 32],
 ) {
     VerifyCOF(T_im1, T_i, witness_im1, witness_i);
+
+    library::VerifyEquivalentModulo(
+        challenge_bytes,
+        blinding_DLEQ,
+        witness_i,
+        response_div_BabyJubJub,
+        response_BabyJubJub,
+        response_div_ed25519,
+        response_ed25519
+    );
 }
