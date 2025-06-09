@@ -85,5 +85,5 @@ _files_ and not their enclosing folders.
 
 | Stage      | Gates      | Proof size |
 | :--------- | :--------- | :--------- |
-| init       | 28 436     | 2 496 B    |
-| update     | 19 332     | 2 272 B    |
+| init       | 34 215     | 3 456 B    |
+| update     | 19 332     | 3 296 B    |

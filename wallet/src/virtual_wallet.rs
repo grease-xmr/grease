@@ -100,6 +100,10 @@ impl MultisigWallet {
         )
     }
 
+    pub fn joint_private_view_key(&self) -> &Scalar {
+        &self.joint_private_view_key
+    }
+
     pub fn my_spend_key(&self) -> &Scalar {
         &self.my_spend_key
     }
