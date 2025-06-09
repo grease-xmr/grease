@@ -167,6 +167,14 @@ impl MultisigWallet {
     pub fn joint_public_spend_key(&self) -> &EdwardsPoint {
         &self.joint_public_spend_key
     }
+    
+    pub fn joint_public_view_key(&self) -> &EdwardsPoint {
+        &self.joint_public_view_key
+    }
+    
+    pub fn joint_private_view_key(&self) -> &Zeroizing<Scalar> {
+        &self.joint_private_view_key
+    }
 
     pub fn get_change_output(&self) -> Result<Change, WalletError> {
         let key = self.joint_public_spend_key().clone();
