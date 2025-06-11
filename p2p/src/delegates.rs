@@ -58,30 +58,106 @@ pub trait FundChannel {
 }
 
 //----------------------------------------   Commitment TX0 ------------------------------------------------------------
-pub struct InitialProofsResult<P: GreaseInitializer> {
-    pub public_outputs: P::PublicOutputs,
-    pub private_outputs: P::PrivateOutputs,
-    pub proofs: P::PublicOutputs,
+
+/// A curve-agnostic representation of a scalar.
+#[derive(Debug, Clone, Default)]
+pub struct GenericScalar([u8; 32]);
+/// A curve-agnostic representation of a point.
+#[derive(Debug, Clone, Default)]
+pub struct GenericPoint([u8; 32]);
+
+pub struct Comm0PrivateInputs {
+    /// 𝛎_ꞷ0 - Random blinding value
+    pub random_blinding: GenericScalar,
+    /// Random value
+    pub a1: GenericPoint,
+    /// 𝛎_1 - Random value
+    pub r1: GenericPoint,
+    /// 𝛎_2 - Random value
+    pub r2: GenericPoint,
+    /// 𝛎_DLEQ - Random blinding value for DLEQ proof
+    pub blinding_dleq: GenericScalar,
 }
+
+/// The outputs of the Commitment0 proofs that must be shared with the peer.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Default)]
+pub struct Comm0PublicOutputs {
+    /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
+    pub T_0: GenericPoint,
+    /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
+    pub c_1: GenericPoint,
+    /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
+    pub phi_1: GenericPoint,
+    /// **χ₁** - The encrypted value of σ₁.
+    pub enc_1: GenericScalar,
+    /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES (fi₂).
+    pub phi_2: GenericPoint,
+    /// **χ₂** - The encrypted value of σ₂ (enc₂).
+    pub enc_2: GenericScalar,
+    /// **S₀** - The public key/curve point on Ed25519 for ω₀.
+    pub S_0: GenericPoint,
+    /// **c** - The Fiat–Shamir heuristic challenge (challenge_bytes).
+    pub c: GenericScalar,
+    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (response_BabyJubJub).
+    pub rho_bjj: GenericScalar,
+    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (response_div_ed25519).
+    pub rho_ed: GenericScalar,
+}
+
+/// The proof outputs that are stored, but not shared with the peer.
+#[derive(Debug, Clone, Default)]
+pub struct Comm0PrivateOutputs {
+    /// **ω₀** - The root private key protecting access to the user's locked value (witness₀).
+    pub omega_0: GenericScalar,
+    /// **σ₁** - The split of ω₀ shared with the peer (share₁).
+    pub peer_share: GenericScalar,
+    /// **σ₂** - The split of ω₀ shared with the KES (share₂).
+    pub kes_share: GenericScalar,
+    /// **Δ_BabyJubjub** - Optimization parameter (response_div_BabyJubjub).
+    pub delta_bjj: GenericScalar,
+    /// **Δ_Ed25519** - Optimization parameter (response_div_BabyJubJub).
+    pub delta_ed: GenericScalar,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct InitialProofsResult {
+    pub public_outputs: Comm0PublicOutputs,
+    pub private_outputs: Comm0PrivateOutputs,
+    pub proofs: Vec<u8>,
+}
+
+/// A representation of proof that the merchant has established the KES correctly using the shared secrets and the
+/// agreed KES public key.
+pub struct KesProofs {
+    proof: Vec<u8>,
+}
+
 pub trait GreaseInitializer {
-    type PrivateInputs: Clone + Send + Sync;
-    type PublicOutputs;
-    type PrivateOutputs;
-    type Proofs;
-
-    async fn generate_initial_proofs(
+    fn generate_initial_proofs(
         &mut self,
-        inputs: Self::PrivateInputs,
+        inputs: Comm0PrivateInputs,
         metadata: &ChannelMetadata,
-    ) -> Result<InitialProofsResult<Self>, DelegateError>
-    where
-        Self: Sized;
+    ) -> impl Future<Output = Result<InitialProofsResult, DelegateError>> + Send;
 
-    async fn verify_initial_proofs(
+    fn verify_initial_proofs(
         &self,
-        public_outputs: &Self::PublicOutputs,
-        proofs: &Self::Proofs,
+        public_outputs: &Comm0PublicOutputs,
+        proofs: &[u8],
         metadata: &ChannelMetadata,
+    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
+
+    async fn create_kes_proofs(
+        customer_key: PartialEncryptedKey,
+        merchant_key: PartialEncryptedKey,
+        kes_public_key: Curve25519PublicKey,
+    ) -> Result<KesProofs, DelegateError>;
+
+    async fn verify_kes_proofs(
+        customer_key: PartialEncryptedKey,
+        merchant_key: PartialEncryptedKey,
+        kes_public_key: Curve25519PublicKey,
+        proofs: KesProofs,
     ) -> Result<(), DelegateError>;
 }
 
@@ -114,28 +190,47 @@ impl ProposalVerifier for DummyDelegate {
 }
 
 impl GreaseInitializer for DummyDelegate {
-    type PrivateInputs = ();
-    type PublicOutputs = ();
-    type PrivateOutputs = ();
-    type Proofs = ();
-
     async fn generate_initial_proofs(
         &mut self,
-        _inputs: Self::PrivateInputs,
-        _metadata: &ChannelMetadata,
-    ) -> Result<InitialProofsResult<Self>, DelegateError> {
-        info!("DummyDelegate: Generating initial proofs");
-        Ok(InitialProofsResult { public_outputs: (), private_outputs: (), proofs: () })
+        _in: Comm0PrivateInputs,
+        metadata: &ChannelMetadata,
+    ) -> Result<InitialProofsResult, DelegateError> {
+        info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
+        Ok(InitialProofsResult::default())
     }
 
-    async fn verify_initial_proofs(
+    fn verify_initial_proofs(
         &self,
-        _public_outputs: &Self::PublicOutputs,
-        _proofs: &Self::Proofs,
-        _metadata: &ChannelMetadata,
+        _outputs: &Comm0PublicOutputs,
+        _proof: &[u8],
+        metadata: &ChannelMetadata,
+    ) -> impl Future<Output = Result<(), DelegateError>> + Send {
+        async {
+            info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
+            Ok(())
+        }
+    }
+
+    async fn create_kes_proofs(
+        _cust_key: PartialEncryptedKey,
+        _m_key: PartialEncryptedKey,
+        _kes_pubkey: Curve25519PublicKey,
+    ) -> Result<KesProofs, DelegateError> {
+        Ok(KesProofs { proof: b"KESproof".to_vec() })
+    }
+
+    async fn verify_kes_proofs(
+        _c_key: PartialEncryptedKey,
+        _m_key: PartialEncryptedKey,
+        _kes_pubkey: Curve25519PublicKey,
+        proofs: KesProofs,
     ) -> Result<(), DelegateError> {
-        info!("DummyDelegate: Verifying initial proofs");
-        Ok(())
+        if proofs.proof == b"KESproof".to_vec() {
+            info!("DummyDelegate: KES proofs verified successfully");
+            Ok(())
+        } else {
+            Err(DelegateError("Invalid KES proofs".to_string()))
+        }
     }
 }
 
