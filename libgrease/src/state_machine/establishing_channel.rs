@@ -9,6 +9,7 @@ use crate::state_machine::lifecycle::ChannelState;
 use crate::state_machine::new_channel::NewChannelState;
 use crate::state_machine::open_channel::EstablishedChannelState;
 use log::*;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
@@ -49,6 +50,10 @@ impl EstablishingState {
             && self.kes_proof.is_some()
             && self.commitment_tx_proof.is_some()
             && self.shards.is_some()
+    }
+
+    pub fn multisig_address(&self, network: Network) -> Option<String> {
+        self.multisig_wallet.as_ref().map(|w| w.address(network).to_string())
     }
 
     fn is_fully_funded(&self) -> bool {
@@ -117,6 +122,7 @@ impl EstablishingState {
         self.funding_total += amount;
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn next(self) -> Result<EstablishedChannelState, (Self, LifeCycleError)> {
         debug!("Trying to move from Establishing to Established state");
         if !self.requirements_met() {

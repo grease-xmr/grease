@@ -3,6 +3,7 @@ use crate::channel_metadata::ChannelMetadata;
 use crate::lifecycle_impl;
 use crate::state_machine::new_channel::RejectNewChannelReason;
 use crate::state_machine::timeouts::TimeoutReason;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,10 @@ impl ClosedChannelState {
     }
     pub fn to_channel_state(self) -> ChannelState {
         ChannelState::Closed(self)
+    }
+
+    pub fn multisig_address(&self, _network: Network) -> Option<String> {
+        todo!("Implement multisig address retrieval for closing channel state")
     }
 
     /// Get the reason for the channel being closed
@@ -46,12 +51,12 @@ pub enum ChannelClosedReason {
 
 impl PartialEq for ChannelClosedReason {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ChannelClosedReason::Normal, ChannelClosedReason::Normal) => true,
-            (ChannelClosedReason::Timeout(_), ChannelClosedReason::Timeout(_)) => true,
-            (ChannelClosedReason::Rejected(_), ChannelClosedReason::Rejected(_)) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (ChannelClosedReason::Normal, ChannelClosedReason::Normal)
+                | (ChannelClosedReason::Timeout(_), ChannelClosedReason::Timeout(_))
+                | (ChannelClosedReason::Rejected(_), ChannelClosedReason::Rejected(_))
+        )
     }
 }
 

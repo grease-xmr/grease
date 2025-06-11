@@ -101,8 +101,8 @@ impl Curve25519PublicKey {
         &self.compressed_point
     }
 
-    pub fn as_point(&self) -> &EdwardsPoint {
-        &self.point
+    pub fn as_point(&self) -> EdwardsPoint {
+        self.point
     }
 
     /// Tries to deserialize a hex string into a `Curve25519PublicKey`. The hex string must represent a valid compressed

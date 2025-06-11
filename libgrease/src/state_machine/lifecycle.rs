@@ -6,6 +6,7 @@ use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{
     ClosedChannelState, ClosingChannelState, EstablishedChannelState, EstablishingState, NewChannelState,
 };
+use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use thiserror::Error;
@@ -75,6 +76,8 @@ pub trait LifeCycle {
     fn stage(&self) -> LifecycleStage;
 
     fn metadata(&self) -> &ChannelMetadata;
+
+    fn wallet_address(&self, network: Network) -> Option<String>;
 }
 
 #[macro_export]
@@ -87,6 +90,10 @@ macro_rules! lifecycle_impl {
 
             fn metadata(&self) -> &ChannelMetadata {
                 &self.metadata
+            }
+
+            fn wallet_address(&self, network: Network) -> Option<String> {
+                self.multisig_address(network)
             }
         }
     };
@@ -118,6 +125,7 @@ impl ChannelState {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn to_new(self) -> Result<NewChannelState, (Self, LifeCycleError)> {
         match self {
             ChannelState::New(state) => Ok(state),
@@ -125,6 +133,7 @@ impl ChannelState {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn to_establishing(self) -> Result<EstablishingState, (Self, LifeCycleError)> {
         match self {
             ChannelState::Establishing(state) => Ok(state),
@@ -139,6 +148,7 @@ impl ChannelState {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn to_open(self) -> Result<EstablishedChannelState, (Self, LifeCycleError)> {
         match self {
             ChannelState::Open(state) => Ok(state),
@@ -146,6 +156,7 @@ impl ChannelState {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn to_closing(self) -> Result<ClosingChannelState, (Self, LifeCycleError)> {
         match self {
             ChannelState::Closing(state) => Ok(state),
@@ -153,6 +164,7 @@ impl ChannelState {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn to_closed(self) -> Result<ClosedChannelState, (Self, LifeCycleError)> {
         match self {
             ChannelState::Closed(state) => Ok(state),
@@ -168,6 +180,10 @@ impl LifeCycle for ChannelState {
 
     fn metadata(&self) -> &ChannelMetadata {
         self.as_lifecycle().metadata()
+    }
+
+    fn wallet_address(&self, network: Network) -> Option<String> {
+        self.as_lifecycle().wallet_address(network)
     }
 }
 
@@ -189,19 +205,14 @@ pub mod test {
 
     pub fn new_channel_state() -> NewChannelState {
         // All this info is known, or can be scanned in from a QR code etc
-        const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
-        let (_, my_pubkey) = Curve25519PublicKey::keypair_from_hex(SECRET).unwrap();
-        let my_pubkey = my_pubkey.as_hex();
-        let merchant_pubkey = "61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016";
         let kes_pubkey = "4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634";
         let initial_customer_amount = MoneroAmount::from_xmr("1.25").unwrap();
         let initial_merchant_amount = MoneroAmount::from_xmr("0.0").unwrap();
-        let initial_state = NewChannelBuilder::new(ChannelRole::Customer, &my_pubkey, SECRET);
+        let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
         let initial_state = initial_state
             .with_kes_public_key(kes_pubkey)
             .with_customer_initial_balance(initial_customer_amount)
             .with_merchant_initial_balance(initial_merchant_amount)
-            .with_peer_public_key(merchant_pubkey)
             .with_my_user_label("me")
             .with_peer_label("you")
             .build::<Blake2b512>()

@@ -1,11 +1,10 @@
-use crate::data_objects::TransactionRecord;
 use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
 use libgrease::monero::data_objects::{
     ChannelUpdate, ChannelUpdateFinalization, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
-    MultisigSplitSecretsResponse, StartChannelUpdateConfirmation,
+    MultisigSplitSecretsResponse, StartChannelUpdateConfirmation, TransactionRecord,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -202,8 +201,6 @@ pub struct NewChannelProposal {
     pub contact_info_proposer: ContactInfo,
     /// The contact info for the merchant (usually).
     pub contact_info_proposee: ContactInfo,
-    /// Hexadecimal string representation of the public key of the peer that will be the customer (usually).
-    pub proposer_pubkey: String,
     /// Salt used to derive the channel ID - customer (usually) portion
     pub proposer_label: String,
 }
@@ -211,7 +208,6 @@ pub struct NewChannelProposal {
 impl NewChannelProposal {
     pub fn new(
         seed: ChannelSeedInfo,
-        my_pubkey: impl Into<String>,
         my_label: impl Into<String>,
         my_contact_info: ContactInfo,
         their_contact_info: ContactInfo,
@@ -220,7 +216,6 @@ impl NewChannelProposal {
             seed,
             contact_info_proposer: my_contact_info,
             contact_info_proposee: their_contact_info,
-            proposer_pubkey: my_pubkey.into(),
             proposer_label: my_label.into(),
         }
     }
@@ -232,10 +227,6 @@ impl NewChannelProposal {
     /// Produce a struct that contains the information needed to create a new channel.
     /// The information is from the point of view of the *proposer* of the channel, usually the customer.
     pub fn proposed_channel_info(&self) -> ProposedChannelInfo {
-        let (merchant_pubkey, customer_pubkey) = match self.seed.role {
-            ChannelRole::Merchant => (self.proposer_pubkey.clone(), self.seed.pubkey.clone()),
-            ChannelRole::Customer => (self.seed.pubkey.clone(), self.proposer_pubkey.clone()),
-        };
         let (merchant_label, customer_label) = match self.seed.role {
             ChannelRole::Merchant => (self.proposer_label.clone(), self.seed.user_label.clone()),
             ChannelRole::Customer => (self.seed.user_label.clone(), self.proposer_label.clone()),
@@ -244,8 +235,6 @@ impl NewChannelProposal {
             ChannelId::new::<blake2::Blake2b512>(&merchant_label, &customer_label, self.seed.initial_balances);
         ProposedChannelInfo {
             role: self.seed.role,
-            merchant_pubkey,
-            customer_pubkey,
             kes_public_key: self.seed.kes_public_key.clone(),
             initial_balances: self.seed.initial_balances,
             customer_label,
@@ -256,6 +245,7 @@ impl NewChannelProposal {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ChannelProposalResult {
     Accepted(NewChannelProposal),
     Rejected(RejectChannelProposal),

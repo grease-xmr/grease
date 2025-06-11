@@ -63,8 +63,6 @@ pub enum ChannelServerError {
     ChannelNotFound,
     #[error("Error Setting up wallet. {0}")]
     WalletSetup(#[from] WalletError),
-    #[error("Secret sharing failure. {0}")]
-    VssFailure(String),
     #[error("Error communicating with peer. {0}")]
     PeerConnectionError(#[from] PeerConnectionError),
     #[error("Lifecycle state machine error. {0}")]
@@ -124,9 +122,7 @@ impl From<ChannelServerError> for RemoteServerError {
             }
             ChannelServerError::InvalidState(_) => RemoteServerError::internal("Invalid channel state"),
             ChannelServerError::ChannelNotFound => RemoteServerError::ChannelDoesNotExist,
-            ChannelServerError::WalletSetup(_) | ChannelServerError::VssFailure(_) => {
-                RemoteServerError::internal("Wallet setup error")
-            }
+            ChannelServerError::WalletSetup(_) => RemoteServerError::internal("Wallet setup error"),
             ChannelServerError::PeerConnectionError(_) => RemoteServerError::NetworkError,
             ChannelServerError::LifeCycleError(_) => RemoteServerError::internal("State machine error"),
             ChannelServerError::UpdateError(_) => RemoteServerError::internal("Update error"),

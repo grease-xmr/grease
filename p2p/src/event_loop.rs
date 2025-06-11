@@ -3,7 +3,6 @@
 //! See [`EventLoop`] for more information.
 
 use crate::behaviour::ConnectionBehaviorEvent as Event;
-use crate::data_objects::TransactionRecord;
 use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::message_types::ChannelProposalResult;
 use crate::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnection, PeerConnectionEvent};
@@ -13,7 +12,7 @@ use futures::channel::{
 };
 use futures::{SinkExt, StreamExt};
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, StartChannelUpdateConfirmation,
+    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, StartChannelUpdateConfirmation, TransactionRecord,
 };
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
@@ -423,7 +422,7 @@ impl EventLoop {
     /// ## Parameters
     /// * `connection_id` - Identifier of the connection that failed.
     /// * `local_addr` - Local address that we were trying to listen on. This address has been earlier reported with
-    ///         a [SwarmEvent::NewListenAddr] event.
+    ///   a [SwarmEvent::NewListenAddr] event.
     /// * `send_back_addr` - Address of the peer that we were trying to connect to.
     /// * `error` - the dial error that happened.
     fn on_incoming_connection_error(
@@ -446,8 +445,7 @@ impl EventLoop {
     /// * `endpoint` - Endpoint of the connection that has been opened.
     /// * `num_established` - Number of established connections to this peer, including the one that has just been opened.
     /// * `concurrent_dial_errors` - [`Some`] when the new connection is an outgoing connection. Addresses are dialed
-    ///         concurrently. Contains the addresses and errors of dial attempts that failed before
-    ///         the one successful dial.
+    ///   concurrently. Contains the addresses and errors of dial attempts that failed before the one successful dial.
     fn on_connection_established(
         &mut self,
         peer_id: PeerId,
@@ -576,10 +574,10 @@ impl EventLoop {
     /// ## Parameters
     /// * `listener_id` - Identifier of the listener that closed.
     /// * `addresses` - The addresses that the listener was listening on. These addresses are now considered
-    ///                 expired, similar to if a [`ExpiredListenAddr`](SwarmEvent::ExpiredListenAddr) event
-    ///                 has been generated for each of them.
+    ///   expired, similar to if a [`ExpiredListenAddr`](SwarmEvent::ExpiredListenAddr) event
+    ///   has been generated for each of them.
     /// * `reason` - Reason for the listener being closed. Contains `Ok(())` if the stream produced `None`, or `Err`
-    ///              if the stream produced an error.
+    ///   if the stream produced an error.
     fn on_listener_closed(
         &mut self,
         listener_id: ListenerId,
