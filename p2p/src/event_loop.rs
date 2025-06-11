@@ -13,7 +13,7 @@ use futures::channel::{
 };
 use futures::{SinkExt, StreamExt};
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, StartChannelUpdateConfirmation,
+    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, StartChannelUpdateConfirmation,
 };
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
@@ -206,9 +206,8 @@ macro_rules! event_loop {
 // carrying a payload of type `MultisigKeyInfo`.
 event_loop!(
     Command(MultiSigKeyExchange): MsKeyExchange => MsKeyExchange[MultisigKeyInfo],
-    Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecrets],
+    Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
     Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
-    Command(KesReadyNotification): VerifyKes => AcceptKes[bool],
     Command(InitiateNewUpdate): StartChannelUpdate => ConfirmUpdate[StartChannelUpdateConfirmation]
 );
 

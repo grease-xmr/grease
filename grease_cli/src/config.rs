@@ -2,7 +2,7 @@
 
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::crypto::keys::Curve25519Secret;
 use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -75,7 +75,7 @@ pub struct GlobalOptions {
     /// The address other parties can use to contact this identity on the internet.
     pub server_address: Option<Multiaddr>,
     /// The public key of the Key Escrow Service (KES).
-    pub kes_public_key: Option<Curve25519PublicKey>,
+    pub kes_public_key: Option<String>,
     /// A name, or label that will be inserted into every channel you are part of.
     /// Make it descriptive and unique.
     pub user_label: Option<String>,
@@ -108,7 +108,7 @@ impl GlobalOptions {
     }
 
     /// Returns a clone of the configured Curve25519 public key, if set.
-    pub fn kes_public_key(&self) -> Option<Curve25519PublicKey> {
+    pub fn kes_public_key(&self) -> Option<String> {
         self.kes_public_key.clone()
     }
 

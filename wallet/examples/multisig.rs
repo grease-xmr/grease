@@ -1,5 +1,5 @@
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use monero_rpc::{Rpc, RpcError};
+use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use wallet::utils::publish_transaction;

@@ -1,6 +1,6 @@
 use crate::amount::MoneroAmount;
 use crate::channel_metadata::ChannelMetadata;
-use crate::kes::{KesInitializationResult, ShardInfo};
+use crate::crypto::zk_objects::{KesProof, ShardInfo};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{MultisigWalletData, TransactionId};
 use crate::state_machine::commitment_tx::CommitmentTransaction;
@@ -27,7 +27,7 @@ pub struct EstablishingState {
     pub(crate) commitment_tx_proof: Option<Vec<u8>>,
     pub(crate) funding_transaction_ids: Vec<TransactionId>,
     pub(crate) funding_total: MoneroAmount,
-    pub(crate) kes_details: Option<KesInitializationResult>,
+    pub(crate) kes_proof: Option<KesProof>,
     /// Data used to watch for the funding transaction. Implementation agnostic.
     #[serde(
         serialize_with = "crate::helpers::option_to_hex",
@@ -46,7 +46,7 @@ impl EstablishingState {
         self.multisig_wallet.is_some()
             && self.commitment_transaction0.is_some()
             && self.is_fully_funded()
-            && self.kes_details.is_some()
+            && self.kes_proof.is_some()
             && self.commitment_tx_proof.is_some()
             && self.shards.is_some()
     }
@@ -104,10 +104,10 @@ impl EstablishingState {
         }
     }
 
-    pub fn kes_created(&mut self, kes_info: KesInitializationResult) {
-        let old = self.kes_details.replace(kes_info);
+    pub fn kes_created(&mut self, kes_info: KesProof) {
+        let old = self.kes_proof.replace(kes_info);
         if old.is_some() {
-            warn!("KES details were already set and have been replaced.");
+            warn!("KES proof was already set and has been replaced.");
         }
     }
 
@@ -133,7 +133,7 @@ impl EstablishingState {
             funding_transactions: self.funding_transaction_ids,
             commitment_transaction0: txc0.clone(),
             commitment_tx_proof: txc0_proof.clone(),
-            kes_details: self.kes_details.unwrap(),
+            kes_proof: self.kes_proof.unwrap(),
             current_commitment_tx: txc0,
             current_commitment_tx_proof: txc0_proof,
             update_count: 0,
@@ -152,7 +152,7 @@ impl From<NewChannelState> for EstablishingState {
             commitment_tx_proof: None,
             funding_transaction_ids: Vec::new(),
             funding_total: MoneroAmount::default(),
-            kes_details: None,
+            kes_proof: None,
             funding_tx_pipe: None,
         }
     }

@@ -1,7 +1,6 @@
 use crate::delegates::DelegateError;
 use crate::message_types::RejectChannelProposal;
 use futures::channel::{mpsc, oneshot};
-use libgrease::kes::error::KesError;
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::StateStorageError;
@@ -70,8 +69,6 @@ pub enum ChannelServerError {
     PeerConnectionError(#[from] PeerConnectionError),
     #[error("Lifecycle state machine error. {0}")]
     LifeCycleError(#[from] LifeCycleError),
-    #[error("An error Occurred with the KES. {0}")]
-    KesError(#[from] KesError),
     #[error("An error occurred while generated payment channel update proofs. {0}")]
     UpdateError(#[from] UpdateError),
     #[error("An error occurred during a peer-to-peer exchange. {0}")]
@@ -132,7 +129,6 @@ impl From<ChannelServerError> for RemoteServerError {
             }
             ChannelServerError::PeerConnectionError(_) => RemoteServerError::NetworkError,
             ChannelServerError::LifeCycleError(_) => RemoteServerError::internal("State machine error"),
-            ChannelServerError::KesError(_) => RemoteServerError::internal("KES error"),
             ChannelServerError::UpdateError(_) => RemoteServerError::internal("Update error"),
             ChannelServerError::ProtocolError(_) => RemoteServerError::internal("Protocol error"),
             ChannelServerError::RpcError(_) => RemoteServerError::internal("Error with Monero RPC"),

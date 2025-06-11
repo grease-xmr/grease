@@ -1,6 +1,6 @@
 use crate::amount::MoneroAmount;
-use crate::kes::{FundingTransaction, KesInitializationResult, ShardInfo};
-use crate::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
+use crate::crypto::zk_objects::{KesProof, ShardInfo};
+use crate::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
 use crate::state_machine::commitment_tx::CommitmentTransaction;
 use crate::state_machine::new_channel::RejectNewChannelReason;
 use crate::state_machine::timeouts::TimeoutReason;
@@ -17,7 +17,7 @@ pub enum LifeCycleEvent {
     CommitmentTxCreated(Box<CommitmentTransaction>),
     CommitmentZeroProof(Vec<u8>),
     KesShards(Box<ShardInfo>),
-    KesCreated(Box<KesInitializationResult>),
+    KesCreated(Box<KesProof>),
     FundingTxConfirmed(Box<(TransactionId, MoneroAmount)>),
     OnUpdateChannel(Box<ChannelUpdate>),
     FinalTxConfirmed(Box<TransactionId>),

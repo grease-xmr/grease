@@ -11,12 +11,11 @@ use futures::future::join;
 use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::{FundingTransaction, ShardInfo};
+use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::crypto::zk_objects::{GenericPoint, KesProof, ShardInfo};
 use libgrease::monero::data_objects::{
-    ChannelUpdate, ChannelUpdateFinalization, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, PaymentRejection,
-    StartChannelUpdateConfirmation,
+    ChannelUpdate, ChannelUpdateFinalization, FundingTransaction, MessageEnvelope, MultisigKeyInfo,
+    MultisigSplitSecrets, MultisigSplitSecretsResponse, PaymentRejection, StartChannelUpdateConfirmation,
 };
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
@@ -32,7 +31,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
-use wallet::watch_only::WatchOnlyWallet;
 use wallet::{connect_to_rpc, MultisigWallet};
 
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
@@ -311,6 +309,8 @@ where
     ) -> Result<String, ChannelServerError> {
         // 1. Proposal phase
         info!("💍️ Sending new channel proposal to merchant");
+        // Needed for KES verification later..
+        let kes_public_key = proposal.seed.kes_public_key.clone();
         let name = self
             .customer_send_proposal(secret, proposal)
             .await?
@@ -336,11 +336,15 @@ where
         let wallet = self.customer_create_multisig_wallet(&name, k, p, peer_key_info).await?;
         // 2.2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
         debug!("👛️ Splitting, encrypting and sharing spend key with merchant for channel {name}");
-        let merchant_shards = self.split_secrets(wallet.my_spend_key()).await?;
-        let my_shards = self.customer_exchange_split_secrets(peer_id, &name, merchant_shards.clone()).await?;
+        let peer_pubkey = wallet.peer_public_key();
+        let merchant_shards = self.split_secrets(wallet.my_spend_key(), &kes_public_key, peer_pubkey).await?;
+        let shards_and_kes =
+            self.customer_exchange_split_secrets(peer_id, &name, merchant_shards.clone(), &kes_public_key).await?;
         debug!("👛️ Merchant provided their encrypted shards for channel {name}");
+        let my_shards =
+            MultisigSplitSecrets { peer_shard: shards_and_kes.peer_shard, kes_shard: shards_and_kes.kes_shard };
         let shards = ShardInfo { my_shards, their_shards: merchant_shards };
-        self.common_verify_and_store_shards(&name, shards).await?;
+        self.common_verify_and_store_shards(&name, shards, shards_and_kes.kes_proof).await?;
         debug!("👛️ Wallet shards are valid and are stored for channel {name}");
         // 2.3. Verify the wallet address with the peer.
         let address = wallet.address();
@@ -617,8 +621,15 @@ where
         Ok(wallet)
     }
 
-    async fn split_secrets(&self, secret: &Curve25519Secret) -> Result<MultisigSplitSecrets, ChannelServerError> {
-        let split_secrets = self.delegate.split_secret_share(secret)?;
+    async fn split_secrets(
+        &self,
+        secret: &Curve25519Secret,
+        kes_pubkey: &str,
+        peer: &Curve25519PublicKey,
+    ) -> Result<MultisigSplitSecrets, ChannelServerError> {
+        let kes = GenericPoint::from_hex(kes_pubkey)
+            .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
+        let split_secrets = self.delegate.split_secret_share(secret, &kes, peer)?;
         Ok(split_secrets)
     }
 
@@ -626,22 +637,39 @@ where
         &self,
         peer_id: PeerId,
         name: &str,
-        shards: MultisigSplitSecrets,
-    ) -> Result<MultisigSplitSecrets, ChannelServerError> {
+        shards_for_merchant: MultisigSplitSecrets,
+        kes_public_key: &str,
+    ) -> Result<MultisigSplitSecretsResponse, ChannelServerError> {
         let mut client = self.network_client.clone();
+        let merchant_kes_shard = shards_for_merchant.kes_shard.clone();
         let env = client
-            .send_split_secrets(peer_id, name, shards)
+            .send_split_secrets(peer_id, name, shards_for_merchant)
             .await?
             .map_err(|e| ChannelServerError::ProtocolError(e.to_string()))?;
-        let (remote_channel, shards) = env.open();
+        let (remote_channel, shards_for_customer) = env.open();
         confirm_channel_matches(&remote_channel, name)?;
-        Ok(shards)
+        info!("🔐️ Verifying KES proofs for channel {name}.");
+        let pubkey = GenericPoint::from_hex(kes_public_key)
+            .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
+        let _ = self
+            .delegate
+            .verify_kes_proofs(
+                name.to_string(),
+                merchant_kes_shard,
+                shards_for_customer.kes_shard.clone(),
+                pubkey,
+                shards_for_customer.kes_proof.clone(),
+            )
+            .await?;
+        trace!("🔐️ KES proofs verified for channel {name}.");
+        Ok(shards_for_customer)
     }
 
     async fn common_verify_and_store_shards(
         &self,
         channel_name: &str,
         shards: ShardInfo,
+        kes_proof: KesProof,
     ) -> Result<(), ChannelServerError> {
         let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let state = channel.state().as_establishing()?;
@@ -656,6 +684,10 @@ where
         let event = LifeCycleEvent::KesShards(Box::new(shards));
         channel.handle_event(event)?;
         trace!("👛️  Shards are stored in channel {channel_name}.");
+        // Save the KES proof in the state channel.
+        let kes_event = LifeCycleEvent::KesCreated(Box::new(kes_proof));
+        channel.handle_event(kes_event)?;
+        trace!("👛️  KES proof is stored in channel {channel_name}.");
         Ok(())
     }
 
@@ -698,20 +730,51 @@ where
             )))
         })?;
         let key = wallet.my_spend_key.clone();
+        let peer = wallet.peer_public_key().clone();
+        let kes_pubkey = channel.state().metadata().kes_public_key().to_string();
         drop(channel);
         debug!("👛️  Splitting multisig wallet spend key for customer and KES.");
-        let customer_shards = self.split_secrets(&key).await.map_err(|e| {
+        let customer_shards = self.split_secrets(&key, &kes_pubkey, &peer).await.map_err(|e| {
             GreaseResponse::MsKeyExchange(Err(RemoteServerError::internal(format!(
                 "Merchant could not create encrypted secret shares: {e}"
             ))))
         })?;
+
+        info!("🔐️ Establishing KES.");
+        // Remember, `my_shards` are the shards FOR ME. So the customer's KES-encrypted secret is in
+        // `my_shards.kes_shard`.
+        let kes = GenericPoint::from_hex(&kes_pubkey).map_err(|e| {
+            GreaseResponse::MsSplitSecretExchange(Err(RemoteServerError::InternalError(format!(
+                "Failed to derive KES public key: {e}."
+            ))))
+        })?;
+        let proof = self
+            .delegate
+            .create_kes_proofs(
+                name.clone(),
+                my_shards.kes_shard.clone(),
+                customer_shards.kes_shard.clone(),
+                kes,
+            )
+            .await
+            .map_err(|e| {
+                GreaseResponse::MsSplitSecretExchange(Err(RemoteServerError::internal(format!(
+                    "Failed to create KES proofs: {e}"
+                ))))
+            })?;
+        info!("🔐️ KES established for channel {name}.");
         let shard_info = ShardInfo { my_shards, their_shards: customer_shards.clone() };
-        self.common_verify_and_store_shards(&name, shard_info.clone()).await.map_err(|e| {
+        self.common_verify_and_store_shards(&name, shard_info.clone(), proof.clone()).await.map_err(|e| {
             GreaseResponse::MsSplitSecretExchange(Err(RemoteServerError::internal(format!(
                 "Failed to verify received shards: {e}"
             ))))
         })?;
-        let envelope = MessageEnvelope::new(name, customer_shards);
+        let response = MultisigSplitSecretsResponse {
+            peer_shard: customer_shards.peer_shard,
+            kes_shard: customer_shards.kes_shard,
+            kes_proof: proof,
+        };
+        let envelope = MessageEnvelope::new(name, response);
         Ok(GreaseResponse::MsSplitSecretExchange(Ok(envelope)))
     }
 
@@ -795,34 +858,6 @@ where
         Some(lock.state().metadata().clone())
     }
 
-    async fn notify_customer_of_kes(&self, channel_name: &str) -> Result<(), ChannelServerError> {
-        let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        let peer = channel.peer_id();
-        todo!();
-        // let kes_info = channel
-        //     .state()
-        //     .kes_result_info()
-        //     .ok_or(ChannelServerError::InvalidState("KES info not available".to_string()))?;
-        // let mut client = self.network_client.clone();
-        // let envelope = client.send_kes_info(peer, channel_name.into(), kes_info).await??;
-        // let (channel, ratified) = envelope.open();
-        // if channel != channel_name {
-        //     return Err(ChannelServerError::ProtocolError(format!(
-        //         "Mismatched channel names. Expected {channel_name}, Received {channel}"
-        //     )));
-        // }
-        // match ratified {
-        //     true => {
-        //         info!(" 🖥️  The customer ratified the KES. We can start watching for funding transactions.");
-        //         Ok(())
-        //     }
-        //     false => {
-        //         warn!(" 🖥️  The customer rejected the KES. Closing channel.");
-        //         Err(ChannelServerError::KesError(KesError::KesRejected))
-        //     }
-        // }
-    }
-
     async fn create_funding_transaction(&self, channel_name: &str) -> Result<(), ChannelServerError> {
         // todo: implement funding transaction creation
         Ok(())
@@ -894,14 +929,6 @@ where
                 let response = self.address_matches(&channel_name, &address).await.unwrap_or(false);
                 let envelope = MessageEnvelope::new(channel_name, response);
                 GreaseResponse::ConfirmMsAddress(Ok(envelope))
-            }
-            GreaseRequest::VerifyKes(envelope) => {
-                trace!("🖥️  Customer: Verify KES request received");
-                let (channel_name, kes_info) = envelope.open();
-                todo!()
-                // let response = self.verify_kes(&channel_name, kes_info).await.unwrap_or(false);
-                // let envelope = MessageEnvelope::new(channel_name, response);
-                // GreaseResponse::AcceptKes(Ok(envelope))
             }
             GreaseRequest::StartChannelUpdate(request) => {
                 let (name, update) = request.open();
@@ -1125,32 +1152,6 @@ mod graveyard {
                 },
                 None => Err(crate::errors::ChannelServerError::ChannelNotFound),
             }
-        }
-
-        /// Called by the customer when the merchant sends KES data over for the customer to verify.
-        ///
-        /// Calls out to the delegate to verify the KES data, and returns the decision whether the customer ratified the
-        /// KES or not.
-        async fn verify_kes(&self, channel_name: &str, kes_info: KesInitializationResult) -> Option<bool> {
-            let kes = self
-                .delegate
-                .with_kes()
-                .map_err(|e| warn!("🖥️  Customer: KES delegate function was not available: {e}"))
-                .ok()?;
-            let accepted = kes
-                .verify(kes_info.clone())
-                .await
-                .map_err(|e| warn!("🖥️  Customer: KES delegate function did not return successfully: {e}"))
-                .ok()?;
-            if accepted {
-                let mut channel = self.channels.checkout(channel_name).await?;
-                channel
-                    .save_verified_kes_result(kes_info)
-                    .await
-                    .map_err(|e| warn!("🖥️  Customer: failed to handle KES verification event. {e}"))
-                    .ok()?;
-            }
-            Some(accepted)
         }
     }
 }

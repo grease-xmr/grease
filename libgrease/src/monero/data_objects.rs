@@ -1,5 +1,4 @@
-use crate::amount::MoneroDelta;
-use monero::Address as MoneroAddress;
+use crate::amount::{MoneroAmount, MoneroDelta};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
@@ -9,8 +8,8 @@ pub struct MoneroTransaction;
 // re-export
 use crate::balance::Balances;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use crate::kes::PartialEncryptedKey;
-use crate::payment_channel::UpdateError;
+use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
+use crate::payment_channel::{ChannelRole, UpdateError};
 use crate::state_machine::CommitmentTransaction;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -19,6 +18,16 @@ pub struct MultisigSplitSecrets {
     pub peer_shard: PartialEncryptedKey,
     /// The encrypted secret shard for the KES
     pub kes_shard: PartialEncryptedKey,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MultisigSplitSecretsResponse {
+    /// The encrypted secret shard for the peer
+    pub peer_shard: PartialEncryptedKey,
+    /// The encrypted secret shard for the KES
+    pub kes_shard: PartialEncryptedKey,
+    /// The proof/signature that the KES was constructed correctly
+    pub kes_proof: KesProof,
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -187,6 +196,16 @@ pub struct MultisigWalletData {
     pub known_outputs: String,
 }
 
+impl MultisigWalletData {
+    pub fn peer_public_key(&self) -> &Curve25519PublicKey {
+        if self.my_public_key == self.sorted_pubkeys[0] {
+            &self.sorted_pubkeys[1]
+        } else {
+            &self.sorted_pubkeys[0]
+        }
+    }
+}
+
 impl Debug for MultisigWalletData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "MultisigWalletData( ")?;
@@ -200,5 +219,18 @@ impl Debug for MultisigWalletData {
         write!(f, "birthday: {}, ", self.birthday)?;
         write!(f, "known_outputs: {}, ", self.known_outputs)?;
         write!(f, ")")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingTransaction {
+    pub role: ChannelRole,
+    pub transaction_id: TransactionId,
+    pub amount: MoneroAmount,
+}
+
+impl FundingTransaction {
+    pub fn new(role: ChannelRole, txid: impl Into<String>, amount: impl Into<MoneroAmount>) -> Self {
+        FundingTransaction { role, transaction_id: TransactionId::new(txid), amount: amount.into() }
     }
 }

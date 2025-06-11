@@ -26,9 +26,9 @@
 //!
 
 use crate::channel_metadata::ChannelMetadata;
-use crate::kes::{KesInitializationResult, ShardInfo};
+use crate::crypto::zk_objects::{KesProof, ShardInfo};
 use crate::lifecycle_impl;
-use crate::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
+use crate::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
 use crate::state_machine::closing_channel::ClosingChannelState;
 use crate::state_machine::commitment_tx::CommitmentTransaction;
 use crate::state_machine::error::LifeCycleError;
@@ -46,7 +46,7 @@ pub struct EstablishedChannelState {
     pub(crate) commitment_transaction0: CommitmentTransaction,
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     pub(crate) commitment_tx_proof: Vec<u8>,
-    pub(crate) kes_details: KesInitializationResult,
+    pub(crate) kes_proof: KesProof,
     pub(crate) current_commitment_tx: CommitmentTransaction,
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     pub(crate) current_commitment_tx_proof: Vec<u8>,

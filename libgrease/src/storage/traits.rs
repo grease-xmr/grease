@@ -1,5 +1,4 @@
-use crate::state_machine::lifecycle::{ChannelState, LifeCycle};
-use std::any::Any;
+use crate::state_machine::lifecycle::ChannelState;
 
 pub trait StateStore {
     fn write_channel(&mut self, state: &ChannelState) -> Result<(), anyhow::Error>;

@@ -6,10 +6,9 @@ use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
-use libgrease::kes::KesInitializationResult;
 use libgrease::monero::data_objects::{
-    ChannelUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, StartChannelUpdateConfirmation,
-    TransactionId,
+    ChannelUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
+    StartChannelUpdateConfirmation,
 };
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -139,22 +138,9 @@ impl Client {
         send_split_secrets,
         MultiSigSplitSecretsRequest,
         MultisigSplitSecrets,
-        MultisigSplitSecrets
+        MultisigSplitSecretsResponse
     );
     grease_request!(send_wallet_confirmation, ConfirmMultiSigAddressRequest, String, bool);
-
-    pub async fn send_kes_info(
-        &mut self,
-        peer_id: PeerId,
-        channel: String,
-        info: KesInitializationResult,
-    ) -> Result<Result<MessageEnvelope<bool>, RemoteServerError>, PeerConnectionError> {
-        let (sender, receiver) = oneshot::channel();
-        let envelope = MessageEnvelope::new(channel, info);
-        self.sender.send(ClientCommand::KesReadyNotification { peer_id, envelope, sender }).await?;
-        let res = receiver.await?;
-        Ok(res)
-    }
 
     pub async fn wait_for_funding_tx(&mut self, name: &str) -> Result<TransactionRecord, PeerConnectionError> {
         trace!("⚡️ Waiting for funding transaction for channel {name}");
