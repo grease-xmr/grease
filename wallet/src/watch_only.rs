@@ -1,13 +1,10 @@
 use crate::{AddressType, MoneroAddress, Network, WalletError};
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::crypto::traits::PublicKey;
+use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use log::*;
 use monero_rpc::{Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::{Scanner, ViewPair, WalletOutput};
-use std::io::{Read, Write};
-use std::path::Path;
 
 #[derive(Clone, Debug)]
 pub struct WatchOnlyWallet {

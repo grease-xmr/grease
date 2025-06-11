@@ -4,7 +4,7 @@ use libgrease::crypto::keys::Curve25519PublicKey;
 use log::info;
 use modular_frost::curve::Ed25519;
 use modular_frost::sign::{Preprocess, SignatureShare, Writable};
-use monero_rpc::{Rpc, RpcError};
+use monero_rpc::RpcError;
 use monero_serai::transaction::Transaction;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};

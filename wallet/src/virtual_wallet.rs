@@ -114,6 +114,14 @@ impl MultisigWallet {
         &self.my_public_key
     }
 
+    pub fn peer_public_key(&self) -> &Curve25519PublicKey {
+        if self.sorted_pubkeys[0] == self.my_public_key {
+            &self.sorted_pubkeys[1]
+        } else {
+            &self.sorted_pubkeys[0]
+        }
+    }
+
     pub fn from_serializable(rpc: SimpleRequestRpc, data: MultisigWalletData) -> Result<Self, WalletError> {
         let mut sorted_pubkeys = data.sorted_pubkeys;
         sort_pubkeys(&mut sorted_pubkeys);

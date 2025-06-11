@@ -3,10 +3,9 @@ use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
-use libgrease::kes::KesInitializationResult;
 use libgrease::monero::data_objects::{
     ChannelUpdate, ChannelUpdateFinalization, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
-    StartChannelUpdateConfirmation, TransactionId,
+    MultisigSplitSecretsResponse, StartChannelUpdateConfirmation,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -24,13 +23,12 @@ pub enum GreaseRequest {
     ProposeChannelRequest(NewChannelProposal),
     /// The customer sends its multisig wallet key and expects the merchant keys as a response.
     MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
+    /// The customer sends its split secrets to the merchant, and expects the merchant's split secrets and a
+    /// signature from the KES in return.
     MsSplitSecretExchange(MessageEnvelope<MultisigSplitSecrets>),
     /// The merchant wants customer to confirm that the wallet is created correctly by checking the address of the
     /// 2-of-2 wallet, and send over the split secrets at the same time (Final prep phase).
     ConfirmMsAddress(MessageEnvelope<String>),
-    /// The merchant has established the KES and is giving the customer the opportunity to verify and then
-    /// accept/reject it.
-    VerifyKes(MessageEnvelope<KesInitializationResult>),
     /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
     /// proofs and respond their own proofs. The responder responds with [`GreaseResponse::ConfirmUpdate`].
     StartChannelUpdate(MessageEnvelope<ChannelUpdate>),
@@ -46,13 +44,10 @@ pub enum GreaseResponse {
     /// The merchant's response to the MS key exchange request. The customer's key info and split secrets are
     /// included in the response.
     MsKeyExchange(Result<MessageEnvelope<MultisigKeyInfo>, RemoteServerError>),
-    MsSplitSecretExchange(Result<MessageEnvelope<MultisigSplitSecrets>, RemoteServerError>),
+    MsSplitSecretExchange(Result<MessageEnvelope<MultisigSplitSecretsResponse>, RemoteServerError>),
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
-    /// The customer's response to the VerifyKes request. The response is a boolean indicating whether the KES was
-    /// ratified by the customer or not. If false, the channel establishment will be aborted.
-    AcceptKes(Result<MessageEnvelope<bool>, RemoteServerError>),
     ConfirmUpdate(Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError>),
     ChannelClosed,
     ChannelNotFound,
@@ -95,11 +90,6 @@ impl Display for GreaseResponse {
                 "Remote server error ({e}) at MsConfirmMsAddress \
             stage"
             ),
-            GreaseResponse::AcceptKes(Ok(env)) => {
-                let status = if env.payload { "ACCEPTED" } else { "DID NOT ACCEPT" };
-                write!(f, "KES verification. Customer {status} the KES.")
-            }
-            GreaseResponse::AcceptKes(Err(e)) => write!(f, "Remote server error ({e}) at KES acceptance stage"),
             GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
             GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
             GreaseResponse::ConfirmUpdate(_) => write!(f, "Confirmation Update"),
@@ -115,7 +105,6 @@ impl GreaseRequest {
             GreaseRequest::ProposeChannelRequest(ref proposal) => proposal.channel_name(),
             GreaseRequest::MsKeyExchange(env) => env.channel_name(),
             GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
-            GreaseRequest::VerifyKes(env) => env.channel_name(),
             GreaseRequest::StartChannelUpdate(env) => env.channel_name(),
             GreaseRequest::FinalizeChannelUpdate(env) => env.channel_name(),
             GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
@@ -164,16 +153,11 @@ pub enum ClientCommand {
     MultiSigSplitSecretsRequest {
         peer_id: PeerId,
         envelope: MessageEnvelope<MultisigSplitSecrets>,
-        sender: oneshot::Sender<Result<MessageEnvelope<MultisigSplitSecrets>, RemoteServerError>>,
+        sender: oneshot::Sender<Result<MessageEnvelope<MultisigSplitSecretsResponse>, RemoteServerError>>,
     },
     ConfirmMultiSigAddressRequest {
         peer_id: PeerId,
         envelope: MessageEnvelope<String>,
-        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
-    },
-    KesReadyNotification {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<KesInitializationResult>,
         sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
     },
     InitiateNewUpdate {
@@ -194,48 +178,6 @@ pub enum ClientCommand {
     },
     /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
     Shutdown(oneshot::Sender<bool>),
-}
-
-impl ClientCommand {
-    pub fn send_failure(self, err: RemoteServerError) {
-        warn!("🖥️  Client command failed: {err}");
-        match self {
-            ClientCommand::StartListening { .. } => {}
-            ClientCommand::Dial { .. } => {}
-            ClientCommand::ResponseToRequest { .. } => {
-                warn!("🖥️  Response to request failed, but no sender to notify.");
-            }
-            ClientCommand::ProposeChannelRequest { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::MultiSigKeyExchange { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::ConfirmMultiSigAddressRequest { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::KesReadyNotification { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::InitiateNewUpdate { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::FinalizeUpdate { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::ConnectedPeers { .. } => {
-                warn!("🖥️  Connected peers request failed, but no sender to notify.");
-            }
-            ClientCommand::Shutdown(sender) => {
-                let _ = sender.send(false);
-            }
-            ClientCommand::MultiSigSplitSecretsRequest { sender, .. } => {
-                let _ = sender.send(Err(err));
-            }
-            ClientCommand::WaitForFundingTx { sender, .. } => {}
-            ClientCommand::NotifyTxMined(_) => {}
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

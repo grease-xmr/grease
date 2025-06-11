@@ -1,4 +1,4 @@
-use libgrease::crypto::traits::PublicKey;
+use libgrease::crypto::keys::PublicKey;
 
 pub trait KeyManager: Clone {
     type PublicKey: PublicKey;

@@ -1,4 +1,3 @@
-use curve25519_dalek::Scalar;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub fn to_hex<S>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error>
@@ -33,4 +32,15 @@ where
     let hex_str = String::deserialize(de)?;
     let bytes = hex::decode(hex_str).map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
     Ok(Some(bytes))
+}
+
+pub fn array_from_hex<'de, D>(de: D) -> Result<[u8; 32], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(de)?;
+    let mut result = [0u8; 32];
+    hex::decode_to_slice(hex_str, &mut result)
+        .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
+    Ok(result)
 }

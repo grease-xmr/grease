@@ -1,7 +1,5 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::{
-    ConversationIdentity, DummyDelegate, KeyManager, NetworkServer, OutOfBandMerchantInfo, PaymentChannels,
-};
+use grease_p2p::{ConversationIdentity, KeyManager, NetworkServer, OutOfBandMerchantInfo, PaymentChannels};
 use std::fmt::Display;
 
 pub mod formatting;
@@ -13,10 +11,11 @@ use crate::id_management::{
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
+use grease_p2p::delegates::DummyDelegate;
 use grease_p2p::message_types::NewChannelProposal;
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
-use libgrease::kes::FundingTransaction;
+use libgrease::monero::data_objects::FundingTransaction;
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::lifecycle::LifecycleStage;
 use libgrease::state_machine::ChannelSeedBuilder;
@@ -308,7 +307,7 @@ impl InteractiveApp {
         let seed_info = ChannelSeedBuilder::default()
             .with_pubkey(channel_pubkey.as_hex())
             .with_key_id(index)
-            .with_kes_public_key(kes.as_hex())
+            .with_kes_public_key(kes)
             .with_initial_balances(balances)
             .with_user_label(channel_id)
             .build()?;

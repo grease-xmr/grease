@@ -174,9 +174,8 @@ impl LifeCycle for ChannelState {
 #[cfg(test)]
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
-    use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-    use crate::crypto::traits::PublicKey;
-    use crate::kes::{KesInitializationResult, PartialEncryptedKey, ShardInfo};
+    use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+    use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey, ShardInfo};
     use crate::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::commitment_tx::CommitmentTransaction;
@@ -262,8 +261,8 @@ pub mod test {
         // The commitment transaction proofs have been exchanged
         state.save_txc0_proof(b"commitment_proof0".to_vec());
         // The KES details have been exchanged.
-        let kes_info = KesInitializationResult { id: "kes_0001".into() };
-        state.kes_created(kes_info);
+        let kes_proof = KesProof { proof: "kes_0001".into() };
+        state.kes_created(kes_proof);
         state.save_txc0_proof(b"commitment_proof1".to_vec());
         match state.next() {
             Ok(open) => {

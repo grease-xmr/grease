@@ -1,7 +1,7 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroAmount;
-use libgrease::kes::{KesInitializationResult, ShardInfo};
+use libgrease::crypto::zk_objects::{KesProof, ShardInfo};
 use libgrease::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
@@ -276,7 +276,7 @@ impl PaymentChannel {
         })
     }
 
-    fn on_kes_created(&mut self, info: KesInitializationResult) -> Result<(), LifeCycleError> {
+    fn on_kes_created(&mut self, info: KesProof) -> Result<(), LifeCycleError> {
         self.update_establishing(|mut establishing| {
             establishing.kes_created(info);
             match establishing.next() {
@@ -473,7 +473,7 @@ mod test {
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::balance::Balances;
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-    use libgrease::kes::{KesInitializationResult, PartialEncryptedKey, ShardInfo};
+    use libgrease::crypto::zk_objects::{KesProof, PartialEncryptedKey, ShardInfo};
     use libgrease::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::{CommitmentTransaction, LifeCycleEvent, NewChannelBuilder, NewChannelState};
@@ -499,6 +499,7 @@ mod test {
     }
     #[test]
     fn happy_path() {
+        env_logger::try_init().ok();
         let peer = ContactInfo { name: "Alice".to_string(), peer_id: PeerId::random(), address: Multiaddr::empty() };
         let some_pub =
             Curve25519PublicKey::from_hex("61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016").unwrap();
@@ -510,9 +511,6 @@ mod test {
         let event = LifeCycleEvent::VerifiedProposal(Box::new(proposal));
         channel.handle_event(event).unwrap();
         assert!(channel.is_establishing());
-        let kes = KesInitializationResult { id: "kes123".into() };
-        let event = LifeCycleEvent::KesCreated(Box::new(kes));
-        channel.handle_event(event).unwrap();
         let wallet = MultisigWalletData {
             my_spend_key: Curve25519Secret::from_hex(SECRET).unwrap(),
             my_public_key: some_pub.clone(),
@@ -530,7 +528,7 @@ mod test {
         };
         let their_shards = MultisigSplitSecrets {
             peer_shard: PartialEncryptedKey("merchant_peer_shard".into()),
-            kes_shard: PartialEncryptedKey("maerchant_kes_shard".into()),
+            kes_shard: PartialEncryptedKey("merchant_kes_shard".into()),
         };
         let event = LifeCycleEvent::KesShards(Box::new(ShardInfo { my_shards, their_shards }));
         channel.handle_event(event).unwrap();
@@ -539,6 +537,8 @@ mod test {
         let event = LifeCycleEvent::CommitmentZeroProof(vec![1, 2, 3]);
         channel.handle_event(event).unwrap();
         let event = LifeCycleEvent::FundingTxConfirmed(Box::new((TransactionId::new("tx123"), 1000.into())));
+        channel.handle_event(event).unwrap();
+        let event = LifeCycleEvent::KesCreated(Box::new(KesProof { proof: vec![1, 2, 3] }));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
         let update = ChannelUpdate {
