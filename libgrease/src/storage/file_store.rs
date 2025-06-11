@@ -64,7 +64,7 @@ mod test {
             let state = new_channel_state().to_channel_state();
             let name = state.name();
             store.write_channel(&state).expect("Failed to write channel");
-            let loaded = store.load_channel(&name).expect("Failed to load New channel");
+            let _loaded = store.load_channel(&name).expect("Failed to load New channel");
             let new = state.to_new()?;
             let establishing = accept_proposal(new).to_channel_state();
             store.write_channel(&establishing).expect("Failed to write channel");

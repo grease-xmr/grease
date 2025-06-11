@@ -1,4 +1,3 @@
-use crate::data_objects::TransactionRecord;
 use crate::message_types::NewChannelProposal;
 use crate::Client;
 use libgrease::amount::MoneroAmount;
@@ -7,7 +6,7 @@ use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
     Comm0PrivateInputs, Comm0PublicOutputs, GenericPoint, InitialProofsResult, KesProof, PartialEncryptedKey,
 };
-use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId};
+use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
 use log::*;
 use std::future::Future;
@@ -24,10 +23,6 @@ pub struct DelegateError(pub String);
 
 pub trait ProposalVerifier {
     fn verify_proposal(&self, data: &NewChannelProposal) -> impl Future<Output = Result<(), InvalidProposal>> + Send;
-    fn derive_channel_secret(
-        &self,
-        data: &NewChannelProposal,
-    ) -> impl Future<Output = Result<String, DelegateError>> + Send;
 }
 
 //--------------------------------------   KES Shared Secret handling    -----------------------------------------------
@@ -123,10 +118,6 @@ impl ProposalVerifier for DummyDelegate {
         info!("DummyDelegate: Verifying proposal. {data:?}");
         Ok(())
     }
-
-    async fn derive_channel_secret(&self, _data: &NewChannelProposal) -> Result<String, DelegateError> {
-        Ok("New secret".to_string())
-    }
 }
 
 impl GreaseInitializer for DummyDelegate {
@@ -139,16 +130,14 @@ impl GreaseInitializer for DummyDelegate {
         Ok(InitialProofsResult::default())
     }
 
-    fn verify_initial_proofs(
+    async fn verify_initial_proofs(
         &self,
         _outputs: &Comm0PublicOutputs,
         _proof: &[u8],
         metadata: &ChannelMetadata,
-    ) -> impl Future<Output = Result<(), DelegateError>> + Send {
-        async {
-            info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
-            Ok(())
-        }
+    ) -> Result<(), DelegateError> {
+        info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
+        Ok(())
     }
 }
 
@@ -218,7 +207,7 @@ impl FundChannel for DummyDelegate {
         info!("Watch-only wallet created with birthday {birthday:?}. Current height is {height}");
         let mut interval = tokio::time::interval(Duration::from_millis(5000));
         let mut client = client.clone();
-        let _ = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             let mut start_height = birthday.map(|b| height.min(b)).unwrap_or(height);
             loop {
                 interval.tick().await;

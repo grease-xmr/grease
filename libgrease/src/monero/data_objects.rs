@@ -1,9 +1,7 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
+use monero::{Address, Network, PrivateKey, PublicKey, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
-
-pub struct MoneroViewKey;
-pub struct MoneroTransaction;
 
 // re-export
 use crate::balance::Balances;
@@ -204,6 +202,13 @@ impl MultisigWalletData {
             &self.sorted_pubkeys[0]
         }
     }
+
+    pub fn address(&self, network: Network) -> Address {
+        let spend = PublicKey { point: *self.joint_public_spend_key.as_compressed() };
+        let view = PrivateKey { scalar: *self.joint_private_view_key.as_scalar() };
+        let keys = ViewPair { spend, view };
+        Address::from_viewpair(network, &keys)
+    }
 }
 
 impl Debug for MultisigWalletData {
@@ -233,4 +238,11 @@ impl FundingTransaction {
     pub fn new(role: ChannelRole, txid: impl Into<String>, amount: impl Into<MoneroAmount>) -> Self {
         FundingTransaction { role, transaction_id: TransactionId::new(txid), amount: amount.into() }
     }
+}
+
+#[derive(Debug)]
+pub struct TransactionRecord {
+    pub channel_name: String,
+    pub transaction_id: TransactionId,
+    pub amount: MoneroAmount,
 }

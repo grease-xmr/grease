@@ -354,6 +354,7 @@ impl PaymentChannel {
     update_state!(update_closing, ClosingChannelState, to_closing);
 }
 
+#[derive(Default)]
 pub struct PaymentChannels {
     channels: Arc<RwLock<HashMap<String, Arc<RwLock<PaymentChannel>>>>>,
 }
@@ -483,14 +484,11 @@ mod test {
 
     pub fn new_channel_state() -> NewChannelState {
         // All this info is known, or can be scanned in from a QR code etc
-        let (_, my_pubkey) = Curve25519PublicKey::keypair_from_hex(SECRET).unwrap();
-        let my_pubkey = my_pubkey.as_hex();
-        let initial_state = NewChannelBuilder::new(ChannelRole::Customer, &my_pubkey, SECRET);
+        let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
         let initial_state = initial_state
             .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
             .with_customer_initial_balance(MoneroAmount::from(1000))
             .with_merchant_initial_balance(MoneroAmount::default())
-            .with_peer_public_key("61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016")
             .with_my_user_label("me")
             .with_peer_label("you")
             .build::<Blake2b512>()

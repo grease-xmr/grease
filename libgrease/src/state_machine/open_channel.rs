@@ -34,6 +34,7 @@ use crate::state_machine::commitment_tx::CommitmentTransaction;
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;
 use log::info;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -89,6 +90,12 @@ impl EstablishedChannelState {
         self.update_count
     }
 
+    pub fn multisig_address(&self, network: Network) -> Option<String> {
+        let addr = self.multisig_wallet.address(network).to_string();
+        Some(addr)
+    }
+
+    #[allow(clippy::result_large_err)]
     pub fn close(self) -> Result<ClosingChannelState, (Self, LifeCycleError)> {
         let final_balance = self.metadata.balances();
         let name = self.metadata.channel_id().name();

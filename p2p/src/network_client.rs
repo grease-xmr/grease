@@ -1,5 +1,4 @@
 use crate::behaviour::ConnectionBehavior;
-use crate::data_objects::TransactionRecord;
 use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::message_types::{ChannelProposalResult, NewChannelProposal};
 use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
@@ -8,7 +7,7 @@ use futures::SinkExt;
 use futures::Stream;
 use libgrease::monero::data_objects::{
     ChannelUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    StartChannelUpdateConfirmation,
+    StartChannelUpdateConfirmation, TransactionRecord,
 };
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;

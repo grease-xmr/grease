@@ -125,8 +125,7 @@ impl MultisigWallet {
     pub fn from_serializable(rpc: SimpleRequestRpc, data: MultisigWalletData) -> Result<Self, WalletError> {
         let mut sorted_pubkeys = data.sorted_pubkeys;
         sort_pubkeys(&mut sorted_pubkeys);
-        let peer_pubkey =
-            if &data.my_public_key == &sorted_pubkeys[0] { &sorted_pubkeys[1] } else { &sorted_pubkeys[0] };
+        let peer_pubkey = if data.my_public_key == sorted_pubkeys[0] { &sorted_pubkeys[1] } else { &sorted_pubkeys[0] };
         let musig_keys = musig_2_of_2(&data.my_spend_key, &sorted_pubkeys)
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
         let (joint_private_view_key, joint_public_view_key) = musig_dh_viewkey(&data.my_spend_key, peer_pubkey);
@@ -160,8 +159,8 @@ impl MultisigWallet {
         MoneroAddress::new(
             Network::Mainnet,
             AddressType::Legacy,
-            self.joint_public_spend_key.as_point().clone(),
-            self.joint_public_view_key.as_point().clone(),
+            self.joint_public_spend_key.as_point(),
+            self.joint_public_view_key.as_point(),
         )
     }
 
@@ -183,7 +182,7 @@ impl MultisigWallet {
 
     pub async fn scan(&mut self, start: Option<u64>) -> Result<usize, RpcError> {
         let k = self.joint_private_view_key.as_zscalar().clone();
-        let pair = ViewPair::new(self.joint_public_spend_key.as_point().clone(), k)
+        let pair = ViewPair::new(self.joint_public_spend_key.as_point(), k)
             .map_err(|e| RpcError::InternalError(e.to_string()))?;
         let mut scanner = Scanner::new(pair);
         let height = self.get_height().await?;
@@ -245,7 +244,7 @@ impl MultisigWallet {
     pub fn get_change_output(&self) -> Result<Change, WalletError> {
         let key = self.joint_public_spend_key();
         let vk = view_key(key, 0);
-        let pair = ViewPair::new(key.as_point().clone(), vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
+        let pair = ViewPair::new(key.as_point(), vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
         let index = SubaddressIndex::new(0, 1).expect("not to fail with valid hardcoded params");
         Ok(Change::new(pair, Some(index)))
     }
@@ -437,7 +436,7 @@ impl MultisigWallet {
 }
 
 pub fn threshold_params(p: &Participant) -> ThresholdParams {
-    ThresholdParams::new(2, 2, p.clone()).expect("not to fail with valid hardcoded params")
+    ThresholdParams::new(2, 2, *p).expect("not to fail with valid hardcoded params")
 }
 
 pub fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
@@ -449,7 +448,7 @@ pub fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
 }
 
 pub fn sort_pubkeys(keys: &mut [Curve25519PublicKey; 2]) {
-    keys.sort_unstable_by(|a, b| a.as_compressed().as_bytes().cmp(&b.as_compressed().as_bytes()));
+    keys.sort_unstable_by(|a, b| a.as_compressed().as_bytes().cmp(b.as_compressed().as_bytes()));
 }
 
 pub fn musig_2_of_2(
@@ -457,11 +456,9 @@ pub fn musig_2_of_2(
     sorted_pubkeys: &[Curve25519PublicKey; 2],
 ) -> Result<ThresholdKeys<Ed25519>, DkgError<()>> {
     let context = musig_context(sorted_pubkeys);
-    let secret = Zeroizing::new(Scalar(secret.as_scalar().clone()));
-    let pubkeys: [EdwardsPoint; 2] = [
-        EdwardsPoint(sorted_pubkeys[0].as_point().clone()),
-        EdwardsPoint(sorted_pubkeys[1].as_point().clone()),
-    ];
+    let secret = Zeroizing::new(Scalar(*secret.as_scalar()));
+    let pubkeys: [EdwardsPoint; 2] =
+        [EdwardsPoint(sorted_pubkeys[0].as_point()), EdwardsPoint(sorted_pubkeys[1].as_point())];
     let core = musig(&context[..], &secret, &pubkeys)?;
     Ok(ThresholdKeys::new(core))
 }

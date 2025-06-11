@@ -24,12 +24,10 @@ use libgrease::state_machine::{LifeCycleEvent, NewChannelBuilder, ProposedChanne
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
+use monero::Network;
 use rand::rng;
-use std::collections::VecDeque;
-use std::fmt::{Display, Formatter};
 use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
+use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
 use wallet::{connect_to_rpc, MultisigWallet};
 
@@ -68,8 +66,6 @@ where
                         inner_clone.handle_incoming_grease_request(request, response).await;
                     }
                 }
-                // Carry out any pending tasks
-                inner_clone.work_through_todo_list().await;
             }
         });
         Ok(Self { id, inner, event_loop_handle, event_handler_handle })
@@ -112,6 +108,20 @@ where
         self.inner.channels.add(channel).await
     }
 
+    pub async fn wallet_address(&self, channel_name: &str, network: &str) -> Result<String, ChannelServerError> {
+        let channel = self.inner.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let network = match network.to_ascii_lowercase().as_str() {
+            "mainnet" => Network::Mainnet,
+            "testnet" => Network::Testnet,
+            "stagenet" => Network::Stagenet,
+            _ => Network::Mainnet,
+        };
+        channel
+            .state()
+            .wallet_address(network)
+            .ok_or_else(|| ChannelServerError::InvalidState("Wallet not available".to_string()))
+    }
+
     pub async fn shutdown(self) -> Result<bool, PeerConnectionError> {
         let res_client = self.inner.network_client.shutdown().await;
         let (res_loop, res_events) = join(self.event_loop_handle, self.event_handler_handle).await;
@@ -126,31 +136,14 @@ where
     /// The steps involved are:
     /// 1. Complete the proposal phase with the merchant.
     /// 2. Move to the Establishing phase
-    ///   2.1. Generate a new multisig wallet
-    ///     2.1.1. Create a new keypair for the wallet. This is always a Curve25519 keypair.
-    ///     2.1.2. Exchange the public keys with the merchant.
-    ///     2.1.3. Create a new multisig wallet with the public keys.
-    ///   2.2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
-    ///   2.3. Verify the wallet address with the peer.
-    pub async fn establish_new_channel(
-        &self,
-        secret: &str,
-        proposal: NewChannelProposal,
-    ) -> Result<String, ChannelServerError> {
-        self.inner.customer_establish_new_channel(secret, proposal).await
-    }
-
-    /// Submit a funding transaction to the channel. This will potentially trigger a transition to the Established
-    /// state if all the criteria are met.
-    ///
-    /// No validation is done on the transaction, so it is up to the caller to ensure that the transaction is valid
-    /// **before** calling this function.
-    pub async fn submit_funding_transaction(
-        &self,
-        name: &str,
-        tx: FundingTransaction,
-    ) -> Result<(), ChannelServerError> {
-        self.inner.submit_funding_transaction(name, tx).await
+    ///   1. Generate a new multisig wallet
+    ///      1. Create a new keypair for the wallet. This is always a Curve25519 keypair.
+    ///      2. Exchange the public keys with the merchant.
+    ///      3. Create a new multisig wallet with the public keys.
+    ///   2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
+    ///   3. Verify the wallet address with the peer.
+    pub async fn establish_new_channel(&self, proposal: NewChannelProposal) -> Result<String, ChannelServerError> {
+        self.inner.customer_establish_new_channel(proposal).await
     }
 
     /// A convenience function for [`Self::update_balance`] that pays the given amount from customer to merchant.
@@ -214,7 +207,6 @@ where
     rpc_address: String,
     channels: PaymentChannels,
     delegate: D,
-    todo_list: Arc<RwLock<VecDeque<TodoListItem>>>,
 }
 
 impl<D> Clone for InnerEventHandler<D>
@@ -227,7 +219,6 @@ where
             rpc_address: self.rpc_address.clone(),
             channels: self.channels.clone(),
             delegate: self.delegate.clone(),
-            todo_list: Arc::clone(&self.todo_list),
         }
     }
 }
@@ -237,51 +228,7 @@ where
     D: GreaseChannelDelegate,
 {
     fn new(client: Client, channels: PaymentChannels, delegate: D, rpc_address: String) -> Self {
-        Self {
-            network_client: client,
-            channels,
-            delegate,
-            todo_list: Arc::new(RwLock::new(VecDeque::new())),
-            rpc_address,
-        }
-    }
-
-    async fn add_todo_list_item(&self, item: TodoListItem) {
-        debug!("🖥️  Adding item to todo list: {item}");
-        let mut write_lock = self.todo_list.write().await;
-        write_lock.push_back(item);
-        drop(write_lock);
-    }
-
-    async fn add_todo_list_items(&self, items: impl IntoIterator<Item = TodoListItem>) {
-        trace!("🖥️  Adding items to todo list");
-        let mut write_lock = self.todo_list.write().await;
-        write_lock.extend(items);
-        drop(write_lock);
-    }
-
-    async fn get_next_todo_list_item(&self) -> Option<TodoListItem> {
-        let mut write_lock = self.todo_list.write().await;
-        let next_item = write_lock.pop_front();
-        drop(write_lock);
-        next_item
-    }
-
-    async fn work_through_todo_list(&self) {
-        while let Some(next_item) = self.get_next_todo_list_item().await {
-            let channel_name = next_item.channel_name();
-            let next = match next_item {
-                TodoListItem::ConstructFundingTransaction { channel } => {
-                    self.create_funding_transaction(&channel).await
-                }
-                TodoListItem::CloseChannel { channel, reason } => self.close_channel(channel, reason).await,
-            };
-            if let Err(err) = next {
-                debug!("🖥️  Aborting channel: {err}");
-                let item = TodoListItem::CloseChannel { channel: channel_name, reason: err.to_string() };
-                self.add_todo_list_item(item).await;
-            }
-        }
+        Self { network_client: client, channels, delegate, rpc_address }
     }
 
     async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
@@ -296,25 +243,21 @@ where
     /// The steps involved are:
     /// 1. Complete the proposal phase with the merchant.
     /// 2. Move to the Establishing phase
-    ///   2.1. Generate a new multisig wallet
-    ///     2.1.1. Create a new keypair for the wallet. This is always a Curve25519 keypair.
-    ///     2.1.2. Exchange the public keys with the merchant.
-    ///     2.1.3. Create a new multisig wallet with the public keys.
-    ///   2.2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
-    ///   2.3. Verify the wallet address with the peer.
+    ///    1. Generate a new multisig wallet
+    ///       1. Create a new keypair for the wallet. This is always a Curve25519 keypair.
+    ///       2. Exchange the public keys with the merchant.
+    ///       3. Create a new multisig wallet with the public keys.
+    ///    2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
+    ///    3. Verify the wallet address with the peer.
     pub async fn customer_establish_new_channel(
         &self,
-        secret: &str,
         proposal: NewChannelProposal,
     ) -> Result<String, ChannelServerError> {
         // 1. Proposal phase
         info!("💍️ Sending new channel proposal to merchant");
         // Needed for KES verification later..
         let kes_public_key = proposal.seed.kes_public_key.clone();
-        let name = self
-            .customer_send_proposal(secret, proposal)
-            .await?
-            .map_err(|rej| ChannelServerError::ProposalRejected(rej))?;
+        let name = self.customer_send_proposal(proposal).await?.map_err(ChannelServerError::ProposalRejected)?;
         info!("💍️ Proposal accepted. Channel name: {name}");
         // 2. We're in establishing phase now.
         let channel = self.channels.peek(&name).await.ok_or(ChannelServerError::ChannelNotFound)?;
@@ -384,7 +327,7 @@ where
         let pub_sk = wallet_info.joint_public_spend_key.clone();
         let bday = wallet_info.birthday.saturating_sub(5);
         trace!("Scanning blockchain from block {bday} for funding transaction for channel {name}");
-        self.watch_for_funding_transaction(&name, pvt_vk, pub_sk, Some(bday))
+        self.watch_for_funding_transaction(name, pvt_vk, pub_sk, Some(bday))
             .await
             .map_err(|e| warn!("Error creating funding tx watcher: {e}"))
             .ok()?;
@@ -398,7 +341,6 @@ where
     /// reject the final proposal, we return the reason to the client.
     async fn customer_send_proposal(
         &self,
-        secret: &str,
         proposal: NewChannelProposal,
     ) -> Result<Result<String, RejectChannelProposal>, PeerConnectionError> {
         let mut client = self.network_client.clone();
@@ -406,7 +348,7 @@ where
         // todo: check what happens if there's already a connection?
         client.dial(address).await?;
         trace!("Sending channel proposal to merchant.");
-        let state = self.customer_create_new_state(secret, proposal.clone());
+        let state = self.customer_create_new_state(proposal.clone());
         let res = client.new_channel_proposal(proposal).await?;
         let result = match res {
             ChannelProposalResult::Accepted(final_proposal) => {
@@ -423,7 +365,7 @@ where
                 let info = final_proposal.proposed_channel_info();
                 self.common_create_channel(state, peer_info, info)
                     .await
-                    .map_err(|e| RejectChannelProposal::internal("Error creating new channel"))
+                    .map_err(|_| RejectChannelProposal::internal("Error creating new channel"))
             }
             ChannelProposalResult::Rejected(rej) => {
                 warn!("Channel proposal rejected: {}", rej.reason);
@@ -451,13 +393,12 @@ where
     }
 
     /// Helper function. Creates a [`NewChannelState`] from the given proposal and secret.
-    fn customer_create_new_state(&self, secret: &str, prop: NewChannelProposal) -> ChannelState {
-        let new_state = NewChannelBuilder::new(prop.seed.role, &prop.proposer_pubkey, secret)
+    fn customer_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
+        let new_state = NewChannelBuilder::new(prop.seed.role)
             .with_my_user_label(&prop.proposer_label)
             .with_peer_label(&prop.seed.user_label)
             .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
             .with_customer_initial_balance(prop.seed.initial_balances.customer)
-            .with_peer_public_key(prop.seed.pubkey)
             .with_kes_public_key(prop.seed.kes_public_key)
             .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data");
@@ -466,13 +407,12 @@ where
 
     // TODO - the merchant label should be used to extract data that was generated ourselves, rather than trusting
     // the proposal.
-    fn merchant_create_new_state(&self, secret: &str, prop: NewChannelProposal) -> ChannelState {
-        let new_state = NewChannelBuilder::new(prop.seed.role.other(), &prop.seed.pubkey, secret)
+    fn merchant_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
+        let new_state = NewChannelBuilder::new(prop.seed.role.other())
             .with_my_user_label(&prop.seed.user_label)
             .with_peer_label(&prop.proposer_label)
             .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
             .with_customer_initial_balance(prop.seed.initial_balances.customer)
-            .with_peer_public_key(prop.proposer_pubkey)
             .with_kes_public_key(prop.seed.kes_public_key)
             .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data");
@@ -485,7 +425,10 @@ where
         self.verify_proposal_and_create_channel(data.clone())
             .await
             .map(|name| {
-                info!("💍️ Proposal accepted from customer: {}", data.contact_info_proposer.name);
+                info!(
+                    "💍️ Proposal for channel {name} accepted from customer: {}",
+                    data.contact_info_proposer.name
+                );
                 let result = ChannelProposalResult::Accepted(data.clone());
                 GreaseResponse::ProposeChannelResponse(Ok(result))
             })
@@ -506,14 +449,10 @@ where
             let reason = RejectReason::InvalidProposal(err);
             RejectChannelProposal::new(reason, RetryOptions::close_only())
         })?;
-        let secret = self.delegate.derive_channel_secret(&data).await.map_err(|e| {
-            warn!("Deriving new channel secret failed: {e}");
-            RejectChannelProposal::internal("Error deriving new channel secret")
-        })?;
         // Construct the new channel
         let peer_info = data.contact_info_proposer.clone();
         let info = data.proposed_channel_info();
-        let new_state = self.merchant_create_new_state(&secret, data);
+        let new_state = self.merchant_create_new_state(data);
         let name = self.common_create_channel(new_state, peer_info, info).await.map_err(|e| {
             warn!("Error creating new channel {e}");
             RejectChannelProposal::internal("Error creating new channel")
@@ -614,7 +553,7 @@ where
         let wallet = self.create_new_2_of_2_wallet(my_spend_key, my_pubkey, peer_key).await?;
         let data = wallet.serializable();
         let event = LifeCycleEvent::MultiSigWalletCreated(Box::new(data));
-        let mut channel = self.channels.checkout(&name).await.ok_or_else(|| ChannelServerError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(name).await.ok_or_else(|| ChannelServerError::ChannelNotFound)?;
         channel.handle_event(event)?;
         drop(channel);
         debug!("👛️  Multisig wallet created successfully.");
@@ -651,8 +590,7 @@ where
         info!("🔐️ Verifying KES proofs for channel {name}.");
         let pubkey = GenericPoint::from_hex(kes_public_key)
             .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
-        let _ = self
-            .delegate
+        self.delegate
             .verify_kes_proofs(
                 name.to_string(),
                 merchant_kes_shard,
@@ -719,7 +657,7 @@ where
     ) -> Result<GreaseResponse, GreaseResponse> {
         trace!("👛️  Split secrets exchange request received");
         let (name, my_shards) = envelope.open();
-        let channel = self.channels.peek(&name).await.ok_or_else(|| GreaseResponse::ChannelNotFound)?;
+        let channel = self.channels.peek(&name).await.ok_or(GreaseResponse::ChannelNotFound)?;
         let state = channel
             .state()
             .as_establishing()
@@ -846,21 +784,11 @@ where
         Ok(())
     }
 
-    async fn close_channel(&self, channel_name: String, reason: String) -> Result<(), ChannelServerError> {
-        info!("🖥️  Closing channel {channel_name}. {reason}");
-        // TODO - initiate co-operative channel closing
-        Ok(())
-    }
     /// Returns the channel metadata for the given channel name, if the current lifecycle state has the information
     /// available.
     async fn get_channel_metadata(&self, channel_name: &str) -> Option<ChannelMetadata> {
         let lock = self.channels.peek(channel_name).await?;
         Some(lock.state().metadata().clone())
-    }
-
-    async fn create_funding_transaction(&self, channel_name: &str) -> Result<(), ChannelServerError> {
-        // todo: implement funding transaction creation
-        Ok(())
     }
 
     /// Submit a funding transaction receipt directly to the request handler.
@@ -953,7 +881,7 @@ where
     ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
         // Get peer ID for the channel
         let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        let peer = channel.peer_id().clone();
+        let peer = channel.peer_id();
         drop(channel);
         // 1. Generating the necessary proofs for the update.
         let update = self.generate_update_proofs(channel_name, delta).await?;
@@ -981,11 +909,11 @@ where
 
     async fn generate_update_proofs(
         &self,
-        name: &str,
-        delta: MoneroDelta,
+        _name: &str,
+        _delta: MoneroDelta,
     ) -> Result<ChannelUpdate, ChannelServerError> {
-        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         todo!()
+        // let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         // let last_update = channel.state().latest_secrets().ok_or(ChannelServerError::InvalidState(format!(
         //     "Channel {name} was not in Open state"
         // )))?;
@@ -1010,20 +938,20 @@ where
         name: &str,
         confirmation: ChannelUpdate,
     ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
-        let proofs_ok = self.verify_peer_proofs(name, &confirmation).await;
+        let _proofs_ok = self.verify_peer_proofs(name, &confirmation).await;
         todo!("verify_peer_proofs not implemented yet");
     }
 
-    async fn send_finalization(&self, name: &str, peer: PeerId, confirmation: ChannelUpdateFinalization) {
+    async fn send_finalization(&self, _name: &str, _peer: PeerId, _confirmation: ChannelUpdateFinalization) {
         todo!()
     }
 
-    async fn verify_peer_proofs(&self, name: &str, confirmation: &ChannelUpdate) -> Result<(), UpdateError> {
+    async fn verify_peer_proofs(&self, _name: &str, _confirmation: &ChannelUpdate) -> Result<(), UpdateError> {
         todo!()
     }
 
     async fn get_latest_update(&self, name: &str) -> Result<Option<ChannelUpdate>, ChannelServerError> {
-        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let _channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         todo!()
     }
 
@@ -1050,7 +978,7 @@ where
         Ok(MessageEnvelope::new(name, confirmation))
     }
 
-    async fn respond_to_finalization(&self, name: String, update: ChannelUpdateFinalization) {
+    async fn respond_to_finalization(&self, _name: String, update: ChannelUpdateFinalization) {
         match update {
             ChannelUpdateFinalization::Finalized { txid, balances } => {
                 trace!(
@@ -1069,41 +997,6 @@ where
 }
 //------------------------------------------- Minor helper functions ---------------------------------------------//
 
-#[derive(Debug)]
-pub enum TodoListItem {
-    ConstructFundingTransaction { channel: String },
-    CloseChannel { channel: String, reason: String },
-}
-
-impl Display for TodoListItem {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TodoListItem::ConstructFundingTransaction { channel: channel_name } => {
-                write!(f, "Construct funding transaction for {channel_name}")
-            }
-            TodoListItem::CloseChannel { channel: channel_name, reason } => {
-                write!(f, "Close channel {channel_name}: {reason}")
-            }
-        }
-    }
-}
-
-impl TodoListItem {
-    pub fn channel_name(&self) -> String {
-        match self {
-            TodoListItem::ConstructFundingTransaction { channel } => channel.clone(),
-            TodoListItem::CloseChannel { channel, .. } => channel.clone(),
-        }
-    }
-}
-
-pub enum NextAction {
-    /// Task completed successfully. Continue as normal
-    Continue,
-    /// Close the channel with reason given
-    Abort { channel_name: String, reason: String },
-}
-
 fn confirm_channel_matches(remote: &str, local: &str) -> Result<(), ChannelServerError> {
     if remote != local {
         return Err(ChannelServerError::ProtocolError(format!(
@@ -1111,47 +1004,4 @@ fn confirm_channel_matches(remote: &str, local: &str) -> Result<(), ChannelServe
         )));
     }
     Ok(())
-}
-
-#[cfg(feature = "graveyard")]
-mod graveyard {
-    use super::*;
-
-    impl<D> InnerEventHandler<D>
-    where
-        D: GreaseChannelDelegate,
-    {
-        // Before creating a new 2-of-2 wallet, check the following:
-        // 1. The channel exists
-        // 2. The channel is in the Establishing state
-        // 3. The role of this side of the channel is Merchant
-        async fn pre_wallet_checks(
-            &self,
-            channel_name: &str,
-        ) -> Result<(Network, ChannelId, crate::identity::ContactInfo), crate::errors::ChannelServerError> {
-            match self.channels.peek(channel_name).await {
-                Some(channel) => match channel.state() {
-                    ChannelLifeCycle::Establishing(state) => {
-                        let role = state.channel_info.role;
-                        let state_needed = (
-                            state.channel_info.network,
-                            state.channel_info.channel_id.clone(),
-                            channel.peer_info(),
-                        );
-                        drop(channel);
-                        if role.is_customer() {
-                            error!("🖥️  Wallet setup must start from merchant side. Channel {channel_name} is not a merchant channel");
-                            Err(crate::errors::ChannelServerError::NotMerchantRole)
-                        } else {
-                            Ok(state_needed)
-                        }
-                    }
-                    _ => Err(crate::errors::ChannelServerError::InvalidState(format!(
-                        "Channel {channel_name} is not in the Establishing state"
-                    ))),
-                },
-                None => Err(crate::errors::ChannelServerError::ChannelNotFound),
-            }
-        }
-    }
 }

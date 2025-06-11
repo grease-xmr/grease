@@ -39,7 +39,7 @@ pub fn point_as_hex(point: &EdwardsPoint) -> String {
 
 pub fn hex_to_point(hex: &str) -> Result<EdwardsPoint, String> {
     let mut repr = [0u8; 32];
-    hex::decode_to_slice(&hex, &mut repr).map_err(|e| format!("Hex decode failed: {}", e))?;
+    hex::decode_to_slice(hex, &mut repr).map_err(|e| format!("Hex decode failed: {}", e))?;
     let point: Option<EdwardsPoint> = EdwardsPoint::from_bytes(&repr).into();
     match point {
         Some(p) => Ok(p),
@@ -49,7 +49,7 @@ pub fn hex_to_point(hex: &str) -> Result<EdwardsPoint, String> {
 
 pub fn hex_to_scalar(hex: &str) -> Result<Scalar, String> {
     let mut bytes = [0u8; 32];
-    hex::decode_to_slice(&hex, &mut bytes).map_err(|e| e.to_string())?;
+    hex::decode_to_slice(hex, &mut bytes).map_err(|e| e.to_string())?;
     let decoded: Option<DScalar> = DScalar::from_canonical_bytes(bytes).into();
     match decoded {
         Some(v) => {
@@ -146,7 +146,7 @@ pub async fn setup_localnet(url: &str, addr: &MoneroAddress) -> SimpleRequestRpc
         return rpc;
     }
     // Mine enough blocks to ensure decoy availability
-    rpc.generate_blocks(&addr, BLOCKS_TO_MINE).await.unwrap();
+    rpc.generate_blocks(addr, BLOCKS_TO_MINE).await.unwrap();
     rpc
 }
 
@@ -192,6 +192,5 @@ pub fn scalar_from(s: &str) -> Scalar {
     let bytes = hex::decode(s).unwrap();
     let mut repr = [0u8; 32];
     repr.copy_from_slice(&bytes[0..32]);
-    let scalar = Scalar::from_repr(repr).unwrap();
-    scalar
+    Scalar::from_repr(repr).unwrap()
 }

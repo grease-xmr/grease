@@ -5,6 +5,7 @@ use crate::monero::data_objects::TransactionId;
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::commitment_tx::CommitmentTransaction;
 use crate::state_machine::error::LifeCycleError;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +22,10 @@ impl ClosingChannelState {
     }
     pub fn final_balances(&self) -> Balances {
         self.metadata.balances()
+    }
+
+    pub fn multisig_address(&self, _network: Network) -> Option<String> {
+        todo!("Implement multisig address retrieval for closing channel state")
     }
 
     pub fn reason(&self) -> &ChannelClosedReason {
@@ -43,6 +48,7 @@ impl ClosingChannelState {
         self.final_tx = Some(final_tx);
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn next(self) -> Result<ClosedChannelState, (Self, LifeCycleError)> {
         if !self.requirements_met() {
             return Err((self, LifeCycleError::InvalidStateTransition));

@@ -44,8 +44,8 @@ impl WatchOnlyWallet {
     }
 
     pub fn address(&self) -> MoneroAddress {
-        let view_key = self.public_view_key().as_point().clone();
-        let spend_key = self.public_spend_key().as_point().clone();
+        let view_key = self.public_view_key().as_point();
+        let spend_key = self.public_spend_key().as_point();
         MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_key, view_key)
     }
 
@@ -63,7 +63,7 @@ impl WatchOnlyWallet {
 
     pub async fn scan(&mut self, start: Option<u64>, end: Option<u64>) -> Result<usize, RpcError> {
         let k = self.private_view_key.as_zscalar().clone();
-        let p = self.public_spend_key.as_point().clone();
+        let p = self.public_spend_key.as_point();
         let pair = ViewPair::new(p, k).map_err(|e| RpcError::InternalError(e.to_string()))?;
         let mut scanner = Scanner::new(pair);
         let height = match end {
