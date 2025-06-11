@@ -1,10 +1,11 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::{ConversationIdentity, DummyDelegate, KeyManager, OutOfBandMerchantInfo, PaymentChannels};
+use grease_p2p::{
+    ConversationIdentity, DummyDelegate, KeyManager, NetworkServer, OutOfBandMerchantInfo, PaymentChannels,
+};
 use std::fmt::Display;
 
 pub mod formatting;
 pub mod menus;
-use crate::channel_management::{MoneroNetworkServer, MoneroOutOfBandMerchantInfo};
 use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
     assign_identity, create_identity, delete_identity, list_identities, load_or_create_identities, MoneroKeyManager,
@@ -14,13 +15,17 @@ use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use grease_p2p::message_types::NewChannelProposal;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::balance::Balances;
 use libgrease::kes::FundingTransaction;
 use libgrease::payment_channel::ChannelRole;
-use libgrease::state_machine::{Balances, ChannelSeedBuilder, LifecycleStage};
+use libgrease::state_machine::lifecycle::LifecycleStage;
+use libgrease::state_machine::ChannelSeedBuilder;
 use log::*;
 use menus::*;
 use rand::{Rng, RngCore};
+
+pub type MoneroNetworkServer = NetworkServer<DummyDelegate>;
+pub const RPC_ADDRESS: &str = "http://localhost:25070";
 
 pub struct InteractiveApp {
     identity: ConversationIdentity,
@@ -29,7 +34,8 @@ pub struct InteractiveApp {
     breadcrumbs: Vec<&'static Menu>,
     current_channel: Option<String>,
     channel_status: Option<LifecycleStage>,
-    server: MoneroNetworkServer,
+    server: NetworkServer<DummyDelegate>,
+    key_manager: MoneroKeyManager,
 }
 
 impl InteractiveApp {
@@ -48,9 +54,17 @@ impl InteractiveApp {
         let identity = assign_identity(&id_path, config.preferred_identity.as_ref())?;
         let delegate = DummyDelegate::default();
         let channels = PaymentChannels::load(config.channel_directory())?;
-        let server = MoneroNetworkServer::new(identity.clone(), channels, delegate, key_manager)?;
-        let app =
-            Self { identity, current_menu, breadcrumbs, config, current_channel: None, channel_status: None, server };
+        let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate)?;
+        let app = Self {
+            identity,
+            current_menu,
+            breadcrumbs,
+            config,
+            current_channel: None,
+            channel_status: None,
+            server,
+            key_manager,
+        };
         Ok(app)
     }
 
@@ -149,6 +163,11 @@ impl InteractiveApp {
     async fn connect_to_channel(&mut self) -> Result<String> {
         let channel = self.select_channel().await?;
         self.current_channel = Some(channel.clone());
+        self.update_status().await;
+        if let Some(LifecycleStage::Establishing) = self.channel_status {
+            debug!("Establishing channel. Checking whether we should rescan for funding transaction..");
+            self.server.rescan_for_funding(&channel).await;
+        }
         Ok("Channel {channel} selected".to_string())
     }
 
@@ -158,14 +177,14 @@ impl InteractiveApp {
         }
         let name = self.current_channel.clone().unwrap();
         let info = self.server.channel_metadata(&name).await.ok_or_else(|| anyhow!("No channel metadata found"))?;
-        let balances = info.initial_balances;
+        let balances = info.balances();
         if !balances.customer.is_zero() {
             let controller = self.server.controller();
             println!("Watching for customer funding tx..");
             let cn = name.clone();
             // Completely unnecessary, but demonstrating that this can be done async
             tokio::spawn(async move {
-                let tx = FundingTransaction::new(ChannelRole::Customer, "customer0001");
+                let tx = FundingTransaction::new(ChannelRole::Customer, "customer0001", balances.customer);
                 controller.submit_funding_transaction(&cn, tx.clone()).await.unwrap();
                 println!("Detected funding transaction: {}", tx.transaction_id.id);
             });
@@ -174,7 +193,7 @@ impl InteractiveApp {
             let controller = self.server.controller();
             println!("Watching for merchant funding tx..");
             tokio::spawn(async move {
-                let tx = FundingTransaction::new(ChannelRole::Merchant, "merchant0001");
+                let tx = FundingTransaction::new(ChannelRole::Merchant, "merchant0001", balances.merchant);
                 controller.submit_funding_transaction(&name.clone(), tx.clone()).await.unwrap();
                 println!("Detected funding transaction: {}", tx.transaction_id.id);
             });
@@ -196,42 +215,33 @@ impl InteractiveApp {
     async fn propose_new_channel(&mut self) -> Result<String> {
         // Get the merchant details and add our info
         let oob_info = dialoguer::Input::<String>::new().with_prompt("Paste merchant info").interact()?;
-        let oob_info = serde_json::from_str::<MoneroOutOfBandMerchantInfo>(&oob_info)?;
+        let oob_info = serde_json::from_str::<OutOfBandMerchantInfo>(&oob_info)?;
         let (secret, proposal) = self.create_channel_proposal(oob_info)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
-        let result = self.server.send_proposal(secret, proposal.clone()).await?;
-        match result {
-            // We got an ack, but the merchant may have changed the proposal, so we need to check.
-            Ok(name) => {
-                self.save_channels().await?;
-                info!("Channels saved.");
-                self.current_channel = Some(name.clone());
-                let status = self.server.channel_status(&name).await;
-                self.channel_status = status;
-                Ok(format!("New channel created: {name}"))
-            }
-            Err(rej) => {
-                warn!("Channel proposal rejected: {}", rej.reason);
-                // todo: handle the rejection based on retry options
-                Err(anyhow!("Channel proposal rejected"))
-            }
-        }
+        let name = self.server.establish_new_channel(&secret, proposal.clone()).await?;
+        self.save_channels().await?;
+        info!("Channels saved.");
+        self.current_channel = Some(name.clone());
+        let status = self.server.channel_status(&name).await;
+        self.channel_status = status;
+        Ok(format!("New channel created: {name}"))
     }
 
     pub fn create_channel_proposal(
         &self,
-        oob_info: MoneroOutOfBandMerchantInfo,
-    ) -> Result<(Curve25519Secret, NewChannelProposal<Curve25519PublicKey>), anyhow::Error> {
+        oob_info: OutOfBandMerchantInfo,
+    ) -> Result<(String, NewChannelProposal), anyhow::Error> {
         let my_contact_info = self.identity.contact_info();
         let peer_info = oob_info.contact;
         let seed_info = oob_info.seed;
         let key_index = rand::rng().next_u64();
-        let (my_secret, my_pubkey) = self.server.key_manager().new_keypair(key_index);
+        let (my_secret, my_pubkey) = self.key_manager.new_keypair(key_index);
         let user_label = self.identity.id();
         let my_user_label = format!("{user_label}-{key_index}");
-        let proposal = NewChannelProposal::new(seed_info, my_pubkey, my_user_label, my_contact_info, peer_info);
-        Ok((my_secret, proposal))
+        let proposal =
+            NewChannelProposal::new(seed_info, my_pubkey.as_hex(), my_user_label, my_contact_info, peer_info);
+        Ok((my_secret.as_hex(), proposal))
     }
 
     /// Lists all available identities from the configuration.
@@ -273,10 +283,12 @@ impl InteractiveApp {
             .with_prompt("Enter customer initial balance")
             .validate_with(valid_xmr)
             .interact()?;
-        let merchant_balance = dialoguer::Input::<String>::new()
-            .with_prompt("Enter merchant initial balance")
-            .validate_with(valid_xmr)
-            .interact()?;
+        // let merchant_balance = dialoguer::Input::<String>::new()
+        //     .with_prompt("Enter merchant initial balance")
+        //     .validate_with(valid_xmr)
+        //     .interact()?;
+        // For now we only support merchant balance of 0.0
+        let merchant_balance = "0.0";
         let balances = Balances::new(
             MoneroAmount::from_xmr(&merchant_balance).ok_or_else(|| anyhow!("Invalid merchant balance"))?,
             MoneroAmount::from_xmr(&customer_balance).ok_or_else(|| anyhow!("Invalid customer balance"))?,
@@ -292,11 +304,11 @@ impl InteractiveApp {
             .ok_or_else(|| anyhow!("No user label found. Is `user_label` configured in the config file?"))?;
         let index = rand::rng().random();
         let channel_id = format!("{label}-{index}");
-        let (_secret, channel_pubkey) = self.server.key_manager().new_keypair(index);
+        let (_secret, channel_pubkey) = self.key_manager.new_keypair(index);
         let seed_info = ChannelSeedBuilder::default()
-            .with_pubkey(channel_pubkey)
+            .with_pubkey(channel_pubkey.as_hex())
             .with_key_id(index)
-            .with_kes_public_key(kes)
+            .with_kes_public_key(kes.as_hex())
             .with_initial_balances(balances)
             .with_user_label(channel_id)
             .build()?;

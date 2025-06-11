@@ -1,14 +1,25 @@
-use crate::amount::MoneroAmount;
+use crate::amount::MoneroDelta;
+use monero::Address as MoneroAddress;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 pub struct MoneroViewKey;
 pub struct MoneroTransaction;
 
 // re-export
-use crate::monero::MoneroKeyPair;
-use crate::state_machine::VssOutput;
-pub use monero::Address as MoneroAddress;
+use crate::balance::Balances;
+use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::kes::PartialEncryptedKey;
+use crate::payment_channel::UpdateError;
+use crate::state_machine::CommitmentTransaction;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MultisigSplitSecrets {
+    /// The encrypted secret shard for the peer
+    pub peer_shard: PartialEncryptedKey,
+    /// The encrypted secret shard for the KES
+    pub kes_shard: PartialEncryptedKey,
+}
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(bound(deserialize = "T: for<'des> Deserialize<'des>", serialize = "T: Serialize",))]
@@ -37,31 +48,9 @@ where
     }
 }
 
-/// The first set of data shared between wallets in generating a new multisig wallet.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MultiSigInitInfo {
-    // Something like MultisigxV2R1C9Bd2LN...
-    pub init: String,
-}
-
 #[derive(Clone, Deserialize, Serialize)]
 pub struct MultisigKeyInfo {
-    // Something like MultisigxV2R1C9Bd2LN...
-    pub key: String,
-}
-
-/// When the customer returns the multisig key to the merchant, it also includes the VSS info
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct MsKeyAndVssInfo {
-    pub multisig_key: MultisigKeyInfo,
-    pub shards_for_merchant: VssOutput,
-}
-
-/// The merchant send this to the customer to confirm the multisig wallet address and share its split secrets
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WalletConfirmation {
-    pub address: MoneroAddress,
-    pub merchant_vss_info: VssOutput,
+    pub key: Curve25519PublicKey,
 }
 
 impl Debug for MultisigKeyInfo {
@@ -80,8 +69,8 @@ pub struct MultiSigSeed;
 
 #[derive(Debug, Clone, Default)]
 pub struct WalletBalance {
-    pub total: MoneroAmount,
-    pub spendable: MoneroAmount,
+    pub total: MoneroDelta,
+    pub spendable: MoneroDelta,
     pub blocks_left: usize,
 }
 
@@ -90,19 +79,126 @@ pub struct TransactionId {
     pub id: String,
 }
 
+impl Display for TransactionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+
 impl TransactionId {
     pub fn new(id: impl Into<String>) -> Self {
         Self { id: id.into() }
     }
 }
 
-pub struct WalletInfo {
-    // The address of the multisig wallet.
-    pub address: MoneroAddress,
-    // My keypair for the multisig wallet
-    pub keypair: MoneroKeyPair,
-    // The encrypted secret shards of my spendkey that has been shared with the peer and KES
-    pub peer_vss_info: VssOutput,
-    // The encrypted secret shards of my peer's spendkey that has been shared with me
-    pub my_vss_info: VssOutput,
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChannelUpdate {
+    /// The update counter for the channel. This is incremented every time a new update is sent. The initial balance
+    /// represents update 0.
+    pub update_count: u64,
+    /// The balances after applying the delta to the current balances
+    pub new_balances: Balances,
+    /// The change in the *Merchant's* balance
+    pub delta: MoneroDelta,
+    /// The new, partially signed commitment transaction
+    pub commitment_tx: CommitmentTransaction,
+    /// The proof(s) of the new commitment transaction
+    pub proofs: Vec<u8>,
+}
+
+impl ChannelUpdate {
+    /// Create a new channel update with the given parameters.
+    pub fn from_template(template: &ChannelSecrets, tx: CommitmentTransaction, proofs: &[u8]) -> Self {
+        Self {
+            update_count: template.update_count,
+            new_balances: template.new_balances,
+            delta: template.delta,
+            commitment_tx: tx,
+            proofs: proofs.to_vec(),
+        }
+    }
+}
+
+/// A channel update template before any proofs have been generated.
+///
+/// It is based on the current channel state, plus the delta to be applied to the merchant's balance.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChannelSecrets {
+    /// The update counter for the channel. This is incremented every time a new update is sent. The initial balance
+    /// represents update 0.
+    pub update_count: u64,
+    /// The balances after applying the delta to the current balances
+    pub new_balances: Balances,
+    /// The change in the *Merchant's* balance
+    pub delta: MoneroDelta,
+    /// The last witness value on the L2 curve
+    pub witness: Vec<u8>,
+    /// The last statement value on the L2 curve
+    pub statement: Vec<u8>,
+    /// The equivalent secret value on Ed25519
+    pub secret: Curve25519Secret,
+    /// The last public key on the Ed25519 curve
+    pub public_key: Curve25519PublicKey,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum StartChannelUpdateConfirmation {
+    /// The update has been accepted by the responder. The responder's proofs are provided
+    Confirmed(ChannelUpdate),
+    /// The update has been rejected. The reason can be gleaned from `PaymentRejection::reason`. The most recent
+    /// proofs are provided so that the initiator can recover and try again if necessary
+    Rejected(PaymentRejection),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PaymentRejection {
+    /// The reason for the rejection
+    pub reason: UpdateError,
+    /// The most recent proofs from the responder, if there was one
+    pub last_update: Option<ChannelUpdate>,
+}
+
+impl PaymentRejection {
+    pub fn new(reason: UpdateError, last_update: Option<ChannelUpdate>) -> Self {
+        Self { reason, last_update }
+    }
+}
+
+/// The channel payment is finalized on receipt of this message. No response is expected.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ChannelUpdateFinalization {
+    /// The responder's proofs have been verified and the payment is finalized. The initiator sends the Transaction hash
+    /// as final confirmation.
+    Finalized { txid: TransactionId, balances: Balances },
+    /// The update has been rejected by the initiator. The reason can be gleaned from `PaymentRejection::reason`.
+    Rejected(PaymentRejection),
+}
+
+/// A struct to make it easier to persist and pass wallet info around. Obviously it needs to be made more secure for
+/// a production environment.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MultisigWalletData {
+    pub my_spend_key: Curve25519Secret,
+    pub my_public_key: Curve25519PublicKey,
+    pub sorted_pubkeys: [Curve25519PublicKey; 2],
+    pub joint_private_view_key: Curve25519Secret,
+    pub joint_public_spend_key: Curve25519PublicKey,
+    pub birthday: u64,
+    pub known_outputs: String,
+}
+
+impl Debug for MultisigWalletData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MultisigWalletData( ")?;
+        write!(f, "my_public_key: {}, ", self.my_public_key.as_hex())?;
+        write!(
+            f,
+            "sorted_pubkeys: [{}, {}], ",
+            self.sorted_pubkeys[0].as_hex(),
+            self.sorted_pubkeys[1].as_hex()
+        )?;
+        write!(f, "birthday: {}, ", self.birthday)?;
+        write!(f, "known_outputs: {}, ", self.known_outputs)?;
+        write!(f, ")")
+    }
 }

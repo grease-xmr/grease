@@ -1,16 +1,18 @@
-use crate::amount::MoneroAmount;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
 pub enum UpdateError {
-    #[error("There are insufficient funds in the channel to make the desired payment")]
-    InsufficientFunds { available: MoneroAmount, required: MoneroAmount },
-    #[error("The total balance of the channel would change if the update was applied")]
-    NotBalanced,
-}
-
-impl UpdateError {
-    pub fn insufficient_funds(available: MoneroAmount, required: MoneroAmount) -> Self {
-        UpdateError::InsufficientFunds { available, required }
-    }
+    #[error("The provided DLEQ proof is invalid")]
+    InvalidDleqProof,
+    #[error("The provided modulo proof is invalid")]
+    InvalidModProof,
+    #[error("The provided VCOF proof is invalid")]
+    InvalidVcofProof,
+    #[error("The new balance does not match the expected value on the peer side")]
+    InvalidBalance,
+    #[error("The amount being spent would cause one party to have a negative balance")]
+    InsufficientFunds,
+    #[error("A network error occurred: {0}")]
+    NetworkError(String),
 }

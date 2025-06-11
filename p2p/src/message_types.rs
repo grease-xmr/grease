@@ -1,11 +1,12 @@
-use crate::errors::PeerConnectionError;
+use crate::data_objects::TransactionRecord;
+use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
-use libgrease::crypto::traits::PublicKey;
 use libgrease::kes::KesInitializationResult;
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MsKeyAndVssInfo, MultiSigInitInfo, MultisigKeyInfo, WalletConfirmation,
+    ChannelUpdate, ChannelUpdateFinalization, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
+    StartChannelUpdateConfirmation, TransactionId,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -19,90 +20,105 @@ use std::fmt::{Display, Formatter};
 /// Requests that one peer can make to another peer in the Grease p2p network to create, update or close a payment
 /// channel.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub enum GreaseRequest<P: PublicKey> {
-    ProposeNewChannel(NewChannelProposal<P>),
-    /// Merchant initiates the creation of a new 2-of-2 multisig wallet (Prep phase).
-    MsInit(MessageEnvelope<MultiSigInitInfo>),
-    /// The merchant sends its multisig wallet key and expects the keys and split secrets as a response (Prep phase).
+pub enum GreaseRequest {
+    ProposeChannelRequest(NewChannelProposal),
+    /// The customer sends its multisig wallet key and expects the merchant keys as a response.
     MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
+    MsSplitSecretExchange(MessageEnvelope<MultisigSplitSecrets>),
     /// The merchant wants customer to confirm that the wallet is created correctly by checking the address of the
     /// 2-of-2 wallet, and send over the split secrets at the same time (Final prep phase).
-    ConfirmMsAddress(MessageEnvelope<WalletConfirmation>),
+    ConfirmMsAddress(MessageEnvelope<String>),
     /// The merchant has established the KES and is giving the customer the opportunity to verify and then
     /// accept/reject it.
     VerifyKes(MessageEnvelope<KesInitializationResult>),
+    /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
+    /// proofs and respond their own proofs. The responder responds with [`GreaseResponse::ConfirmUpdate`].
+    StartChannelUpdate(MessageEnvelope<ChannelUpdate>),
+    /// The final conformation of the channel update. The initiator will send this request after revalidating the
+    /// proofs from the responder. The responder does not return a response to this request.
+    FinalizeChannelUpdate(MessageEnvelope<ChannelUpdateFinalization>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub enum GreaseResponse<P: PublicKey> {
-    ChannelProposalResult(ChannelProposalResult<P>),
-    /// The customer's response to the MS init request. The customer's Init info is included in the response.
-    MsInit(Result<MessageEnvelope<MultiSigInitInfo>, String>),
-    /// The customer's response to the MS key exchange request. The customer's key info and split secrets are
+pub enum GreaseResponse {
+    ProposeChannelResponse(Result<ChannelProposalResult, RemoteServerError>),
+    /// The merchant's response to the MS key exchange request. The customer's key info and split secrets are
     /// included in the response.
-    MsKeyExchange(Result<MessageEnvelope<MsKeyAndVssInfo>, String>),
+    MsKeyExchange(Result<MessageEnvelope<MultisigKeyInfo>, RemoteServerError>),
+    MsSplitSecretExchange(Result<MessageEnvelope<MultisigSplitSecrets>, RemoteServerError>),
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
-    ConfirmMsAddress(MessageEnvelope<bool>),
+    ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
     /// The customer's response to the VerifyKes request. The response is a boolean indicating whether the KES was
     /// ratified by the customer or not. If false, the channel establishment will be aborted.
-    AcceptKes(MessageEnvelope<bool>),
+    AcceptKes(Result<MessageEnvelope<bool>, RemoteServerError>),
+    ConfirmUpdate(Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError>),
     ChannelClosed,
     ChannelNotFound,
     Error(String),
+    /// Do not return a response to the peer at all.
+    NoResponse,
 }
 
-impl<P: PublicKey> From<ChannelProposalResult<P>> for GreaseResponse<P> {
-    fn from(res: ChannelProposalResult<P>) -> Self {
-        GreaseResponse::ChannelProposalResult(res)
+impl From<ChannelProposalResult> for GreaseResponse {
+    fn from(res: ChannelProposalResult) -> Self {
+        GreaseResponse::ProposeChannelResponse(Ok(res))
     }
 }
 
-impl<P> Display for GreaseResponse<P>
-where
-    P: PublicKey,
-{
+impl Display for GreaseResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GreaseResponse::ChannelProposalResult(ChannelProposalResult::Accepted(_)) => {
+            GreaseResponse::ProposeChannelResponse(Ok(ChannelProposalResult::Accepted(_))) => {
                 write!(f, "Channel Proposal accepted")
             }
-            GreaseResponse::ChannelProposalResult(ChannelProposalResult::Rejected(ref _rej)) => {
+            GreaseResponse::ProposeChannelResponse(Ok(ChannelProposalResult::Rejected(ref _rej))) => {
                 write!(f, "Channel Proposal REJECTED.")
             }
+            GreaseResponse::ProposeChannelResponse(Err(err)) => {
+                write!(f, "Remote server error: {err} while proposing a new channel")
+            }
             GreaseResponse::Error(err) => write!(f, "Error: {}", err),
-            GreaseResponse::MsInit(Ok(s)) => write!(f, "MultisigInitResponseOk({})", &s.channel),
-            GreaseResponse::MsInit(Err(s)) => write!(f, "MultisigInitResponseError({s})"),
             GreaseResponse::MsKeyExchange(Ok(_)) => write!(f, "MultisigKeyExchange(***)"),
-            GreaseResponse::MsKeyExchange(Err(e)) => write!(f, "MultisigKeyExchangeError({e})"),
-            GreaseResponse::ConfirmMsAddress(env) => {
+            GreaseResponse::MsKeyExchange(Err(e)) => write!(
+                f,
+                "Remote server error during MultisigKeyExchangeError\
+            ({e})"
+            ),
+            GreaseResponse::ConfirmMsAddress(Ok(env)) => {
                 let status = if env.payload { "OK" } else { "NOT OK" };
                 write!(f, "Multisig address confirmation: {status}")
             }
-            GreaseResponse::AcceptKes(env) => {
+            GreaseResponse::ConfirmMsAddress(Err(e)) => write!(
+                f,
+                "Remote server error ({e}) at MsConfirmMsAddress \
+            stage"
+            ),
+            GreaseResponse::AcceptKes(Ok(env)) => {
                 let status = if env.payload { "ACCEPTED" } else { "DID NOT ACCEPT" };
                 write!(f, "KES verification. Customer {status} the KES.")
             }
+            GreaseResponse::AcceptKes(Err(e)) => write!(f, "Remote server error ({e}) at KES acceptance stage"),
             GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
             GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
+            GreaseResponse::ConfirmUpdate(_) => write!(f, "Confirmation Update"),
+            GreaseResponse::NoResponse => write!(f, "No response to send"),
+            GreaseResponse::MsSplitSecretExchange(_) => write!(f, "MsSplitSecretExchange"),
         }
     }
 }
 
-impl<P> GreaseRequest<P>
-where
-    P: PublicKey,
-{
+impl GreaseRequest {
     pub fn channel_name(&self) -> String {
         match self {
-            GreaseRequest::ProposeNewChannel(ref proposal) => proposal.channel_name(),
-            GreaseRequest::MsInit(env) => env.channel_name(),
+            GreaseRequest::ProposeChannelRequest(ref proposal) => proposal.channel_name(),
             GreaseRequest::MsKeyExchange(env) => env.channel_name(),
             GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
             GreaseRequest::VerifyKes(env) => env.channel_name(),
+            GreaseRequest::StartChannelUpdate(env) => env.channel_name(),
+            GreaseRequest::FinalizeChannelUpdate(env) => env.channel_name(),
+            GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
         }
     }
 }
@@ -111,43 +127,115 @@ where
 ///
 /// There is typically one method in the `Client` for each of these commands.
 #[derive(Debug)]
-pub enum ClientCommand<P: PublicKey> {
+pub enum ClientCommand {
     /// Start listening on a given address. Executed via [`crate::Client::start_listening`].
-    StartListening { addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
+    StartListening {
+        addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
+    },
     /// Dial a peer at a given address. Executed via [`Client::dial`].
-    Dial { peer_id: PeerId, peer_addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
+    Dial {
+        peer_id: PeerId,
+        peer_addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
+    },
     /// Generalised response message to peers for all requests.
-    ResponseToRequest { res: GreaseResponse<P>, return_chute: ResponseChannel<GreaseResponse<P>> },
+    ResponseToRequest {
+        res: GreaseResponse,
+        return_chute: ResponseChannel<GreaseResponse>,
+    },
+    /// An internal message to confirm that the funding transaction has been confirmed.
+    WaitForFundingTx {
+        channel: String,
+        sender: oneshot::Sender<Result<TransactionRecord, PeerConnectionError>>,
+    },
+    NotifyTxMined(TransactionRecord),
     /// Request with a proposal to open a payment channel with a peer. Executed via [`crate::Client::new_channel_proposal`].
     ProposeChannelRequest {
         peer_id: PeerId,
-        data: NewChannelProposal<P>,
-        sender: oneshot::Sender<ChannelProposalResult<P>>,
+        data: NewChannelProposal,
+        sender: oneshot::Sender<Result<ChannelProposalResult, RemoteServerError>>,
     },
-    MultiSigInitRequest {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<MultiSigInitInfo>,
-        sender: oneshot::Sender<Result<MessageEnvelope<MultiSigInitInfo>, String>>,
-    },
-    MultiSigKeyRequest {
+    MultiSigKeyExchange {
         peer_id: PeerId,
         envelope: MessageEnvelope<MultisigKeyInfo>,
-        sender: oneshot::Sender<Result<MessageEnvelope<MsKeyAndVssInfo>, String>>,
+        sender: oneshot::Sender<Result<MessageEnvelope<MultisigKeyInfo>, RemoteServerError>>,
+    },
+    MultiSigSplitSecretsRequest {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<MultisigSplitSecrets>,
+        sender: oneshot::Sender<Result<MessageEnvelope<MultisigSplitSecrets>, RemoteServerError>>,
     },
     ConfirmMultiSigAddressRequest {
         peer_id: PeerId,
-        envelope: MessageEnvelope<WalletConfirmation>,
-        sender: oneshot::Sender<Result<MessageEnvelope<bool>, String>>,
+        envelope: MessageEnvelope<String>,
+        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
     },
     KesReadyNotification {
         peer_id: PeerId,
         envelope: MessageEnvelope<KesInitializationResult>,
-        sender: oneshot::Sender<Result<MessageEnvelope<bool>, String>>,
+        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
+    },
+    InitiateNewUpdate {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<ChannelUpdate>,
+        sender: oneshot::Sender<Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError>>,
+    },
+    /// Verify the responder proofs provided in the `ChannelUpdate` given in the envelope; validate the update, and
+    /// send final confirmation to the responder.
+    FinalizeUpdate {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<ChannelUpdateFinalization>,
+        sender: oneshot::Sender<Result<(), RemoteServerError>>,
     },
     /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
-    ConnectedPeers { sender: oneshot::Sender<Vec<PeerId>> },
+    ConnectedPeers {
+        sender: oneshot::Sender<Vec<PeerId>>,
+    },
     /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
     Shutdown(oneshot::Sender<bool>),
+}
+
+impl ClientCommand {
+    pub fn send_failure(self, err: RemoteServerError) {
+        warn!("🖥️  Client command failed: {err}");
+        match self {
+            ClientCommand::StartListening { .. } => {}
+            ClientCommand::Dial { .. } => {}
+            ClientCommand::ResponseToRequest { .. } => {
+                warn!("🖥️  Response to request failed, but no sender to notify.");
+            }
+            ClientCommand::ProposeChannelRequest { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::MultiSigKeyExchange { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::ConfirmMultiSigAddressRequest { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::KesReadyNotification { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::InitiateNewUpdate { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::FinalizeUpdate { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::ConnectedPeers { .. } => {
+                warn!("🖥️  Connected peers request failed, but no sender to notify.");
+            }
+            ClientCommand::Shutdown(sender) => {
+                let _ = sender.send(false);
+            }
+            ClientCommand::MultiSigSplitSecretsRequest { sender, .. } => {
+                let _ = sender.send(Err(err));
+            }
+            ClientCommand::WaitForFundingTx { sender, .. } => {}
+            ClientCommand::NotifyTxMined(_) => {}
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -160,30 +248,29 @@ pub struct FundingTxFinalizeResponse;
 pub struct AckFundingTxBroadcast;
 
 #[derive(Debug)]
-pub enum PeerConnectionEvent<P: PublicKey> {
-    InboundRequest { request: GreaseRequest<P>, response: ResponseChannel<GreaseResponse<P>> },
+pub enum PeerConnectionEvent {
+    InboundRequest { request: GreaseRequest, response: ResponseChannel<GreaseResponse> },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct NewChannelProposal<P: PublicKey> {
+pub struct NewChannelProposal {
     /// The seed info that the (usually) merchant provided initially.
-    pub seed: ChannelSeedInfo<P>,
+    pub seed: ChannelSeedInfo,
     /// The contact info for the customer (usually).
     pub contact_info_proposer: ContactInfo,
     /// The contact info for the merchant (usually).
     pub contact_info_proposee: ContactInfo,
     /// Hexadecimal string representation of the public key of the peer that will be the customer (usually).
-    pub proposer_pubkey: P,
+    pub proposer_pubkey: String,
     /// Salt used to derive the channel ID - customer (usually) portion
     pub proposer_label: String,
 }
 
-impl<P: PublicKey> NewChannelProposal<P> {
-    pub fn new<S: Into<String>>(
-        seed: ChannelSeedInfo<P>,
-        my_pubkey: P,
-        my_label: S,
+impl NewChannelProposal {
+    pub fn new(
+        seed: ChannelSeedInfo,
+        my_pubkey: impl Into<String>,
+        my_label: impl Into<String>,
         my_contact_info: ContactInfo,
         their_contact_info: ContactInfo,
     ) -> Self {
@@ -191,7 +278,7 @@ impl<P: PublicKey> NewChannelProposal<P> {
             seed,
             contact_info_proposer: my_contact_info,
             contact_info_proposee: their_contact_info,
-            proposer_pubkey: my_pubkey,
+            proposer_pubkey: my_pubkey.into(),
             proposer_label: my_label.into(),
         }
     }
@@ -202,7 +289,7 @@ impl<P: PublicKey> NewChannelProposal<P> {
 
     /// Produce a struct that contains the information needed to create a new channel.
     /// The information is from the point of view of the *proposer* of the channel, usually the customer.
-    pub fn proposed_channel_info(&self) -> ProposedChannelInfo<P> {
+    pub fn proposed_channel_info(&self) -> ProposedChannelInfo {
         let (merchant_pubkey, customer_pubkey) = match self.seed.role {
             ChannelRole::Merchant => (self.proposer_pubkey.clone(), self.seed.pubkey.clone()),
             ChannelRole::Customer => (self.seed.pubkey.clone(), self.proposer_pubkey.clone()),
@@ -211,12 +298,8 @@ impl<P: PublicKey> NewChannelProposal<P> {
             ChannelRole::Merchant => (self.proposer_label.clone(), self.seed.user_label.clone()),
             ChannelRole::Customer => (self.seed.user_label.clone(), self.proposer_label.clone()),
         };
-        let channel_id = ChannelId::new::<blake2::Blake2b512, _, _, _>(
-            &merchant_label,
-            &customer_label,
-            "",
-            self.seed.initial_balances,
-        );
+        let channel_id =
+            ChannelId::new::<blake2::Blake2b512>(&merchant_label, &customer_label, self.seed.initial_balances);
         ProposedChannelInfo {
             role: self.seed.role,
             merchant_pubkey,
@@ -225,20 +308,19 @@ impl<P: PublicKey> NewChannelProposal<P> {
             initial_balances: self.seed.initial_balances,
             customer_label,
             merchant_label,
-            channel_id,
+            channel_name: channel_id.name(),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub enum ChannelProposalResult<P: PublicKey> {
-    Accepted(NewChannelProposal<P>),
+pub enum ChannelProposalResult {
+    Accepted(NewChannelProposal),
     Rejected(RejectChannelProposal),
 }
 
-impl<P: PublicKey> ChannelProposalResult<P> {
-    pub fn accept(proposal: NewChannelProposal<P>) -> Self {
+impl ChannelProposalResult {
+    pub fn accept(proposal: NewChannelProposal) -> Self {
         ChannelProposalResult::Accepted(proposal)
     }
     pub fn reject(reason: RejectReason, retry: RetryOptions) -> Self {
@@ -256,6 +338,10 @@ impl RejectChannelProposal {
     pub fn new(reason: RejectReason, retry: RetryOptions) -> Self {
         RejectChannelProposal { reason, retry }
     }
+
+    pub fn internal(reason: impl Into<String>) -> Self {
+        RejectChannelProposal { reason: RejectReason::Internal(reason.into()), retry: RetryOptions::close_only() }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -266,8 +352,6 @@ pub enum RejectReason {
     PeerUnavailable,
     /// The proposal was rejected by the peer because it is at capacity. You can retry later.
     AtCapacity,
-    /// The proposal was not sent to the peer due to a local constraint.
-    NotSent(String),
     /// The channel was not newly created, and so cannot accept a proposal.
     NotANewChannel,
     /// The proposal was rejected for an internal reason or bug.
@@ -280,7 +364,6 @@ impl Display for RejectReason {
             RejectReason::InvalidProposal(err) => write!(f, "Invalid proposal: {}", err),
             RejectReason::PeerUnavailable => write!(f, "Peer unavailable"),
             RejectReason::AtCapacity => write!(f, "At capacity"),
-            RejectReason::NotSent(err) => write!(f, "Not sent: {}", err),
             RejectReason::NotANewChannel => {
                 write!(f, "The channel was not newly created, and so cannot accept a proposal.")
             }
@@ -298,6 +381,13 @@ impl From<LifeCycleError> for RejectReason {
                 warn!("🖥️  Cannot send AckProposal to peer because of an internal error: {e}");
                 RejectReason::Internal("Peer had an issue with the multisig wallet service".into())
             }
+            LifeCycleError::InvalidState(s) => {
+                warn!("🖥️  Cannot send AckProposal to peer because we are not in the expected state: {s}");
+                RejectReason::NotANewChannel
+            }
+            LifeCycleError::NotEnoughFunds => RejectReason::NotANewChannel,
+            LifeCycleError::InternalError(s) => RejectReason::Internal(s),
+            LifeCycleError::MismatchedUpdateCount { .. } => unreachable!("Mismatched update count"),
         }
     }
 }

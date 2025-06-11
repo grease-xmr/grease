@@ -1,83 +1,96 @@
-use crate::errors::{ChannelServerError, PaymentChannelError};
-use crate::message_types::NewChannelProposal;
+use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
-use libgrease::crypto::traits::PublicKey;
-use libgrease::kes::{FundingTransaction, KesInitializationResult};
-use libgrease::monero::{MultiSigWallet, WalletState};
-use libgrease::payment_channel::ActivePaymentChannel;
+use libgrease::amount::MoneroAmount;
+use libgrease::kes::{KesInitializationResult, ShardInfo};
+use libgrease::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
 use libgrease::state_machine::error::LifeCycleError;
-use libgrease::state_machine::lifecycle::LifeCycleEvent;
-use libgrease::state_machine::{ChannelLifeCycle, ChannelSeedInfo};
-use libp2p::{Multiaddr, PeerId};
+use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
+use libgrease::state_machine::{
+    ChannelSeedInfo, ClosingChannelState, CommitmentTransaction, EstablishedChannelState, EstablishingState,
+    LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
+};
+use libp2p::PeerId;
 use log::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 #[derive(Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct OutOfBandMerchantInfo<P>
-where
-    P: PublicKey,
-{
+pub struct OutOfBandMerchantInfo {
     pub contact: ContactInfo,
-    pub seed: ChannelSeedInfo<P>,
+    pub seed: ChannelSeedInfo,
 }
 
-impl<P> OutOfBandMerchantInfo<P>
-where
-    P: PublicKey,
-{
+impl OutOfBandMerchantInfo {
     /// Creates a new `OutOfBandMerchantInfo` with the given contact and channel seed information.
-    pub fn new(contact: ContactInfo, seed: ChannelSeedInfo<P>) -> Self {
+    pub fn new(contact: ContactInfo, seed: ChannelSeedInfo) -> Self {
         OutOfBandMerchantInfo { contact, seed }
     }
 }
 
-/// A payments channel
-///
-/// A payment channel comprises
-/// - the details of the peer (i.e. a way to connect to them over the internet)
-/// - the current state of the Monero payment channel
-///
-/// Again, the word channel is overloaded
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey  + for<'d> Deserialize<'d>"))]
-pub struct PaymentChannel<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
-    peer_info: ContactInfo,
-    // Invariant: `state` is `None` only transiently inside `handle_event`.
-    state: Option<ChannelLifeCycle<P, C, W>>,
+macro_rules! update_state {
+    ($method_name:ident, $state:ty, $accessor:ident) => {
+        fn $method_name<F>(&mut self, updater: F) -> Result<(), LifeCycleError>
+        where
+            F: FnOnce($state) -> Result<ChannelState, (ChannelState, LifeCycleError)>,
+        {
+            let state = self
+                .state
+                .take()
+                .ok_or(LifeCycleError::InternalError("state should never be None here".to_string()))?;
+            let state = state.$accessor().map_err(|(s, err)| {
+                self.state = Some(s);
+                LifeCycleError::InternalError(format!("State should always be {}, but got: {err}", stringify!($state)))
+            })?;
+            match updater(state) {
+                Ok(s) => {
+                    self.state = Some(s);
+                    Ok(())
+                }
+                Err((s, err)) => {
+                    self.state = Some(s);
+                    Err(err)
+                }
+            }
+        }
+    };
 }
 
-impl<P, C, W> PaymentChannel<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
+/// A wrapper for payment channel state.
+///
+/// This exists so that the channel server can handle multiple payment channels in parallel easily.
+///
+/// This struct comprises
+/// - the details of the peer (i.e. a way to connect to them over the internet)
+/// - the current state of the Monero payment channel
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PaymentChannel {
+    peer_info: ContactInfo,
+    // Invariant: `state` is `None` only transiently inside `handle_event`.
+    state: Option<ChannelState>,
+}
+
+impl PaymentChannel {
     /// Creates a new `PaymentChannel` with the given identity and peer information.
-    pub fn new(peer_info: ContactInfo, state: ChannelLifeCycle<P, C, W>) -> Self {
+    pub fn new(peer_info: ContactInfo, state: ChannelState) -> Self {
         PaymentChannel { peer_info, state: Some(state) }
     }
 
-    pub fn try_load_from_file<PATH: AsRef<Path>>(path: PATH) -> Result<Self, PaymentChannelError> {
-        debug!("🛣️ Loading channel from {}", path.as_ref().display());
+    pub fn try_load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, PaymentChannelError> {
+        debug!("⚡️ Loading channel from {}", path.as_ref().display());
         if path.as_ref().is_file() {
             let file_name = path.as_ref().file_name().unwrap().to_string_lossy().to_string();
             if file_name.ends_with(".ron") {
-                fs::read_to_string(path).map_err(|e| PaymentChannelError::LoadingError(e.to_string())).and_then(|s| {
-                    ron::from_str::<PaymentChannel<P, C, W>>(&s)
-                        .map_err(|e| PaymentChannelError::LoadingError(e.to_string()))
-                })
+                let channel = fs::read_to_string(path)
+                    .map_err(|e| PaymentChannelError::LoadingError(e.to_string()))
+                    .and_then(|s| {
+                        ron::from_str::<PaymentChannel>(&s)
+                            .map_err(|e| PaymentChannelError::LoadingError(e.to_string()))
+                    })?;
+                Ok(channel)
             } else {
                 Err(PaymentChannelError::LoadingError(format!(
                     "{} is not a ron file",
@@ -96,140 +109,262 @@ where
         self.peer_info.clone()
     }
 
-    pub fn peer_address(&self) -> Multiaddr {
-        self.peer_info.address.clone()
-    }
-
     pub fn peer_id(&self) -> PeerId {
         self.peer_info.peer_id
     }
 
-    pub fn state(&self) -> &ChannelLifeCycle<P, C, W> {
+    pub fn state(&self) -> &ChannelState {
         self.state.as_ref().expect("State should be present")
     }
 
-    /// Update the wallet state using the state transition function `update` provided.
-    ///
-    /// This function returns true if the state was updated (but might still have led to an aborted wallet state).
-    /// if the state does not exist, or we're not in the `Establishing` state, it returns false.
-    pub async fn wallet_preparation<F>(
-        &mut self,
-        update: impl FnOnce(WalletState<W>) -> F,
-    ) -> Result<(), LifeCycleError>
-    where
-        F: Future<Output = WalletState<W>>,
-    {
-        let Some(ChannelLifeCycle::Establishing(state)) = &mut self.state else {
-            return Err(LifeCycleError::InvalidStateTransition);
-        };
-        state.update_wallet_state(update).await;
-        Ok(())
+    pub fn is_new_channel(&self) -> bool {
+        matches!(self.state, Some(ChannelState::New(_)))
     }
 
-    pub fn wallet_state(&self) -> Result<&WalletState<W>, LifeCycleError> {
-        let Some(ChannelLifeCycle::Establishing(state)) = &self.state else {
-            return Err(LifeCycleError::InvalidStateTransition);
-        };
-        Ok(state.wallet_state())
+    pub fn is_establishing(&self) -> bool {
+        matches!(self.state, Some(ChannelState::Establishing(_)))
     }
 
-    /// A synchronous version of `wallet_preparation`
-    pub fn update_wallet_state(&mut self, update: impl FnOnce(WalletState<W>) -> WalletState<W>) {
-        let Some(ChannelLifeCycle::Establishing(state)) = &mut self.state else {
-            return;
-        };
-        state.update_wallet_state_sync(update);
+    pub fn is_open(&self) -> bool {
+        matches!(self.state, Some(ChannelState::Open(_)))
+    }
+
+    pub fn is_closing(&self) -> bool {
+        matches!(self.state, Some(ChannelState::Closing(_)))
+    }
+
+    pub fn is_closed(&self) -> bool {
+        matches!(self.state, Some(ChannelState::Closed(_)))
     }
 
     /// Returns the channel name, which is identical to `channel_id.name()`
     pub fn name(&self) -> String {
-        self.state().current_state().name()
+        self.state().name()
     }
 
-    async fn handle_event(&mut self, event: LifeCycleEvent<P, C>) -> Result<(), LifeCycleError> {
-        trace!("🛣️  Handling event: {event}");
-        let state = self.state.take().expect("State should be present");
-        let (state, result) = match state.handle_event(event).await {
-            Ok(new_state) => (new_state, Ok(())),
-            Err((new_state, err)) => {
-                debug!("Error handling event: {err}");
-                (new_state, Err(err))
+    pub fn handle_event(&mut self, event: LifeCycleEvent) -> Result<(), LifeCycleError> {
+        trace!("⚡️  Handling event: {event}");
+        if self.is_new_channel() {
+            match event {
+                LifeCycleEvent::VerifiedProposal(ack) => self.on_verified_proposal(*ack),
+                LifeCycleEvent::RejectNewChannel(reason) => self.on_reject_new_channel(*reason),
+                LifeCycleEvent::Timeout(reason) => self.on_timeout(*reason),
+                _ => Err(LifeCycleError::InvalidState(format!(
+                    "Received event {event} in New state, which is not allowed"
+                ))),
             }
-        };
-        self.state = Some(state);
-        result
-    }
-
-    /// Drive the state transition from New -> Establishing for merchants/proposees accepting a proposal
-    pub(crate) async fn receive_proposal(&mut self) -> Result<(), LifeCycleError> {
-        debug!("🛣️  Received new channel proposal");
-        let proposal = {
-            let state = self.state();
-            if let ChannelLifeCycle::New(new_state) = state {
-                new_state.for_proposal()
-            } else {
-                warn!("Receive proposal called, but we're not in a New state");
-                return Err(LifeCycleError::InvalidStateTransition);
+        } else if self.is_establishing() {
+            match event {
+                LifeCycleEvent::CommitmentTxCreated(tx) => self.on_commitment_tx_created(*tx),
+                LifeCycleEvent::MultiSigWalletCreated(data) => self.on_wallet_created(*data),
+                LifeCycleEvent::FundingTxWatcher(data) => self.on_save_watcher(data),
+                LifeCycleEvent::CommitmentZeroProof(data) => self.on_txc0_proof(data),
+                LifeCycleEvent::KesShards(shards) => self.on_kes_shards(*shards),
+                LifeCycleEvent::KesCreated(info) => self.on_kes_created(*info),
+                LifeCycleEvent::FundingTxConfirmed(info) => self.on_funding_confirmed(info.0, info.1),
+                _ => Err(LifeCycleError::InvalidState(format!(
+                    "Received event {event} in New state, which is not allowed"
+                ))),
             }
-        };
-        let event = LifeCycleEvent::OnAckNewChannel(Box::new(proposal));
-        self.handle_event(event).await
+        } else if self.is_open() {
+            match event {
+                LifeCycleEvent::OnUpdateChannel(update) => self.on_channel_update(*update),
+                LifeCycleEvent::OnStartClose => self.on_cooperative_close(),
+                _ => Err(LifeCycleError::InvalidState(format!(
+                    "Received event {event} in New state, which is not allowed"
+                ))),
+            }
+        } else if self.is_closing() {
+            match event {
+                LifeCycleEvent::FinalTxConfirmed(tx) => self.on_final_tx_confirmed(*tx),
+                _ => Err(LifeCycleError::InvalidState(format!(
+                    "Received event {event} in New state, which is not allowed"
+                ))),
+            }
+        } else if self.is_closed() {
+            match event {
+                _ => Err(LifeCycleError::InvalidState(format!(
+                    "Received event {event} in New state, which is not allowed"
+                ))),
+            }
+        } else {
+            Err(LifeCycleError::InvalidState(format!(
+                "No event handlers for state: {}",
+                self.state().stage()
+            )))
+        }
     }
 
-    /// Drive the state transition from New -> Establishing for customers/proposers handling an ACK on a proposal
-    pub async fn receive_proposal_ack(&mut self, ack: NewChannelProposal<P>) -> Result<(), LifeCycleError> {
-        debug!("🛣️  Received channel proposal ACK");
-        let info = ack.proposed_channel_info();
-        let event = LifeCycleEvent::OnAckNewChannel(Box::new(info));
-        self.handle_event(event).await
+    fn on_verified_proposal(&mut self, proposal: ProposedChannelInfo) -> Result<(), LifeCycleError> {
+        debug!("⚡️  Received a verified channel proposal");
+        self.update_new(|new| {
+            new.next(proposal)
+                .map(|s| {
+                    debug!("⚡️  Transitioned to Establishing state");
+                    s.to_channel_state()
+                })
+                .map_err(|(s, err)| {
+                    warn!("⚡️  Failed to transition from New to Establishing: {err}");
+                    (s.to_channel_state(), err)
+                })
+        })
     }
 
-    /// Accept a newly created and verified Multisig wallet and move the state from `Establishing` to `WalletCreated`
-    pub async fn accept_new_wallet(&mut self) -> Result<(), LifeCycleError> {
-        self.handle_event(LifeCycleEvent::OnMultiSigWalletCreated).await
+    fn on_reject_new_channel(&mut self, reason: RejectNewChannelReason) -> Result<(), LifeCycleError> {
+        debug!("⚡️  Received a rejection for the new channel proposal: {}", reason.reason());
+        self.update_new(|new| {
+            let state = new.reject(reason);
+            Ok(state.to_channel_state())
+        })
     }
 
-    /// After the kes has been created (merchant only), creating a [`KesInitializationResult`] record, and verifying
-    /// it with [`GreaseChannelDelegate::verify_kes`], you can call `save_verified_kes_result` to save the result
-    /// and advance the state machine
-    pub async fn save_verified_kes_result(&mut self, kes: KesInitializationResult) -> Result<(), LifeCycleError> {
-        let event = LifeCycleEvent::OnKesVerified(Box::new(kes));
-        self.handle_event(event).await
+    fn on_timeout(&mut self, reason: TimeoutReason) -> Result<(), LifeCycleError> {
+        debug!("⚡️  Received a rejection for the new channel proposal: {}", reason.reason());
+        self.update_new(|new| Ok(new.timeout(reason).to_channel_state()))
     }
 
-    pub async fn submit_funding_transaction(&mut self, tx: FundingTransaction) -> Result<(), ChannelServerError> {
-        let event = LifeCycleEvent::OnFundingTxConfirmed(Box::new(tx));
-        self.handle_event(event).await?;
-        Ok(())
+    fn on_commitment_tx_created(&mut self, tx: CommitmentTransaction) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.commitment_transaction_created(tx);
+            Ok(establishing.to_channel_state())
+        })
     }
+
+    fn on_wallet_created(&mut self, data: MultisigWalletData) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.wallet_created(data);
+            Ok(establishing.to_channel_state())
+        })
+    }
+
+    fn on_save_watcher(&mut self, watcher: Vec<u8>) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.save_funding_tx_pipe(watcher);
+            Ok(establishing.to_channel_state())
+        })
+    }
+
+    fn on_txc0_proof(&mut self, data: Vec<u8>) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.save_txc0_proof(data);
+            match establishing.next() {
+                Ok(established) => {
+                    debug!("⚡️  Transitioned to Established state after receiving proof of txc0");
+                    Ok(established.to_channel_state())
+                }
+                Err((establishing, err)) => {
+                    trace!("⚡️  Staying in establishing state: {err}");
+                    Ok(establishing.to_channel_state())
+                }
+            }
+        })
+    }
+
+    fn on_kes_shards(&mut self, shards: ShardInfo) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.save_kes_shards(shards);
+            match establishing.next() {
+                Ok(established) => {
+                    debug!("⚡️  Transitioned to Established state after receiving KES shards");
+                    Ok(established.to_channel_state())
+                }
+                Err((establishing, err)) => {
+                    trace!("⚡️  Staying in establishing state: {err}");
+                    Ok(establishing.to_channel_state())
+                }
+            }
+        })
+    }
+
+    fn on_kes_created(&mut self, info: KesInitializationResult) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.kes_created(info);
+            match establishing.next() {
+                Ok(established) => {
+                    debug!("⚡️  Transitioned to Established state");
+                    Ok(established.to_channel_state())
+                }
+                Err((establishing, err)) => {
+                    trace!("⚡️  Staying in establishing state: {err}");
+                    Ok(establishing.to_channel_state())
+                }
+            }
+        })
+    }
+
+    fn on_funding_confirmed(&mut self, tx: TransactionId, amt: MoneroAmount) -> Result<(), LifeCycleError> {
+        self.update_establishing(move |mut establishing| {
+            establishing.funding_tx_confirmed(tx, amt);
+            match establishing.next() {
+                Ok(established) => {
+                    debug!("⚡️  Transitioned to Established state after funding tx confirmed");
+                    Ok(established.to_channel_state())
+                }
+                Err((establishing, err)) => {
+                    trace!("⚡️  Staying in establishing state: {err}");
+                    Ok(establishing.to_channel_state())
+                }
+            }
+        })
+    }
+
+    fn on_channel_update(&mut self, update: ChannelUpdate) -> Result<(), LifeCycleError> {
+        self.update_open(|mut open| match open.new_transfer(update) {
+            Ok(n) => {
+                debug!("⚡️  Channel update #{n} was successfully applied");
+                Ok(open.to_channel_state())
+            }
+            Err(err) => {
+                warn!("⚡️  Failed to apply channel update: {err}");
+                Err((open.to_channel_state(), err))
+            }
+        })
+    }
+
+    fn on_cooperative_close(&mut self) -> Result<(), LifeCycleError> {
+        self.update_open(|open| {
+            open.close()
+                .map(|s| {
+                    debug!("⚡️  Transitioned to Closing state after cooperative close");
+                    s.to_channel_state()
+                })
+                .map_err(|(s, err)| (s.to_channel_state(), err))
+        })
+    }
+
+    fn on_final_tx_confirmed(&mut self, tx: TransactionId) -> Result<(), LifeCycleError> {
+        self.update_closing(|mut closing| {
+            closing.with_final_tx(tx);
+            closing
+                .next()
+                .map(|closing| {
+                    debug!("⚡️  Transitioned to Closed state after final transaction confirmed");
+                    closing.to_channel_state()
+                })
+                .map_err(|(closing, err)| {
+                    debug!("⚡️  Failed to transition from Closing to Closed: {err}");
+                    (closing.to_channel_state(), err)
+                })
+        })
+    }
+
+    update_state!(update_new, NewChannelState, to_new);
+    update_state!(update_establishing, EstablishingState, to_establishing);
+    update_state!(update_open, EstablishedChannelState, to_open);
+    update_state!(update_closing, ClosingChannelState, to_closing);
 }
 
-pub struct PaymentChannels<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
-    channels: Arc<RwLock<HashMap<String, Arc<RwLock<PaymentChannel<P, C, W>>>>>>,
+pub struct PaymentChannels {
+    channels: Arc<RwLock<HashMap<String, Arc<RwLock<PaymentChannel>>>>>,
 }
 
-impl<P, C, W> Clone for PaymentChannels<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
+impl Clone for PaymentChannels {
     fn clone(&self) -> Self {
         PaymentChannels { channels: Arc::clone(&self.channels) }
     }
 }
 
-impl<P, C, W> PaymentChannels<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
+impl PaymentChannels {
     pub fn new() -> Self {
         PaymentChannels { channels: Arc::new(RwLock::new(HashMap::new())) }
     }
@@ -246,7 +381,7 @@ where
         for entry in fs::read_dir(channel_dir)? {
             let entry = entry?;
             let path = entry.path();
-            match PaymentChannel::<P, C, W>::try_load_from_file(&path) {
+            match PaymentChannel::try_load_from_file(&path) {
                 Ok(channel) => {
                     let key = channel.name();
                     let channel = Arc::new(RwLock::new(channel));
@@ -267,7 +402,7 @@ where
     }
 
     /// Add a new channel to the list of channels.
-    pub async fn add(&self, channel: PaymentChannel<P, C, W>) {
+    pub async fn add(&self, channel: PaymentChannel) {
         let key = channel.name();
         trace!("Adding channel {key}");
         let channel = Arc::new(RwLock::new(channel));
@@ -280,7 +415,7 @@ where
     /// Check the channel out for writing, if it exists.
     /// If the channel is already checked out, this method will block until the channel is available.
     /// If the channel does not exist, `checkout` returns None.
-    pub async fn checkout(&self, channel_name: &str) -> Option<OwnedRwLockWriteGuard<PaymentChannel<P, C, W>>> {
+    pub async fn checkout(&self, channel_name: &str) -> Option<OwnedRwLockWriteGuard<PaymentChannel>> {
         trace!("Trying to check out channel {channel_name}");
         let lock = self.channels.read().await;
         match lock.get(channel_name) {
@@ -293,7 +428,7 @@ where
         }
     }
 
-    pub async fn peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel<P, C, W>>> {
+    pub async fn peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel>> {
         trace!("Trying to peek at channel {channel_name}");
         let map_lock = self.channels.read().await;
         match map_lock.get(channel_name) {
@@ -317,7 +452,7 @@ where
         for (name, channel) in lock.iter() {
             let path = channel_dir.join(format!("{name}.ron"));
             let readable = channel.read().await;
-            let serialized = ron::to_string::<PaymentChannel<P, C, W>>(&readable)?;
+            let serialized = ron::to_string::<PaymentChannel>(&readable)?;
             drop(readable);
             fs::write(path, serialized)?;
         }
@@ -328,5 +463,100 @@ where
     pub async fn list_channels(&self) -> Vec<String> {
         let lock = self.channels.read().await;
         lock.keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{ContactInfo, PaymentChannel};
+    use blake2::Blake2b512;
+    use libgrease::amount::{MoneroAmount, MoneroDelta};
+    use libgrease::balance::Balances;
+    use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+    use libgrease::kes::{KesInitializationResult, PartialEncryptedKey, ShardInfo};
+    use libgrease::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
+    use libgrease::payment_channel::ChannelRole;
+    use libgrease::state_machine::{CommitmentTransaction, LifeCycleEvent, NewChannelBuilder, NewChannelState};
+    use libp2p::{Multiaddr, PeerId};
+
+    const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
+
+    pub fn new_channel_state() -> NewChannelState {
+        // All this info is known, or can be scanned in from a QR code etc
+        let (_, my_pubkey) = Curve25519PublicKey::keypair_from_hex(SECRET).unwrap();
+        let my_pubkey = my_pubkey.as_hex();
+        let initial_state = NewChannelBuilder::new(ChannelRole::Customer, &my_pubkey, SECRET);
+        let initial_state = initial_state
+            .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
+            .with_customer_initial_balance(MoneroAmount::from(1000))
+            .with_merchant_initial_balance(MoneroAmount::default())
+            .with_peer_public_key("61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016")
+            .with_my_user_label("me")
+            .with_peer_label("you")
+            .build::<Blake2b512>()
+            .expect("Failed to build initial state");
+        initial_state
+    }
+    #[test]
+    fn happy_path() {
+        let peer = ContactInfo { name: "Alice".to_string(), peer_id: PeerId::random(), address: Multiaddr::empty() };
+        let some_pub =
+            Curve25519PublicKey::from_hex("61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016").unwrap();
+        let state = new_channel_state();
+        let proposal = state.for_proposal();
+        let state = state.to_channel_state();
+        let mut channel = PaymentChannel::new(peer, state);
+        assert!(channel.is_new_channel());
+        let event = LifeCycleEvent::VerifiedProposal(Box::new(proposal));
+        channel.handle_event(event).unwrap();
+        assert!(channel.is_establishing());
+        let kes = KesInitializationResult { id: "kes123".into() };
+        let event = LifeCycleEvent::KesCreated(Box::new(kes));
+        channel.handle_event(event).unwrap();
+        let wallet = MultisigWalletData {
+            my_spend_key: Curve25519Secret::from_hex(SECRET).unwrap(),
+            my_public_key: some_pub.clone(),
+            sorted_pubkeys: [some_pub.clone(), some_pub.clone()],
+            joint_public_spend_key: some_pub.clone(),
+            joint_private_view_key: Curve25519Secret::random(&mut rand::rng()),
+            birthday: 0,
+            known_outputs: "".to_string(),
+        };
+        let event = LifeCycleEvent::MultiSigWalletCreated(Box::new(wallet));
+        channel.handle_event(event).unwrap();
+        let my_shards = MultisigSplitSecrets {
+            peer_shard: PartialEncryptedKey("customer_peer_shard".into()),
+            kes_shard: PartialEncryptedKey("customer_kes_shard".into()),
+        };
+        let their_shards = MultisigSplitSecrets {
+            peer_shard: PartialEncryptedKey("merchant_peer_shard".into()),
+            kes_shard: PartialEncryptedKey("maerchant_kes_shard".into()),
+        };
+        let event = LifeCycleEvent::KesShards(Box::new(ShardInfo { my_shards, their_shards }));
+        channel.handle_event(event).unwrap();
+        let event = LifeCycleEvent::CommitmentTxCreated(Box::new(CommitmentTransaction {}));
+        channel.handle_event(event).unwrap();
+        let event = LifeCycleEvent::CommitmentZeroProof(vec![1, 2, 3]);
+        channel.handle_event(event).unwrap();
+        let event = LifeCycleEvent::FundingTxConfirmed(Box::new((TransactionId::new("tx123"), 1000.into())));
+        channel.handle_event(event).unwrap();
+        assert!(channel.is_open());
+        let update = ChannelUpdate {
+            update_count: 1,
+            new_balances: Balances::new(100.into(), 900.into()),
+            delta: MoneroDelta::from(100),
+            commitment_tx: CommitmentTransaction {},
+            proofs: vec![],
+        };
+        let event = LifeCycleEvent::OnUpdateChannel(Box::new(update));
+        channel.handle_event(event).unwrap();
+        assert!(channel.is_open());
+        let event = LifeCycleEvent::OnStartClose;
+        channel.handle_event(event).unwrap();
+        assert!(channel.is_closing());
+        let final_tx = TransactionId::new("final_tx123");
+        let event = LifeCycleEvent::FinalTxConfirmed(Box::new(final_tx));
+        channel.handle_event(event).unwrap();
+        assert!(channel.is_closed());
     }
 }

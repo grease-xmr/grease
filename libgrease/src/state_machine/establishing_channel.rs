@@ -1,373 +1,162 @@
 use crate::amount::MoneroAmount;
-use crate::channel_id::ChannelId;
-use crate::crypto::traits::PublicKey;
-use crate::kes::{FundingTransaction, KesInitializationRecord, KesInitializationResult, PartialEncryptedKey};
-use crate::monero::error::MoneroWalletError;
-use crate::monero::{MoneroKeyPair, MultiSigWallet, WalletState};
-use crate::payment_channel::ActivePaymentChannel;
-use crate::payment_channel::ChannelRole;
-use crate::state_machine::traits::ChannelState;
-use log::warn;
-use monero::Network;
+use crate::channel_metadata::ChannelMetadata;
+use crate::kes::{KesInitializationResult, ShardInfo};
+use crate::lifecycle_impl;
+use crate::monero::data_objects::{MultisigWalletData, TransactionId};
+use crate::state_machine::commitment_tx::CommitmentTransaction;
+use crate::state_machine::error::LifeCycleError;
+use crate::state_machine::lifecycle::ChannelState;
+use crate::state_machine::new_channel::NewChannelState;
+use crate::state_machine::open_channel::EstablishedChannelState;
+use log::*;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
-
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>"))]
-pub struct ChannelMetadata<P>
-where
-    P: PublicKey,
-{
-    /// The Monero network this channel lives on
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EstablishingState {
+    pub(crate) metadata: ChannelMetadata,
+    pub(crate) multisig_wallet: Option<MultisigWalletData>,
+    pub(crate) commitment_transaction0: Option<CommitmentTransaction>,
+    pub(crate) shards: Option<ShardInfo>,
     #[serde(
-        deserialize_with = "crate::monero::helpers::deserialize_network",
-        serialize_with = "crate::monero::helpers::serialize_network"
+        serialize_with = "crate::helpers::option_to_hex",
+        deserialize_with = "crate::helpers::option_from_hex",
+        skip_serializing_if = "Option::is_none",
+        default
     )]
-    pub network: Network,
-    /// Whether we are the merchant or the customer
-    pub role: ChannelRole,
-    /// The key that is used to decrypt the peer's multisig secret share.
-    pub(crate) decryption_key: P::SecretKey,
-    /// The key used to encrypt the merchant's portion of the customer's multisig spend key.
-    pub merchant_pubkey: P,
-    /// The key used to encrypt the customer's portion of the merchant's multisig spend key.
-    pub customer_pubkey: P,
-    /// The key both peers use to encrypt their portion of the multisig spend key.
-    pub kes_public_key: P,
-    /// The amount of money in the channel
-    pub initial_balances: Balances,
-    /// The channel ID
-    pub channel_id: ChannelId,
-}
-
-impl<P> ChannelMetadata<P>
-where
-    P: PublicKey,
-{
-    pub fn channel_id(&self) -> &ChannelId {
-        &self.channel_id
-    }
-
-    pub fn role(&self) -> ChannelRole {
-        self.role
-    }
-
-    pub fn initial_balances(&self) -> Balances {
-        self.initial_balances
-    }
-}
-
-pub struct ChannelEstablishedInfo<C>
-where
-    C: ActivePaymentChannel,
-{
-    pub(crate) channel: C,
-}
-
-//------------------------------------    Establishing Wallet State ------------------------------------------------//
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>"))]
-pub struct EstablishingState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    pub channel_info: ChannelMetadata<P>,
-    pub wallet_state: Option<WalletState<W>>,
-}
-
-impl<P, W> EstablishingState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    pub fn new(channel_info: ChannelMetadata<P>, uninitialized_wallet: W) -> Self {
-        let wallet_state = Some(WalletState::new(channel_info.network, uninitialized_wallet));
-        EstablishingState { channel_info, wallet_state }
-    }
-
-    pub fn channel_info(&self) -> &ChannelMetadata<P> {
-        &self.channel_info
-    }
-
-    pub fn wallet_state(&self) -> &WalletState<W> {
-        self.wallet_state.as_ref().expect("Wallet state has been removed")
-    }
-
-    /// Updates the wallet state machine by applying the provided async function to the current state.
-    pub async fn update_wallet_state<F>(&mut self, update: impl FnOnce(WalletState<W>) -> F)
-    where
-        F: Future<Output = WalletState<W>>,
-    {
-        let wallet_state = self.wallet_state.take().expect("Wallet state has been removed");
-        let new_wallet_state = update(wallet_state).await;
-        self.wallet_state = Some(new_wallet_state);
-    }
-
-    pub fn update_wallet_state_sync(&mut self, update: impl FnOnce(WalletState<W>) -> WalletState<W>) {
-        let wallet_state = self.wallet_state.take().expect("Wallet state has been removed");
-        let new_wallet_state = update(wallet_state);
-        self.wallet_state = Some(new_wallet_state);
-    }
-}
-
-impl<P, W> ChannelState for EstablishingState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    fn channel_id(&self) -> &ChannelId {
-        &self.channel_info.channel_id
-    }
-    fn role(&self) -> ChannelRole {
-        self.channel_info.role
-    }
-}
-
-//------------------------------------     Wallet Created State      ------------------------------------------------//
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>"))]
-pub struct WalletCreatedState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    pub channel_info: ChannelMetadata<P>,
+    pub(crate) commitment_tx_proof: Option<Vec<u8>>,
+    pub(crate) funding_transaction_ids: Vec<TransactionId>,
+    pub(crate) funding_total: MoneroAmount,
+    pub(crate) kes_details: Option<KesInitializationResult>,
+    /// Data used to watch for the funding transaction. Implementation agnostic.
     #[serde(
-        deserialize_with = "crate::monero::helpers::deserialize_keypair",
-        serialize_with = "crate::monero::helpers::serialize_keypair"
+        serialize_with = "crate::helpers::option_to_hex",
+        deserialize_with = "crate::helpers::option_from_hex",
+        skip_serializing_if = "Option::is_none",
+        default
     )]
-    pub wallet_secret: MoneroKeyPair,
-    /// The encrypted secrets of *my* multisig wallet spend key
-    pub peer_shards: VssOutput,
-    /// The encrypted secrets of *my peer's* multisig wallet spend key
-    pub my_shards: VssOutput,
-    pub kes_verify_info: Option<KesInitializationResult>,
-    pub wallet: W,
+    pub(crate) funding_tx_pipe: Option<Vec<u8>>,
 }
 
-impl<P, W> ChannelState for WalletCreatedState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    fn channel_id(&self) -> &ChannelId {
-        &self.channel_info.channel_id
+impl EstablishingState {
+    pub fn to_channel_state(self) -> ChannelState {
+        ChannelState::Establishing(self)
     }
-    fn role(&self) -> ChannelRole {
-        self.channel_info.role
-    }
-}
-
-impl<P, W> WalletCreatedState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    /// Returns the information needed to create the Verifiable Secret Sharing (VSS) record.
-    ///
-    /// In particular, it returns
-    /// - our secret key
-    /// - the public key of the merchant
-    /// - the public key of the KES
-    pub fn vss_info(&self) -> Result<ChannelInitSecrets<P>, MoneroWalletError> {
-        let peer_public_key = match self.channel_info.role {
-            ChannelRole::Merchant => self.channel_info.customer_pubkey.clone(),
-            ChannelRole::Customer => self.channel_info.merchant_pubkey.clone(),
-        };
-        Ok(ChannelInitSecrets {
-            channel_name: self.name(),
-            wallet_secret: self.wallet_secret,
-            peer_public_key,
-            kes_public_key: self.channel_info.kes_public_key.clone(),
-        })
+    pub fn requirements_met(&self) -> bool {
+        self.multisig_wallet.is_some()
+            && self.commitment_transaction0.is_some()
+            && self.is_fully_funded()
+            && self.kes_details.is_some()
+            && self.commitment_tx_proof.is_some()
+            && self.shards.is_some()
     }
 
-    /// Returns a records that can be used to interact and/or verify the KES state, if it has been created.
-    pub fn kes_verify_info(&self) -> Option<&KesInitializationResult> {
-        self.kes_verify_info.as_ref()
+    fn is_fully_funded(&self) -> bool {
+        let required = self.metadata.balances().total();
+        let result = self.funding_total >= required;
+        trace!("is_fully_funded-- total {}, required {required}: {result}", self.funding_total);
+        result
     }
 
-    /// Returns the struct that can be passed to the delegate so that it can create the KES
-    pub fn kes_init_info(&self) -> KesInitializationRecord<P> {
-        let (merchant_key, customer_key) = match self.channel_info.role {
-            ChannelRole::Merchant => (self.my_shards.kes_shard.clone(), self.peer_shards.kes_shard.clone()),
-            ChannelRole::Customer => (self.peer_shards.kes_shard.clone(), self.my_shards.kes_shard.clone()),
-        };
-        KesInitializationRecord {
-            kes_public_key: self.channel_info.kes_public_key.clone(),
-            channel_id: self.channel_info.channel_id.name(),
-            initial_balances: self.channel_info.initial_balances,
-            merchant_key,
-            customer_key,
+    pub fn wallet(&self) -> Option<&MultisigWalletData> {
+        self.multisig_wallet.as_ref()
+    }
+
+    pub fn wallet_created(&mut self, wallet: MultisigWalletData) {
+        debug!("Multisig wallet has been created.");
+        let old = self.multisig_wallet.replace(wallet);
+        if old.is_some() {
+            warn!("Wallet state was already set and has been replaced.");
         }
     }
 
-    pub fn save_kes_verify_info(&mut self, kes_verify_info: KesInitializationResult) {
-        self.kes_verify_info = Some(kes_verify_info);
-    }
-}
-
-//------------------------------------       KES Verified State      ------------------------------------------------//
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "P: PublicKey + for<'d> Deserialize<'d>"))]
-pub struct KesVerifiedState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    pub channel_info: ChannelMetadata<P>,
-    #[serde(
-        deserialize_with = "crate::monero::helpers::deserialize_keypair",
-        serialize_with = "crate::monero::helpers::serialize_keypair"
-    )]
-    pub wallet_secret: MoneroKeyPair,
-    /// The encrypted secrets of *my* multisig wallet spend key
-    pub peer_shards: PartialEncryptedKey,
-    /// The encrypted secrets of *my peer's* multisig wallet spend key
-    pub my_shards: PartialEncryptedKey,
-    pub kes_info: KesInitializationRecord<P>,
-    pub kes_verify_info: KesInitializationResult,
-    pub wallet: W,
-    /// The transaction ID of the merchant's funding transaction
-    pub merchant_funding_tx: Option<FundingTransaction>,
-    /// The transaction ID of the customer's funding transaction
-    pub customer_funding_tx: Option<FundingTransaction>,
-}
-
-impl<P, W> KesVerifiedState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    pub fn kes_info(&self) -> KesInitializationRecord<P> {
-        self.kes_info.clone()
-    }
-
-    pub fn save_funding_transaction(&mut self, tx: FundingTransaction) {
-        match tx.role {
-            ChannelRole::Merchant => {
-                if let Some(old) = self.merchant_funding_tx.replace(tx) {
-                    warn!(
-                        "Merchant funding txid was already set to {} and has been replaced.",
-                        old.transaction_id.id
-                    );
-                }
-            }
-            ChannelRole::Customer => {
-                if let Some(old) = self.customer_funding_tx.replace(tx) {
-                    warn!(
-                        "Customer funding txid was already set to {} and has been replaced",
-                        old.transaction_id.id
-                    );
-                }
-            }
+    pub fn commitment_transaction_created(&mut self, commitment_transaction: CommitmentTransaction) {
+        debug!("Initial commitment transaction has been created.");
+        let old = self.commitment_transaction0.replace(commitment_transaction);
+        if old.is_some() {
+            warn!("Commitment transaction was already set and has been replaced.");
         }
     }
-    /// Returns true if all necessary funding transactions are confirmed.
-    ///
-    /// This means that:
-    /// - The merchant's funding transaction is confirmed (if the merchant's initial balance is not zero)
-    /// - The customer's funding transaction is confirmed (if the customer's initial balance is not zero)
-    pub fn are_funding_txs_confirmed(&self) -> bool {
-        let initial_balances = self.channel_info.initial_balances;
-        let merchant_ready = initial_balances.merchant.is_zero() || self.merchant_funding_tx.is_some();
-        let customer_ready = initial_balances.customer.is_zero() || self.customer_funding_tx.is_some();
-        // This is redundant, strictly speaking, because we don't allow both initial balances to be zero.
-        let at_least_one_tx = self.merchant_funding_tx.is_some() || self.customer_funding_tx.is_some();
-        merchant_ready && customer_ready && at_least_one_tx
+
+    pub fn save_kes_shards(&mut self, shards: ShardInfo) {
+        debug!("Saving Multisig shards for KES");
+        let old = self.shards.replace(shards);
+        if old.is_some() {
+            warn!("Multisig shards were already set and have been replaced.");
+        }
     }
 
-    /// Returns a record that can be used to interact and/or verify the KES state. Since the KES has already been
-    /// verified, this record is always available.
-    pub fn kes_verify_info(&self) -> KesInitializationResult {
-        self.kes_verify_info.clone()
-    }
-}
-
-impl<P, W> ChannelState for KesVerifiedState<P, W>
-where
-    P: PublicKey,
-    W: MultiSigWallet,
-{
-    fn channel_id(&self) -> &ChannelId {
-        &self.channel_info.channel_id
-    }
-    fn role(&self) -> ChannelRole {
-        self.channel_info.role
-    }
-}
-
-//------------------------------------           Balances          ------------------------------------------------//
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Balances {
-    pub merchant: MoneroAmount,
-    pub customer: MoneroAmount,
-}
-
-impl Balances {
-    pub fn new(merchant: MoneroAmount, customer: MoneroAmount) -> Self {
-        Balances { merchant, customer }
+    /// Can be used to save (e.g. a unix pipe or filename) that will be used to watch for the funding transaction.
+    /// Once the funding tx is broadcast, call `funding_tx_confirmed` to update the state.
+    pub fn save_funding_tx_pipe(&mut self, funding_tx_pipe: Vec<u8>) {
+        debug!("Saving funding transaction pipe data");
+        let old = self.funding_tx_pipe.replace(funding_tx_pipe);
+        if old.is_some() {
+            warn!("Funding transaction pipe data was already set and has been replaced.");
+        }
     }
 
-    pub fn total(&self) -> MoneroAmount {
-        self.merchant + self.customer
+    pub fn save_txc0_proof(&mut self, proof: Vec<u8>) {
+        debug!("Saving commitment transaction proof");
+        let old = self.commitment_tx_proof.replace(proof);
+        if old.is_some() {
+            warn!("Commitment transaction proof was already set and has been replaced.");
+        }
     }
 
-    pub fn pay(&self, amount: MoneroAmount) -> Option<Self> {
-        let delta = amount.to_piconero();
-        (amount <= self.customer).then(|| {
-            let new_customer = MoneroAmount::from_piconero(self.customer.to_piconero() - delta);
-            let new_merchant = MoneroAmount::from_piconero(self.merchant.to_piconero() + delta);
-            Balances::new(new_merchant, new_customer)
-        })
+    pub fn kes_created(&mut self, kes_info: KesInitializationResult) {
+        let old = self.kes_details.replace(kes_info);
+        if old.is_some() {
+            warn!("KES details were already set and have been replaced.");
+        }
     }
 
-    pub fn refund(&self, amount: MoneroAmount) -> Option<Self> {
-        let delta = amount.to_piconero();
-        (amount <= self.merchant).then(|| {
-            let new_customer = MoneroAmount::from_piconero(self.customer.to_piconero() + delta);
-            let new_merchant = MoneroAmount::from_piconero(self.merchant.to_piconero() - delta);
-            Balances::new(new_merchant, new_customer)
-        })
+    pub fn funding_tx_confirmed(&mut self, funding_tx_id: TransactionId, amount: MoneroAmount) {
+        debug!("Funding transaction broadcasted");
+        self.funding_transaction_ids.push(funding_tx_id);
+        self.funding_total += amount;
+    }
+
+    pub fn next(self) -> Result<EstablishedChannelState, (Self, LifeCycleError)> {
+        debug!("Trying to move from Establishing to Established state");
+        if !self.requirements_met() {
+            debug!("Cannot change from Establishing to Established because all requirements are not met");
+            return Err((self, LifeCycleError::InvalidStateTransition));
+        }
+        let txc0 = self.commitment_transaction0.unwrap();
+        let txc0_proof = self.commitment_tx_proof.unwrap();
+        debug!("Transitioning to Established wallet state");
+        let open_channel = EstablishedChannelState {
+            metadata: self.metadata,
+            shards: self.shards.unwrap(),
+            multisig_wallet: self.multisig_wallet.unwrap(),
+            funding_transactions: self.funding_transaction_ids,
+            commitment_transaction0: txc0.clone(),
+            commitment_tx_proof: txc0_proof.clone(),
+            kes_details: self.kes_details.unwrap(),
+            current_commitment_tx: txc0,
+            current_commitment_tx_proof: txc0_proof,
+            update_count: 0,
+        };
+        Ok(open_channel)
     }
 }
 
-//------------------------------------           VSS Info          ------------------------------------------------//
-
-/// Contains information needed to initialise the KES and create the VSS record.
-///
-/// This object contains a SECRET key and should be handled with care!
-#[derive(Debug)]
-pub struct ChannelInitSecrets<P>
-where
-    P: PublicKey,
-{
-    pub channel_name: String,
-    /// My portion of the 2-of-2 multisig secret that needs to be split
-    pub wallet_secret: MoneroKeyPair,
-    /// The public key of the peer
-    pub peer_public_key: P,
-    /// The public key of the KES. One secret shard will be encrypted to this key.
-    pub kes_public_key: P,
-}
-
-impl<P> ChannelInitSecrets<P>
-where
-    P: PublicKey,
-{
-    pub fn new(channel_name: String, wallet_secret: MoneroKeyPair, peer_public_key: P, kes_public_key: P) -> Self {
-        ChannelInitSecrets { channel_name, wallet_secret, peer_public_key, kes_public_key }
+impl From<NewChannelState> for EstablishingState {
+    fn from(new_channel_state: NewChannelState) -> Self {
+        EstablishingState {
+            metadata: new_channel_state.metadata,
+            multisig_wallet: None,
+            shards: None,
+            commitment_transaction0: None,
+            commitment_tx_proof: None,
+            funding_transaction_ids: Vec::new(),
+            funding_total: MoneroAmount::default(),
+            kes_details: None,
+            funding_tx_pipe: None,
+        }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct VssOutput {
-    /// The encrypted secret shard for the peer
-    pub peer_shard: PartialEncryptedKey,
-    /// The encrypted secret shard for the KES
-    pub kes_shard: PartialEncryptedKey,
-}
+use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
+lifecycle_impl!(EstablishingState, Establishing);

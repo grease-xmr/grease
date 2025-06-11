@@ -1,5 +1,7 @@
-use ciphersuite::group::ff::Field;
-use dalek_ff_group::{EdwardsPoint, Scalar, ED25519_BASEPOINT_TABLE};
+use ciphersuite::group::ff::{Field, PrimeField};
+use ciphersuite::group::GroupEncoding;
+use dalek_ff_group::{dalek::Scalar as DScalar, EdwardsPoint, Scalar, ED25519_BASEPOINT_TABLE};
+use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::{
     address::{AddressType, MoneroAddress, Network},
@@ -10,6 +12,8 @@ use monero_wallet::{
     Scanner, ViewPair, WalletOutput, DEFAULT_LOCK_WINDOW,
 };
 use rand_core::{OsRng, RngCore};
+use serde::Deserialize;
+use serde_json::json;
 use std::ops::Deref;
 use zeroize::Zeroizing;
 
@@ -23,6 +27,37 @@ pub fn random_key() -> [u8; 32] {
     let mut result = [0u8; 32];
     OsRng.fill_bytes(&mut result);
     result
+}
+
+pub fn scalar_as_hex(scalar: &Scalar) -> String {
+    hex::encode(scalar.0.to_bytes())
+}
+
+pub fn point_as_hex(point: &EdwardsPoint) -> String {
+    hex::encode(point.0.compress().as_bytes())
+}
+
+pub fn hex_to_point(hex: &str) -> Result<EdwardsPoint, String> {
+    let mut repr = [0u8; 32];
+    hex::decode_to_slice(&hex, &mut repr).map_err(|e| format!("Hex decode failed: {}", e))?;
+    let point: Option<EdwardsPoint> = EdwardsPoint::from_bytes(&repr).into();
+    match point {
+        Some(p) => Ok(p),
+        None => Err("String does not decode into a valid point".to_string()),
+    }
+}
+
+pub fn hex_to_scalar(hex: &str) -> Result<Scalar, String> {
+    let mut bytes = [0u8; 32];
+    hex::decode_to_slice(&hex, &mut bytes).map_err(|e| e.to_string())?;
+    let decoded: Option<DScalar> = DScalar::from_canonical_bytes(bytes).into();
+    match decoded {
+        Some(v) => {
+            let scalar = Scalar(v);
+            Ok(scalar)
+        }
+        None => Err("string does not represent a canonical scalar".to_string()),
+    }
 }
 
 pub fn ring_len(rct_type: RctType) -> usize {
@@ -113,4 +148,50 @@ pub async fn setup_localnet(url: &str, addr: &MoneroAddress) -> SimpleRequestRpc
     // Mine enough blocks to ensure decoy availability
     rpc.generate_blocks(&addr, BLOCKS_TO_MINE).await.unwrap();
     rpc
+}
+
+pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Result<(), RpcError> {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct SendRawResponse {
+        status: String,
+        double_spend: bool,
+        fee_too_low: bool,
+        invalid_input: bool,
+        invalid_output: bool,
+        low_mixin: bool,
+        not_relayed: bool,
+        overspend: bool,
+        too_big: bool,
+        too_few_outputs: bool,
+        reason: String,
+    }
+
+    let res: SendRawResponse = rpc
+        .rpc_call(
+            "send_raw_transaction",
+            Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": true })),
+        )
+        .await?;
+
+    println!("{res:?}");
+
+    Ok(())
+}
+
+pub fn keys_from(s: &str) -> (Zeroizing<Scalar>, EdwardsPoint) {
+    let bytes = hex::decode(s).unwrap();
+    let mut repr = [0u8; 32];
+    repr.copy_from_slice(&bytes[0..32]);
+    let secret = Scalar::from_repr(repr).unwrap();
+    let public = EdwardsPoint(ED25519_BASEPOINT_TABLE * &secret.0);
+    (Zeroizing::new(secret), public)
+}
+
+pub fn scalar_from(s: &str) -> Scalar {
+    let bytes = hex::decode(s).unwrap();
+    let mut repr = [0u8; 32];
+    repr.copy_from_slice(&bytes[0..32]);
+    let scalar = Scalar::from_repr(repr).unwrap();
+    scalar
 }

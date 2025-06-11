@@ -1,5 +1,6 @@
 mod behaviour;
-mod delegate;
+mod data_objects;
+mod delegates;
 pub mod errors;
 mod event_loop;
 mod identity;
@@ -9,7 +10,7 @@ mod network_client;
 mod payment_channel;
 mod server;
 
-pub use delegate::{DummyDelegate, GreaseChannelDelegate, KeyDelegate};
+pub use delegates::{DummyDelegate, GreaseInitializer, ProposalVerifier};
 pub use event_loop::EventLoop;
 pub use identity::{ContactInfo, ConversationIdentity, IdentityError};
 pub use key_manager::KeyManager;

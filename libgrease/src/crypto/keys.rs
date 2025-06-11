@@ -7,21 +7,27 @@ use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Curve25519Secret(Scalar);
+pub struct Curve25519Secret(Zeroizing<Scalar>);
 
 impl Curve25519Secret {
     pub fn as_scalar(&self) -> &Scalar {
         &self.0
     }
-    pub fn to_scalar(self) -> Scalar {
+
+    pub fn as_zscalar(&self) -> &Zeroizing<Scalar> {
+        &self.0
+    }
+
+    pub fn to_scalar(self) -> Zeroizing<Scalar> {
         self.0
     }
     pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
         let mut scalar_bytes = [0u8; 64];
         rng.fill_bytes(&mut scalar_bytes);
-        let s = Scalar::from_bytes_mod_order_wide(&scalar_bytes);
+        let s = Zeroizing::new(Scalar::from_bytes_mod_order_wide(&scalar_bytes));
         Self(s)
     }
 
@@ -62,7 +68,7 @@ impl Serialize for Curve25519Secret {
 
 impl From<Scalar> for Curve25519Secret {
     fn from(value: Scalar) -> Self {
-        Self(value)
+        Self(Zeroizing::new(value))
     }
 }
 

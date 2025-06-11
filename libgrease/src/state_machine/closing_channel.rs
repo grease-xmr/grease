@@ -1,55 +1,57 @@
-use crate::channel_id::ChannelId;
-use crate::crypto::traits::PublicKey;
-use crate::monero::MultiSigWallet;
-use crate::payment_channel::{ActivePaymentChannel, ChannelRole};
-use crate::state_machine::traits::ChannelState;
-use crate::state_machine::{ChannelMetadata, EstablishedChannelState};
+use crate::balance::Balances;
+use crate::channel_metadata::ChannelMetadata;
+use crate::lifecycle_impl;
+use crate::monero::data_objects::TransactionId;
+use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
+use crate::state_machine::commitment_tx::CommitmentTransaction;
+use crate::state_machine::error::LifeCycleError;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "C: ActivePaymentChannel + for<'d> Deserialize<'d>"))]
-pub struct ClosingChannelState<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
-    pub(crate) channel_info: ChannelMetadata<P>,
-    pub(crate) payment_channel: C,
-    pub(crate) wallet: W,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosingChannelState {
+    pub(crate) metadata: ChannelMetadata,
+    pub(crate) commitment_tx: CommitmentTransaction,
+    pub(crate) final_tx: Option<TransactionId>,
+    pub(crate) reason: ChannelClosedReason,
 }
 
-impl<P, C, W> ClosingChannelState<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
-    /// Create a new closing channel state
-    pub fn from_open(open_state: EstablishedChannelState<P, C, W>) -> Self {
-        ClosingChannelState {
-            channel_info: open_state.channel_info,
-            payment_channel: open_state.payment_channel,
-            wallet: open_state.wallet,
+impl ClosingChannelState {
+    pub fn to_channel_state(self) -> ChannelState {
+        ChannelState::Closing(self)
+    }
+    pub fn final_balances(&self) -> Balances {
+        self.metadata.balances()
+    }
+
+    pub fn reason(&self) -> &ChannelClosedReason {
+        &self.reason
+    }
+
+    pub fn requirements_met(&self) -> bool {
+        // Check if the commitment transaction is valid and if the final transaction is set
+        self.final_tx.is_some()
+    }
+
+    pub fn with_final_tx(&mut self, final_tx: TransactionId) {
+        let prev = self.final_tx.take();
+        if prev.is_some() {
+            log::warn!(
+                "Overwriting existing final transaction {} in ClosingChannelState",
+                prev.as_ref().unwrap().id
+            );
         }
+        self.final_tx = Some(final_tx);
+    }
+
+    pub fn next(self) -> Result<ClosedChannelState, (Self, LifeCycleError)> {
+        if !self.requirements_met() {
+            return Err((self, LifeCycleError::InvalidStateTransition));
+        }
+
+        let closed_state = ClosedChannelState::new(ChannelClosedReason::Normal, self.metadata.clone());
+        Ok(closed_state)
     }
 }
 
-impl<P, C, W> ChannelState for ClosingChannelState<P, C, W>
-where
-    P: PublicKey,
-    C: ActivePaymentChannel,
-    W: MultiSigWallet,
-{
-    fn channel_id(&self) -> &ChannelId {
-        self.payment_channel.channel_id()
-    }
-
-    fn role(&self) -> ChannelRole {
-        self.payment_channel.role()
-    }
-}
-
-pub struct StartCloseInfo {}
-
-pub struct SuccessfulCloseInfo {}
+use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
+lifecycle_impl!(ClosingChannelState, Closing);

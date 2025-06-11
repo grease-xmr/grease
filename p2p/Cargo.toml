@@ -5,18 +5,23 @@ edition = "2021"
 
 [dependencies]
 libgrease = { workspace = true }
+wallet = { workspace = true }
+
+blake2 = "0.10.6"
 futures = { workspace = true }
 hex = "0.4.3"
 libp2p = { workspace = true, features = [ "identify", "json", "macros", "noise", "request-response", "tcp", "tokio", "yamux"] }
 log = { workspace = true }
 monero = { workspace = true }
+notify = { version = "8.0.0"  }
+paste = { version = "1.0.15" }
 rand = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yml = {  workspace = true }
 thiserror = { workspace = true }
+tempfile = { version = "3.20.0" }
 tokio = { workspace = true, features = ["full"] }
-blake2 = "0.10.6"
 
 [dev-dependencies]
 env_logger = { workspace = true }

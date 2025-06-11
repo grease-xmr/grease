@@ -7,8 +7,8 @@ pub enum MoneroWalletError {
     Creation,
     #[error("Wallet multisig preparation failed")]
     MultisigPrepare,
-    #[error("Wallet multisig key image export failed")]
-    MakeMultisig,
+    #[error("The key received from the peer is not a valid public key")]
+    InvalidPeerPubkey,
     #[error("Wallet multisig key image import failed")]
     ImportMultisigKeyImage,
     #[error("Exporting partial spend key failed")]

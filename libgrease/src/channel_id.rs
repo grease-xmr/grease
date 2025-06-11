@@ -1,4 +1,4 @@
-use crate::state_machine::Balances;
+use crate::balance::Balances;
 use digest::Digest;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
@@ -9,22 +9,13 @@ pub struct ChannelId {
     customer_id: String,
     initial_balance: Balances,
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    salt: Vec<u8>,
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     hashed_id: Vec<u8>,
 }
 
 impl ChannelId {
-    pub fn new<D, S1, S2, S3>(merchant: S1, customer: S2, salt: S3, initial_balance: Balances) -> Self
-    where
-        S1: Into<String>,
-        S2: Into<String>,
-        S3: AsRef<[u8]>,
-        D: Digest,
-    {
+    pub fn new<D: Digest>(merchant: impl Into<String>, customer: impl Into<String>, initial_balance: Balances) -> Self {
         let merchant_id = merchant.into();
         let customer_id = customer.into();
-        let salt = salt.as_ref().to_vec();
         let amount_mer = initial_balance.merchant.to_piconero().to_le_bytes();
         let amount_cust = initial_balance.customer.to_piconero().to_le_bytes();
         let mut hasher = D::new();
@@ -33,9 +24,8 @@ impl ChannelId {
         hasher.update(&customer_id);
         hasher.update(amount_mer);
         hasher.update(amount_cust);
-        hasher.update(&salt);
         let hashed_id = hasher.finalize().to_vec();
-        ChannelId { merchant_id, customer_id, initial_balance, salt, hashed_id }
+        ChannelId { merchant_id, customer_id, initial_balance, hashed_id }
     }
 
     pub fn merchant(&self) -> &str {
@@ -66,7 +56,6 @@ impl Debug for ChannelId {
         f.debug_struct("ChannelId")
             .field("merchant_id", &self.merchant())
             .field("customer_id", &self.customer())
-            .field("salt", &hex::encode(&self.salt))
             .field("initial balance (merchant)", &self.initial_balance.merchant)
             .field("initial balance (customer)", &self.initial_balance.customer)
             .field("hashed_id", &hex::encode(&self.hashed_id))
@@ -91,46 +80,44 @@ impl Eq for ChannelId {}
 #[cfg(test)]
 mod test {
     use crate::amount::MoneroAmount;
+    use crate::balance::Balances;
     use crate::channel_id::ChannelId;
-    use crate::state_machine::Balances;
     use blake2::Blake2b;
     use digest::consts::{U16, U32};
 
     #[test]
     fn channel_id() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
-        let id = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance);
+        let id = ChannelId::new::<Blake2b<U16>>("merchant", "customer", balance);
         assert_eq!(id.merchant(), "merchant");
         assert_eq!(id.customer(), "customer");
         assert_eq!(id.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
         assert_eq!(id.initial_balance().customer.to_piconero(), 750_000_000_000);
-        assert_eq!(id.to_string(), "XGCa2edd1f8091cc375b12357b427a748ba");
+        assert_eq!(id.to_string(), "XGC056da7eb64c5a7fe3ee60a64f6d828c3");
     }
 
     #[test]
     fn id_equality() {
         let amt = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let amt2 = Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("0.5").unwrap());
-        let id1 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", amt);
-        let id2 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", amt);
-        let id4 = ChannelId::new::<Blake2b<U16>, _, _, _>("Bob", "customer", "test", amt);
-        let id5 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "Charlie", "test", amt);
-        let id6 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "Charlie", "test", amt2);
-        let id7 = ChannelId::new::<Blake2b<U32>, _, _, _>("merchant", "customer", "test", amt);
-        let id8 = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "xxxx", amt);
+        let id1 = ChannelId::new::<Blake2b<U16>>("merchant", "customer", amt);
+        let id2 = ChannelId::new::<Blake2b<U16>>("merchant", "customer", amt);
+        let id4 = ChannelId::new::<Blake2b<U16>>("Bob", "customer", amt);
+        let id5 = ChannelId::new::<Blake2b<U16>>("merchant", "Charlie", amt);
+        let id6 = ChannelId::new::<Blake2b<U16>>("merchant", "Charlie", amt2);
+        let id7 = ChannelId::new::<Blake2b<U32>>("merchant", "customer", amt);
         assert_eq!(id1, id2);
         assert_ne!(id1, id4);
         assert_ne!(id1, id5);
         assert_ne!(id1, id6);
         assert_ne!(id1, id7);
-        assert_ne!(id1, id8);
     }
 
-    const SERIALIZED_CHANNEL_ID: &str = r#"(merchant_id:"merchant",customer_id:"customer",initial_balance:(merchant:1250000000000,customer:750000000000),salt:"74657374",hashed_id:"a2edd1f8091cc375b12357b427a748ba")"#;
+    const SERIALIZED_CHANNEL_ID: &str = r#"(merchant_id:"merchant",customer_id:"customer",initial_balance:(merchant:1250000000000,customer:750000000000),hashed_id:"056da7eb64c5a7fe3ee60a64f6d828c3")"#;
     #[test]
     fn serialize() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
-        let id = ChannelId::new::<Blake2b<U16>, _, _, _>("merchant", "customer", "test", balance);
+        let id = ChannelId::new::<Blake2b<U16>>("merchant", "customer", balance);
         let serialized = ron::to_string(&id).unwrap();
         assert_eq!(serialized, SERIALIZED_CHANNEL_ID);
     }
@@ -142,7 +129,6 @@ mod test {
         assert_eq!(deserialized.customer(), "customer");
         assert_eq!(deserialized.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
         assert_eq!(deserialized.initial_balance().customer.to_piconero(), 750_000_000_000);
-        assert_eq!(deserialized.salt, b"test".to_vec());
-        assert_eq!(deserialized.hashed_id, hex::decode("a2edd1f8091cc375b12357b427a748ba").unwrap());
+        assert_eq!(deserialized.hashed_id, hex::decode("056da7eb64c5a7fe3ee60a64f6d828c3").unwrap());
     }
 }
