@@ -31,27 +31,34 @@ impl MoneroAmount {
     /// Creates a new `MoneroAmount` from a string representing whole XMR units.
     /// Returns `None` if the string is not a valid number representation.
     pub fn from_xmr(xmr: &str) -> Option<Self> {
-        let mut parts = xmr.split('.');
+        if xmr.is_empty() {
+            return None;
+        }
+        let (whole, frac_str) = match xmr.strip_prefix(".") {
+            Some(frac) => ("0", frac),
+            None => {
+                let mut parts = xmr.split('.');
+                let whole = parts.next()?;
+                let fraction = parts.next().unwrap_or("0");
+                if parts.next().is_some() {
+                    return None; // More than one decimal point is invalid
+                }
+                (whole, fraction)
+            }
+        };
+        if frac_str.len() > 12 {
+            return None; // More than 12 decimal places is invalid
+        }
         // Parse the whole part
-        let whole = parts.next()?.parse::<u64>().ok()?;
+        let whole = whole.parse::<u64>().ok()?;
         // Parse the fractional part, if it exists
-        let fraction = if let Some(frac_str) = parts.next() {
-            if parts.next().is_some() {
-                return None; // More than one decimal point is invalid
-            }
-            if frac_str.len() > 12 {
-                return None; // More than 12 decimal places is invalid
-            }
-
+        let fraction = {
             // Pad the fractional part with zeros to make it 12 digits
             let mut padded_frac = frac_str.to_string();
             while padded_frac.len() < 12 {
                 padded_frac.push('0');
             }
-
             padded_frac.parse::<u64>().ok()?
-        } else {
-            0
         };
 
         // Calculate the total amount in piconero
@@ -185,7 +192,13 @@ mod test {
         let val = MoneroAmount::from_xmr("123").unwrap();
         assert_eq!(val.to_piconero(), 123_000_000_000_000);
 
+        let val = MoneroAmount::from_xmr(".5").unwrap();
+        assert_eq!(val.to_piconero(), 500_000_000_000);
+
         let val = MoneroAmount::from_xmr("1.0001110001110");
+        assert!(val.is_none());
+
+        let val = MoneroAmount::from_xmr(".0001110001110");
         assert!(val.is_none());
 
         let val = MoneroAmount::from_xmr("1.0001110001111");
@@ -195,9 +208,6 @@ mod test {
         assert!(val.is_none());
 
         let val = MoneroAmount::from_xmr("zero");
-        assert!(val.is_none());
-
-        let val = MoneroAmount::from_xmr(".5");
         assert!(val.is_none());
     }
 
@@ -229,6 +239,10 @@ mod test {
     fn test_from_xmr_valid() {
         let amount = MoneroAmount::from_xmr("1.25").unwrap();
         assert_eq!(amount.to_piconero(), 1_250_000_000_000);
+        let amount = MoneroAmount::from_xmr(".1234").unwrap();
+        assert_eq!(amount.to_piconero(), 123_400_000_000);
+        let amount = MoneroAmount::from_xmr(".001002").unwrap();
+        assert_eq!(amount.to_piconero(), 1_002_000_000);
     }
 
     #[test]
@@ -236,7 +250,6 @@ mod test {
         assert!(MoneroAmount::from_xmr("1.0001110001110").is_none());
         assert!(MoneroAmount::from_xmr("1.000.1110").is_none());
         assert!(MoneroAmount::from_xmr("zero").is_none());
-        assert!(MoneroAmount::from_xmr(".5").is_none());
     }
 
     #[test]

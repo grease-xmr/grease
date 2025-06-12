@@ -1,10 +1,11 @@
 use crate::message_types::NewChannelProposal;
 use crate::Client;
-use libgrease::amount::MoneroAmount;
+use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    Comm0PrivateInputs, GenericPoint, KesProof, PartialEncryptedKey, Proofs0, PublicProof0,
+    Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0,
+    PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
@@ -59,7 +60,7 @@ pub trait FundChannel {
     ) -> impl Future<Output = ()> + Send;
 }
 
-//----------------------------------------   Commitment TX0 ------------------------------------------------------------
+//------------------------------   Witness0 generation and verification  -----------------------------------------------
 
 pub trait GreaseInitializer {
     fn generate_initial_proofs(
@@ -96,8 +97,29 @@ pub trait KesProver {
 }
 
 pub trait GreaseChannelDelegate:
-    GreaseInitializer + ProposalVerifier + VerifiableSecretShare + FundChannel + KesProver + Sync + Send + Clone
+    GreaseInitializer + Updater + ProposalVerifier + VerifiableSecretShare + FundChannel + KesProver + Sync + Send + Clone
 {
+}
+
+//------------------------------    Update generation and verification   -----------------------------------------------
+
+pub trait Updater {
+    fn generate_update(
+        &self,
+        index: u64,
+        delta: MoneroDelta,
+        last_witness: &GenericScalar,
+        blinding_dleq: &GenericScalar,
+        metadata: &ChannelMetadata,
+    ) -> impl Future<Output = Result<UpdateProofs, DelegateError>> + Send;
+
+    fn verify_update(
+        &self,
+        index: u64,
+        delta: MoneroDelta,
+        proof: &PublicUpdateProof,
+        metadata: &ChannelMetadata,
+    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
 //----------------------------------------   Dummy Delegate ------------------------------------------------------------
@@ -227,6 +249,58 @@ impl FundChannel for DummyDelegate {
                 warn!("Failed to notify tx mined block: {:?}", e);
             });
         });
+    }
+}
+
+impl Updater for DummyDelegate {
+    async fn generate_update(
+        &self,
+        index: u64,
+        delta: MoneroDelta,
+        _witness: &GenericScalar,
+        _blinding_dleq: &GenericScalar,
+        metadata: &ChannelMetadata,
+    ) -> Result<UpdateProofs, DelegateError> {
+        info!("Generating update {index} proof for channel.  {}", delta.amount);
+        let mut rng = rand::rng();
+        let public_outputs = PublicUpdateOutputs {
+            T_prev: GenericPoint::random(&mut rng),
+            T_current: GenericPoint::random(&mut rng),
+            S_current: GenericPoint::random(&mut rng),
+            challenge: GenericScalar::random(&mut rng),
+            rho_bjj: GenericScalar::random(&mut rng),
+            rho_ed: GenericScalar::random(&mut rng),
+            R_bjj: GenericPoint::random(&mut rng),
+            R_ed: GenericPoint::random(&mut rng),
+        };
+        let private_outputs = PrivateUpdateOutputs {
+            update_count: index,
+            witness_i: GenericScalar::random(&mut rng),
+            delta_bjj: GenericScalar::random(&mut rng),
+            delta_ed: GenericScalar::random(&mut rng),
+        };
+        let proof = format!("UpdateProof|{}|{index}|{}", metadata.channel_id().name(), delta.amount).into_bytes();
+        Ok(UpdateProofs { private_outputs, public_outputs, proof })
+    }
+
+    async fn verify_update(
+        &self,
+        index: u64,
+        delta: MoneroDelta,
+        proof: &PublicUpdateProof,
+        metadata: &ChannelMetadata,
+    ) -> Result<(), DelegateError> {
+        info!("Verifying update {index} proof for {} picoXMR", delta.amount);
+        let expected = format!("UpdateProof|{}|{index}|{}", metadata.channel_id().name(), delta.amount);
+        if proof.proof == expected.as_bytes() {
+            info!(
+                "Update proof verified successfully for channel {}",
+                metadata.channel_id().name()
+            );
+            Ok(())
+        } else {
+            Err(DelegateError("Invalid update proof".to_string()))
+        }
     }
 }
 

@@ -1,13 +1,13 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
-use libgrease::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
+use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo, UpdateInfo, UpdateProofs};
+use libgrease::monero::data_objects::{MultisigWalletData, TransactionId};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
-    ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState,
-    LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
+    ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState, LifeCycleEvent, NewChannelState,
+    ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
 };
 use libp2p::PeerId;
 use log::*;
@@ -168,7 +168,7 @@ impl PaymentChannel {
             }
         } else if self.is_open() {
             match event {
-                LifeCycleEvent::OnUpdateChannel(update) => self.on_channel_update(*update),
+                LifeCycleEvent::ChannelUpdate(updates) => self.on_channel_update(*updates),
                 LifeCycleEvent::OnStartClose => self.on_cooperative_close(),
                 _ => Err(LifeCycleError::InvalidState(format!(
                     "Received event {event} in New state, which is not allowed"
@@ -317,16 +317,12 @@ impl PaymentChannel {
         })
     }
 
-    fn on_channel_update(&mut self, update: ChannelUpdate) -> Result<(), LifeCycleError> {
-        self.update_open(|mut open| match open.new_transfer(update) {
-            Ok(n) => {
-                debug!("⚡️  Channel update #{n} was successfully applied");
-                Ok(open.to_channel_state())
-            }
-            Err(err) => {
-                warn!("⚡️  Failed to apply channel update: {err}");
-                Err((open.to_channel_state(), err))
-            }
+    fn on_channel_update(&mut self, updates: (UpdateProofs, UpdateInfo)) -> Result<(), LifeCycleError> {
+        let (my_proofs, peer_update) = updates;
+        self.update_open(|mut open| {
+            let n = open.store_update(my_proofs, peer_update);
+            trace!("⚡️  Channel update #{n} was successfully applied");
+            Ok(open.to_channel_state())
         })
     }
 
@@ -481,12 +477,14 @@ mod test {
     use crate::{ContactInfo, PaymentChannel};
     use blake2::Blake2b512;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
-    use libgrease::balance::Balances;
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-    use libgrease::crypto::zk_objects::{KesProof, PartialEncryptedKey, Proofs0, ShardInfo};
-    use libgrease::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
+    use libgrease::crypto::zk_objects::{
+        GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateInfo,
+        UpdateProofs,
+    };
+    use libgrease::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use libgrease::payment_channel::ChannelRole;
-    use libgrease::state_machine::{CommitmentTransaction, LifeCycleEvent, NewChannelBuilder, NewChannelState};
+    use libgrease::state_machine::{LifeCycleEvent, NewChannelBuilder, NewChannelState};
     use libp2p::{Multiaddr, PeerId};
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
@@ -551,14 +549,18 @@ mod test {
         let event = LifeCycleEvent::KesCreated(Box::new(KesProof { proof: vec![1, 2, 3] }));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
-        let update = ChannelUpdate {
-            update_count: 1,
-            new_balances: Balances::new(100.into(), 900.into()),
-            delta: MoneroDelta::from(100),
-            commitment_tx: CommitmentTransaction {},
-            proofs: vec![],
+        let my_proof = UpdateProofs {
+            public_outputs: Default::default(),
+            private_outputs: PrivateUpdateOutputs {
+                update_count: 1,
+                witness_i: GenericScalar::random(&mut rand::rng()),
+                delta_bjj: Default::default(),
+                delta_ed: Default::default(),
+            },
+            proof: b"my_update_proof".to_vec(),
         };
-        let event = LifeCycleEvent::OnUpdateChannel(Box::new(update));
+        let peer_proof = UpdateInfo { index: 1, delta: MoneroDelta::from(100), proof: my_proof.public_only() };
+        let event = LifeCycleEvent::ChannelUpdate(Box::new((my_proof, peer_proof)));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
         let event = LifeCycleEvent::OnStartClose;

@@ -1,10 +1,11 @@
+use crate::amount::MoneroDelta;
 use crate::monero::data_objects::MultisigSplitSecrets;
 use hex::FromHexError;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// A curve-agnostic representation of a scalar.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct GenericScalar(
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")] [u8; 32],
 );
@@ -16,7 +17,7 @@ impl GenericScalar {
 }
 
 /// A curve-agnostic representation of a point.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct GenericPoint(
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")] [u8; 32],
 );
@@ -89,6 +90,41 @@ pub struct Comm0PrivateOutputs {
     pub delta_ed: GenericScalar,
 }
 
+/// Struct holding the public outputs from a ZK update proof.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PublicUpdateOutputs {
+    /// **Τ_(i-1)** - The public key/curve point on Baby Jubjub for ω_(i-1).
+    pub T_prev: GenericPoint,
+    /// **Τ_i** - The public key/curve point on Baby Jubjub for ω_i.
+    pub T_current: GenericPoint,
+    /// **S_i** - The public key/curve point on Ed25519 for ω_i.
+    pub S_current: GenericPoint,
+    /// **C** - The Fiat–Shamir heuristic challenge (`challenge_bytes`).
+    pub challenge: GenericScalar,
+    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`).
+    pub rho_bjj: GenericScalar,
+    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`).
+    pub rho_ed: GenericScalar,
+    /// **R_BabyJubjub** - DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`).
+    pub R_bjj: GenericPoint,
+    /// **R_Ed25519** - DLEQ commitment 2, which is a public key/curve point on Ed25519 (`R_2`).
+    pub R_ed: GenericPoint,
+}
+
+/// Struct representing private variables.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PrivateUpdateOutputs {
+    /// The ith update index. The initial commitment is update 0.
+    pub update_count: u64,
+    /// **ω_i** - The next private key protecting access to close the payment channel (`witness_i`).
+    pub witness_i: GenericScalar,
+    /// **Δ_BabyJubjub** - Optimization parameter (`response_div_BabyJubjub`).
+    pub delta_bjj: GenericScalar,
+    /// **Δ_Ed25519** - Optimization parameter (`response_div_BabyJubJub`).
+    pub delta_ed: GenericScalar,
+}
+
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct Proofs0 {
     pub public_outputs: Comm0PublicOutputs,
@@ -100,6 +136,35 @@ impl Proofs0 {
     pub fn public_only(&self) -> PublicProof0 {
         PublicProof0 { public_outputs: self.public_outputs.clone(), proofs: self.proofs.clone() }
     }
+}
+
+/// The output of the ZK proof for a channel update.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct UpdateProofs {
+    pub public_outputs: PublicUpdateOutputs,
+    pub private_outputs: PrivateUpdateOutputs,
+    pub proof: Vec<u8>,
+}
+
+impl UpdateProofs {
+    /// Convert the proof to a public proof.
+    pub fn public_only(&self) -> PublicUpdateProof {
+        PublicUpdateProof { public_outputs: self.public_outputs.clone(), proof: self.proof.clone() }
+    }
+}
+
+/// The output of the ZK proof for a channel update.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PublicUpdateProof {
+    pub public_outputs: PublicUpdateOutputs,
+    pub proof: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UpdateInfo {
+    pub index: u64,
+    pub delta: MoneroDelta,
+    pub proof: PublicUpdateProof,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]

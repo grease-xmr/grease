@@ -18,7 +18,6 @@ pub mod commands {
     pub const NAV_TO_CUSTOMER_MENU: &str = "For Customers";
     pub const NAV_TO_IDENTITY_MENU: &str = "Manage Identities";
     pub const NAV_TO_MERCHANT_MENU: &str = "For Merchants";
-    pub const PAYMENT_REQUEST: &str = "Request payment";
     pub const PAYMENT_SEND: &str = "Send payment";
     pub const PROPOSE_CHANNEL: &str = "Initiate new channel";
     pub const REMOVE_IDENTITY: &str = "Remove identity";
@@ -41,13 +40,12 @@ pub const IDENTITY_MENU: [&str; 7] = [
     EXIT,
 ];
 
-pub const CUSTOMER_MENU: [&str; 12] = [
+pub const CUSTOMER_MENU: [&str; 11] = [
     CONNECT_TO_CHANNEL,
     PROPOSE_CHANNEL,
     SUBMIT_FUNDING_TX,
     LIST_CHANNELS,
     PAYMENT_SEND,
-    PAYMENT_REQUEST,
     NAV_TO_IDENTITY_MENU,
     NAV_BACK,
     CLOSE_CHANNEL,
@@ -56,20 +54,16 @@ pub const CUSTOMER_MENU: [&str; 12] = [
     EXIT,
 ];
 
-pub const MERCHANT_MENU: [&str; 12] = [
+pub const MERCHANT_MENU: [&str; 9] = [
     CONNECT_TO_CHANNEL,
     SHARE_MERCHANT_INFO,
     LIST_CHANNELS,
-    PAYMENT_SEND,
-    PAYMENT_REQUEST,
     NAV_TO_IDENTITY_MENU,
     NAV_BACK,
     CLOSE_CHANNEL,
     FORCE_CLOSE_CHANNEL,
     DISPUTE_CHANNEL_CLOSE,
     EXIT,
-    // Debugging commands only
-    SUBMIT_FUNDING_TX,
 ];
 
 pub fn top_menu() -> &'static Menu {

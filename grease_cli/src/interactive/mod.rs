@@ -129,8 +129,7 @@ impl InteractiveApp {
                 DISPUTE_CHANNEL_CLOSE => println!("Coming soon"),
                 FORCE_CLOSE_CHANNEL => println!("Coming soon"),
                 LIST_CHANNELS => self.print_channel_names().await,
-                PAYMENT_REQUEST => println!("Coming soon"),
-                PAYMENT_SEND => println!("Coming soon"),
+                PAYMENT_SEND => handle_response(self.send_payment().await),
                 _ => continue,
             }
         }
@@ -192,6 +191,37 @@ impl InteractiveApp {
         let status = self.server.channel_status(&name).await;
         self.channel_status = status;
         Ok(format!("New channel created: {name}"))
+    }
+
+    async fn send_payment(&mut self) -> Result<String> {
+        if self.current_channel.is_none() {
+            return Err(anyhow!("No channel selected"));
+        }
+        let name = self.current_channel.as_ref().expect("Just checked that a channel is selected");
+        let info = self.server.channel_metadata(name).await.ok_or_else(|| anyhow!("No channel metadata found"))?;
+        let customer_balance = info.balances().customer;
+        let amount = dialoguer::Input::<String>::new()
+            .with_prompt(format!("Send amount (available: {customer_balance} XMR)"))
+            .interact()?;
+        let amount = MoneroAmount::from_xmr(&amount).ok_or_else(|| anyhow!("Invalid XMR value"))?;
+        // We could easily add a check here to ensure the amount is not greater than the available balance
+        // but let's test that the channel handles this edge case too.
+        let update = self.server.pay(name, amount).await?;
+        let update_count = update.update_count;
+        let merchant = update.new_balances.merchant;
+        let customer = update.new_balances.customer;
+        let total = update.new_balances.total();
+        let result = format!(
+            r#"
+------------------------------------------------------------------------------
+|        Balance update #{update_count:3} for channel {name:<35} |
+|        Payment amount:   {amount:20}                                   |
+|        Merchant balance: {merchant:20}                                   |
+|        Customer balance: {customer:20}                                   |
+|        Total:            {total:20}                                   |
+------------------------------------------------------------------------------"#
+        );
+        Ok(result)
     }
 
     pub fn create_channel_proposal(

@@ -7,8 +7,7 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::balance::Balances;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
-use crate::payment_channel::{ChannelRole, UpdateError};
-use crate::state_machine::CommitmentTransaction;
+use crate::payment_channel::ChannelRole;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecrets {
@@ -98,34 +97,6 @@ impl TransactionId {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ChannelUpdate {
-    /// The update counter for the channel. This is incremented every time a new update is sent. The initial balance
-    /// represents update 0.
-    pub update_count: u64,
-    /// The balances after applying the delta to the current balances
-    pub new_balances: Balances,
-    /// The change in the *Merchant's* balance
-    pub delta: MoneroDelta,
-    /// The new, partially signed commitment transaction
-    pub commitment_tx: CommitmentTransaction,
-    /// The proof(s) of the new commitment transaction
-    pub proofs: Vec<u8>,
-}
-
-impl ChannelUpdate {
-    /// Create a new channel update with the given parameters.
-    pub fn from_template(template: &ChannelSecrets, tx: CommitmentTransaction, proofs: &[u8]) -> Self {
-        Self {
-            update_count: template.update_count,
-            new_balances: template.new_balances,
-            delta: template.delta,
-            commitment_tx: tx,
-            proofs: proofs.to_vec(),
-        }
-    }
-}
-
 /// A channel update template before any proofs have been generated.
 ///
 /// It is based on the current channel state, plus the delta to be applied to the merchant's balance.
@@ -148,37 +119,15 @@ pub struct ChannelSecrets {
     pub public_key: Curve25519PublicKey,
 }
 
+/// Channel Update result record
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum StartChannelUpdateConfirmation {
-    /// The update has been accepted by the responder. The responder's proofs are provided
-    Confirmed(ChannelUpdate),
-    /// The update has been rejected. The reason can be gleaned from `PaymentRejection::reason`. The most recent
-    /// proofs are provided so that the initiator can recover and try again if necessary
-    Rejected(PaymentRejection),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct PaymentRejection {
-    /// The reason for the rejection
-    pub reason: UpdateError,
-    /// The most recent proofs from the responder, if there was one
-    pub last_update: Option<ChannelUpdate>,
-}
-
-impl PaymentRejection {
-    pub fn new(reason: UpdateError, last_update: Option<ChannelUpdate>) -> Self {
-        Self { reason, last_update }
-    }
-}
-
-/// The channel payment is finalized on receipt of this message. No response is expected.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum ChannelUpdateFinalization {
-    /// The responder's proofs have been verified and the payment is finalized. The initiator sends the Transaction hash
-    /// as final confirmation.
-    Finalized { txid: TransactionId, balances: Balances },
-    /// The update has been rejected by the initiator. The reason can be gleaned from `PaymentRejection::reason`.
-    Rejected(PaymentRejection),
+pub struct Updated {
+    /// The new channel balances after the update
+    pub new_balances: Balances,
+    /// The update count for the channel
+    pub update_count: u64,
+    /// The change that was effected in the merchant's balance
+    pub delta: MoneroDelta,
 }
 
 /// A struct to make it easier to persist and pass wallet info around. Obviously it needs to be made more secure for
