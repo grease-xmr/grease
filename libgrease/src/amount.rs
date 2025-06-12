@@ -43,12 +43,12 @@ impl MoneroAmount {
                 if parts.next().is_some() {
                     return None; // More than one decimal point is invalid
                 }
-                if fraction.len() > 12 {
-                    return None; // More than 12 decimal places is invalid
-                }
                 (whole, fraction)
             }
         };
+        if frac_str.len() > 12 {
+            return None; // More than 12 decimal places is invalid
+        }
         // Parse the whole part
         let whole = whole.parse::<u64>().ok()?;
         // Parse the fractional part, if it exists
@@ -196,6 +196,9 @@ mod test {
         assert_eq!(val.to_piconero(), 500_000_000_000);
 
         let val = MoneroAmount::from_xmr("1.0001110001110");
+        assert!(val.is_none());
+
+        let val = MoneroAmount::from_xmr(".0001110001110");
         assert!(val.is_none());
 
         let val = MoneroAmount::from_xmr("1.0001110001111");
