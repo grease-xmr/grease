@@ -25,8 +25,9 @@
 //!
 //!
 
+use crate::amount::MoneroAmount;
 use crate::channel_metadata::ChannelMetadata;
-use crate::crypto::zk_objects::{KesProof, ShardInfo};
+use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
 use crate::state_machine::closing_channel::ClosingChannelState;
@@ -36,6 +37,7 @@ use crate::state_machine::ChannelClosedReason;
 use log::info;
 use monero::Network;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -43,12 +45,10 @@ pub struct EstablishedChannelState {
     pub(crate) metadata: ChannelMetadata,
     pub(crate) shards: ShardInfo,
     pub(crate) multisig_wallet: MultisigWalletData,
-    pub(crate) funding_transactions: Vec<TransactionId>,
-    pub(crate) commitment_transaction0: CommitmentTransaction,
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    pub(crate) commitment_tx_proof: Vec<u8>,
+    pub(crate) funding_transactions: HashMap<TransactionId, MoneroAmount>,
+    pub(crate) my_proof0: Proofs0,
+    pub(crate) peer_proof0: PublicProof0,
     pub(crate) kes_proof: KesProof,
-    pub(crate) current_commitment_tx: CommitmentTransaction,
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     pub(crate) current_commitment_tx_proof: Vec<u8>,
     pub(crate) update_count: u64,
@@ -80,7 +80,6 @@ impl EstablishedChannelState {
         if !self.metadata.apply_delta(update.delta) {
             return Err(LifeCycleError::NotEnoughFunds);
         }
-        self.current_commitment_tx = update.commitment_tx;
         self.current_commitment_tx_proof = update.proofs;
         self.update_count += 1;
         Ok(self.update_count)
@@ -105,7 +104,7 @@ impl EstablishedChannelState {
         );
         let closing_state = ClosingChannelState {
             metadata: self.metadata.clone(),
-            commitment_tx: self.current_commitment_tx.clone(),
+            commitment_tx: CommitmentTransaction {}, // TODO!!
             final_tx: None,
             reason: ChannelClosedReason::Normal,
         };

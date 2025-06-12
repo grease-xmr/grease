@@ -1,12 +1,12 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::zk_objects::{KesProof, ShardInfo};
+use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
 use libgrease::monero::data_objects::{ChannelUpdate, MultisigWalletData, TransactionId};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
-    ChannelSeedInfo, ClosingChannelState, CommitmentTransaction, EstablishedChannelState, EstablishingState,
+    ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState,
     LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
 };
 use libp2p::PeerId;
@@ -155,13 +155,13 @@ impl PaymentChannel {
             }
         } else if self.is_establishing() {
             match event {
-                LifeCycleEvent::CommitmentTxCreated(tx) => self.on_commitment_tx_created(*tx),
                 LifeCycleEvent::MultiSigWalletCreated(data) => self.on_wallet_created(*data),
                 LifeCycleEvent::FundingTxWatcher(data) => self.on_save_watcher(data),
-                LifeCycleEvent::CommitmentZeroProof(data) => self.on_txc0_proof(data),
                 LifeCycleEvent::KesShards(shards) => self.on_kes_shards(*shards),
                 LifeCycleEvent::KesCreated(info) => self.on_kes_created(*info),
                 LifeCycleEvent::FundingTxConfirmed(info) => self.on_funding_confirmed(info.0, info.1),
+                LifeCycleEvent::MyProof0Generated(proof) => self.on_my_proof0(*proof),
+                LifeCycleEvent::PeerProof0Received(proof) => self.on_peer_proof0(*proof),
                 _ => Err(LifeCycleError::InvalidState(format!(
                     "Received event {event} in New state, which is not allowed"
                 ))),
@@ -223,13 +223,6 @@ impl PaymentChannel {
         self.update_new(|new| Ok(new.timeout(reason).to_channel_state()))
     }
 
-    fn on_commitment_tx_created(&mut self, tx: CommitmentTransaction) -> Result<(), LifeCycleError> {
-        self.update_establishing(|mut establishing| {
-            establishing.commitment_transaction_created(tx);
-            Ok(establishing.to_channel_state())
-        })
-    }
-
     fn on_wallet_created(&mut self, data: MultisigWalletData) -> Result<(), LifeCycleError> {
         self.update_establishing(|mut establishing| {
             establishing.wallet_created(data);
@@ -244,12 +237,28 @@ impl PaymentChannel {
         })
     }
 
-    fn on_txc0_proof(&mut self, data: Vec<u8>) -> Result<(), LifeCycleError> {
+    fn on_my_proof0(&mut self, proof: Proofs0) -> Result<(), LifeCycleError> {
         self.update_establishing(|mut establishing| {
-            establishing.save_txc0_proof(data);
+            establishing.save_proof0(proof);
             match establishing.next() {
                 Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after receiving proof of txc0");
+                    debug!("⚡️  Transitioned to Established state after saving witness0 proof");
+                    Ok(established.to_channel_state())
+                }
+                Err((establishing, err)) => {
+                    trace!("⚡️  Staying in establishing state: {err}");
+                    Ok(establishing.to_channel_state())
+                }
+            }
+        })
+    }
+
+    fn on_peer_proof0(&mut self, peer_proof: PublicProof0) -> Result<(), LifeCycleError> {
+        self.update_establishing(|mut establishing| {
+            establishing.save_peer_proof0(peer_proof);
+            match establishing.next() {
+                Ok(established) => {
+                    debug!("⚡️  Transitioned to Established state after receiving peer's proof0");
                     Ok(established.to_channel_state())
                 }
                 Err((establishing, err)) => {
@@ -474,7 +483,7 @@ mod test {
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::balance::Balances;
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-    use libgrease::crypto::zk_objects::{KesProof, PartialEncryptedKey, ShardInfo};
+    use libgrease::crypto::zk_objects::{KesProof, PartialEncryptedKey, Proofs0, ShardInfo};
     use libgrease::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::{CommitmentTransaction, LifeCycleEvent, NewChannelBuilder, NewChannelState};
@@ -530,9 +539,12 @@ mod test {
         };
         let event = LifeCycleEvent::KesShards(Box::new(ShardInfo { my_shards, their_shards }));
         channel.handle_event(event).unwrap();
-        let event = LifeCycleEvent::CommitmentTxCreated(Box::new(CommitmentTransaction {}));
+        let proof0 =
+            Proofs0 { public_outputs: Default::default(), private_outputs: Default::default(), proofs: vec![] };
+        let peer_proof0 = proof0.public_only();
+        let event = LifeCycleEvent::MyProof0Generated(Box::new(proof0));
         channel.handle_event(event).unwrap();
-        let event = LifeCycleEvent::CommitmentZeroProof(vec![1, 2, 3]);
+        let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof0));
         channel.handle_event(event).unwrap();
         let event = LifeCycleEvent::FundingTxConfirmed(Box::new((TransactionId::new("tx123"), 1000.into())));
         channel.handle_event(event).unwrap();

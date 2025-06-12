@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::iter::Sum;
 use std::ops::{Add, AddAssign, Neg, SubAssign};
 
 pub const PICONERO: u64 = 1_000_000_000_000;
@@ -108,6 +109,12 @@ impl SubAssign for MoneroAmount {
     }
 }
 
+impl Sum for MoneroAmount {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(MoneroAmount::default(), |acc, x| acc + x)
+    }
+}
+
 impl Ord for MoneroAmount {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.amount.cmp(&other.amount)
@@ -156,7 +163,7 @@ impl Neg for MoneroDelta {
 
 #[cfg(test)]
 mod test {
-    use crate::amount::MoneroAmount;
+    use crate::amount::{MoneroAmount, MoneroDelta};
 
     #[test]
     fn from_xmr_strings() {
@@ -189,5 +196,129 @@ mod test {
 
         let val = MoneroAmount::from_xmr(".5");
         assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_is_zero() {
+        assert!(MoneroAmount::default().is_zero());
+        assert!(!MoneroAmount::from_piconero(1).is_zero());
+    }
+
+    #[test]
+    fn test_from_piconero() {
+        let amount = MoneroAmount::from_piconero(1_000_000_000_000);
+        assert_eq!(amount.to_piconero(), 1_000_000_000_000);
+    }
+
+    #[test]
+    fn test_to_xmr() {
+        let amount = MoneroAmount::from_piconero(1_250_000_000_000);
+        assert_eq!(amount.to_xmr(), 1.25);
+    }
+
+    #[test]
+    fn test_to_xmr_u64() {
+        let amount = MoneroAmount::from_piconero(1_250_000_000_000);
+        assert_eq!(amount.to_xmr_u64(), (1, 250_000_000_000));
+    }
+
+    #[test]
+    fn test_from_xmr_valid() {
+        let amount = MoneroAmount::from_xmr("1.25").unwrap();
+        assert_eq!(amount.to_piconero(), 1_250_000_000_000);
+    }
+
+    #[test]
+    fn test_from_xmr_invalid() {
+        assert!(MoneroAmount::from_xmr("1.0001110001110").is_none());
+        assert!(MoneroAmount::from_xmr("1.000.1110").is_none());
+        assert!(MoneroAmount::from_xmr("zero").is_none());
+        assert!(MoneroAmount::from_xmr(".5").is_none());
+    }
+
+    #[test]
+    fn test_checked_apply_delta_positive() {
+        let amount = MoneroAmount::from_piconero(1_000_000_000_000);
+        let delta = MoneroDelta::from(500_000_000_000);
+        let new_amount = amount.checked_apply_delta(delta).unwrap();
+        assert_eq!(new_amount.to_piconero(), 1_500_000_000_000);
+    }
+
+    #[test]
+    fn test_checked_apply_delta_negative() {
+        let amount = MoneroAmount::from_piconero(1_000_000_000_000);
+        let delta = MoneroDelta::from(-500_000_000_000);
+        let new_amount = amount.checked_apply_delta(delta).unwrap();
+        assert_eq!(new_amount.to_piconero(), 500_000_000_000);
+    }
+
+    #[test]
+    fn test_checked_apply_delta_invalid() {
+        let amount = MoneroAmount::from_piconero(500_000_000_000);
+        let delta = MoneroDelta::from(-1_000_000_000_000);
+        assert!(amount.checked_apply_delta(delta).is_none());
+    }
+
+    #[test]
+    fn test_add_trait() {
+        let amount1 = MoneroAmount::from_piconero(1_000_000_000_000);
+        let amount2 = MoneroAmount::from_piconero(500_000_000_000);
+        let result = amount1 + amount2;
+        assert_eq!(result.to_piconero(), 1_500_000_000_000);
+    }
+
+    #[test]
+    fn test_add_assign_trait() {
+        let mut amount = MoneroAmount::from_piconero(1_000_000_000_000);
+        let delta = MoneroAmount::from_piconero(500_000_000_000);
+        amount += delta;
+        assert_eq!(amount.to_piconero(), 1_500_000_000_000);
+    }
+
+    #[test]
+    fn test_sub_assign_trait() {
+        let mut amount = MoneroAmount::from_piconero(1_000_000_000_000);
+        let delta = MoneroAmount::from_piconero(500_000_000_000);
+        amount -= delta;
+        assert_eq!(amount.to_piconero(), 500_000_000_000);
+    }
+
+    #[test]
+    fn test_sum_trait() {
+        let amounts = vec![
+            MoneroAmount::from_piconero(1_000_000_000_000),
+            MoneroAmount::from_piconero(500_000_000_000),
+            MoneroAmount::from_piconero(250_000_000_000),
+        ];
+        let total: MoneroAmount = amounts.into_iter().sum();
+        assert_eq!(total.to_piconero(), 1_750_000_000_000);
+    }
+
+    #[test]
+    fn test_partial_ord_trait() {
+        let amount1 = MoneroAmount::from_piconero(1_000_000_000_000);
+        let amount2 = MoneroAmount::from_piconero(500_000_000_000);
+        assert!(amount1 > amount2);
+        assert!(amount2 < amount1);
+    }
+
+    #[test]
+    fn test_ord_trait() {
+        let amount1 = MoneroAmount::from_piconero(1_000_000_000_000);
+        let amount2 = MoneroAmount::from_piconero(500_000_000_000);
+        assert_eq!(amount1.cmp(&amount2), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_display_trait() {
+        let amount = MoneroAmount::from_piconero(1_250_000_000_000);
+        assert_eq!(format!("{}", amount), "1.250000000 XMR");
+    }
+
+    #[test]
+    fn test_neg_trait_for_delta() {
+        let delta = MoneroDelta::from(500_000_000_000);
+        let neg_delta = -delta;
+        assert_eq!(neg_delta.amount, -500_000_000_000);
     }
 }

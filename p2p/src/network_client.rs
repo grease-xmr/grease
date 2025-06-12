@@ -5,6 +5,7 @@ use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
+use libgrease::crypto::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
     ChannelUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
     StartChannelUpdateConfirmation, TransactionRecord,
@@ -140,6 +141,7 @@ impl Client {
         MultisigSplitSecretsResponse
     );
     grease_request!(send_wallet_confirmation, ConfirmMultiSigAddressRequest, String, bool);
+    grease_request!(send_proof0, ExchangeProof0, PublicProof0, PublicProof0);
 
     pub async fn wait_for_funding_tx(&mut self, name: &str) -> Result<TransactionRecord, PeerConnectionError> {
         trace!("⚡️ Waiting for funding transaction for channel {name}");

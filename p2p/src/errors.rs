@@ -98,6 +98,8 @@ pub enum RemoteServerError {
     UnexpectedRole,
     #[error("The channel does not exist on this peer.")]
     ChannelDoesNotExist,
+    #[error("A proof verification failed. {0}")]
+    InvalidProof(String),
 }
 
 impl RemoteServerError {

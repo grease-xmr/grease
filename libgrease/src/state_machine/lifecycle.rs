@@ -191,7 +191,7 @@ impl LifeCycle for ChannelState {
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-    use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey, ShardInfo};
+    use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey, Proofs0, PublicProof0, ShardInfo};
     use crate::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::commitment_tx::CommitmentTransaction;
@@ -266,15 +266,19 @@ pub mod test {
         state.save_kes_shards(shards);
         // The funding transaction has been created and broadcast.
         state.funding_tx_confirmed(TransactionId::new("fundingtx1"), MoneroAmount::from_xmr("1.25").unwrap());
-        // The commitment transaction has been created.
-        let txc0 = CommitmentTransaction {};
-        state.commitment_transaction_created(txc0);
-        // The commitment transaction proofs have been exchanged
-        state.save_txc0_proof(b"commitment_proof0".to_vec());
+        let proof0 = Proofs0 {
+            public_outputs: Default::default(),
+            private_outputs: Default::default(),
+            proofs: b"my_proof0".to_vec(),
+        };
+        let peer_proof0 = proof0.public_only();
+        state.save_proof0(proof0);
+        // Received peer's proof0 data
+        let peer_proof0 = PublicProof0 { public_outputs: Default::default(), proofs: b"peer_proof0".to_vec() };
+        state.save_peer_proof0(peer_proof0);
         // The KES details have been exchanged.
         let kes_proof = KesProof { proof: "kes_0001".into() };
         state.kes_created(kes_proof);
-        state.save_txc0_proof(b"commitment_proof1".to_vec());
         match state.next() {
             Ok(open) => {
                 assert_eq!(open.stage(), LifecycleStage::Open);
