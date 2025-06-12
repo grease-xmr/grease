@@ -2,10 +2,9 @@ use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
-use libgrease::crypto::zk_objects::PublicProof0;
+use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
-    ChannelUpdate, ChannelUpdateFinalization, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
-    MultisigSplitSecretsResponse, StartChannelUpdateConfirmation, TransactionRecord,
+    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionRecord,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -33,11 +32,8 @@ pub enum GreaseRequest {
     /// channel
     ExchangeProof0(MessageEnvelope<PublicProof0>),
     /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
-    /// proofs and respond their own proofs. The responder responds with [`GreaseResponse::ConfirmUpdate`].
-    StartChannelUpdate(MessageEnvelope<ChannelUpdate>),
-    /// The final conformation of the channel update. The initiator will send this request after revalidating the
-    /// proofs from the responder. The responder does not return a response to this request.
-    FinalizeChannelUpdate(MessageEnvelope<ChannelUpdateFinalization>),
+    /// proofs and respond their own proofs.
+    ChannelUpdate(MessageEnvelope<UpdateInfo>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -52,7 +48,7 @@ pub enum GreaseResponse {
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
     ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
-    ConfirmUpdate(Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError>),
+    ChannelUpdate(Result<MessageEnvelope<UpdateInfo>, RemoteServerError>),
     ChannelClosed,
     ChannelNotFound,
     Error(String),
@@ -96,7 +92,7 @@ impl Display for GreaseResponse {
             ),
             GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
             GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
-            GreaseResponse::ConfirmUpdate(_) => write!(f, "Confirmation Update"),
+            GreaseResponse::ChannelUpdate(_) => write!(f, "Channel Update"),
             GreaseResponse::NoResponse => write!(f, "No response to send"),
             GreaseResponse::MsSplitSecretExchange(_) => write!(f, "MsSplitSecretExchange"),
             GreaseResponse::ExchangeProof0(_) => write!(f, "ExchangeProof0"),
@@ -110,8 +106,7 @@ impl GreaseRequest {
             GreaseRequest::ProposeChannelRequest(ref proposal) => proposal.channel_name(),
             GreaseRequest::MsKeyExchange(env) => env.channel_name(),
             GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
-            GreaseRequest::StartChannelUpdate(env) => env.channel_name(),
-            GreaseRequest::FinalizeChannelUpdate(env) => env.channel_name(),
+            GreaseRequest::ChannelUpdate(env) => env.channel_name(),
             GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
             GreaseRequest::ExchangeProof0(env) => env.channel_name(),
         }
@@ -171,17 +166,10 @@ pub enum ClientCommand {
         envelope: MessageEnvelope<PublicProof0>,
         sender: oneshot::Sender<Result<MessageEnvelope<PublicProof0>, RemoteServerError>>,
     },
-    InitiateNewUpdate {
+    ChannelUpdate {
         peer_id: PeerId,
-        envelope: MessageEnvelope<ChannelUpdate>,
-        sender: oneshot::Sender<Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError>>,
-    },
-    /// Verify the responder proofs provided in the `ChannelUpdate` given in the envelope; validate the update, and
-    /// send final confirmation to the responder.
-    FinalizeUpdate {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<ChannelUpdateFinalization>,
-        sender: oneshot::Sender<Result<(), RemoteServerError>>,
+        envelope: MessageEnvelope<UpdateInfo>,
+        sender: oneshot::Sender<Result<MessageEnvelope<UpdateInfo>, RemoteServerError>>,
     },
     /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
     ConnectedPeers {

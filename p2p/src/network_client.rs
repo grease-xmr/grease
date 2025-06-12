@@ -5,10 +5,9 @@ use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
-use libgrease::crypto::zk_objects::PublicProof0;
+use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
-    ChannelUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    StartChannelUpdateConfirmation, TransactionRecord,
+    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionRecord,
 };
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
@@ -142,6 +141,7 @@ impl Client {
     );
     grease_request!(send_wallet_confirmation, ConfirmMultiSigAddressRequest, String, bool);
     grease_request!(send_proof0, ExchangeProof0, PublicProof0, PublicProof0);
+    grease_request!(send_update, ChannelUpdate, UpdateInfo, UpdateInfo);
 
     pub async fn wait_for_funding_tx(&mut self, name: &str) -> Result<TransactionRecord, PeerConnectionError> {
         trace!("⚡️ Waiting for funding transaction for channel {name}");
@@ -154,30 +154,6 @@ impl Client {
     pub async fn notify_tx_mined(&mut self, tx: TransactionRecord) -> Result<(), PeerConnectionError> {
         self.sender.send(ClientCommand::NotifyTxMined(tx)).await?;
         Ok(())
-    }
-
-    /// This starts a new update balance request with the peer.
-    /// The necessary proofs for the update must already have been generated and be available in the `update` parameter.
-    /// We then send the update request to the remote peer.
-    /// and wait for the remote peer to confirm the update (or reject it).
-    pub async fn update_balance(
-        &mut self,
-        peer_id: PeerId,
-        channel: &str,
-        update: ChannelUpdate,
-    ) -> Result<StartChannelUpdateConfirmation, PeerConnectionError> {
-        let (sender, receiver) = oneshot::channel();
-        let envelope = MessageEnvelope::new(channel.into(), update);
-
-        trace!("⚡️ Sending channel update request for peer {} on channel {}", peer_id, channel);
-        self.sender.send(ClientCommand::InitiateNewUpdate { peer_id, envelope, sender }).await?;
-        let return_envelope = receiver.await??;
-        trace!("⚡️ Received channel update confirmation for peer {peer_id} on channel {channel}");
-        let (return_channel, result) = return_envelope.open();
-        if return_channel != channel {
-            return Err(PeerConnectionError::ChannelMismatch { expected: channel.into(), actual: return_channel });
-        }
-        Ok(result)
     }
 
     pub async fn send_response_to_peer(

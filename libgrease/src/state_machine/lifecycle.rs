@@ -148,6 +148,13 @@ impl ChannelState {
         }
     }
 
+    pub fn as_open(&self) -> Result<&EstablishedChannelState, LifeCycleError> {
+        match self {
+            ChannelState::Open(ref state) => Ok(state),
+            _ => Err(LifeCycleError::invalid_state_for("Expected EstablishedState")),
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     pub fn to_open(self) -> Result<EstablishedChannelState, (Self, LifeCycleError)> {
         match self {
@@ -191,10 +198,12 @@ impl LifeCycle for ChannelState {
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-    use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey, Proofs0, PublicProof0, ShardInfo};
-    use crate::monero::data_objects::{ChannelUpdate, MultisigSplitSecrets, MultisigWalletData, TransactionId};
+    use crate::crypto::zk_objects::{
+        KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, PublicUpdateProof,
+        ShardInfo, UpdateInfo, UpdateProofs,
+    };
+    use crate::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use crate::payment_channel::ChannelRole;
-    use crate::state_machine::commitment_tx::CommitmentTransaction;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
     use crate::state_machine::new_channel::NewChannelBuilder;
@@ -274,7 +283,6 @@ pub mod test {
         let peer_proof0 = proof0.public_only();
         state.save_proof0(proof0);
         // Received peer's proof0 data
-        let peer_proof0 = PublicProof0 { public_outputs: Default::default(), proofs: b"peer_proof0".to_vec() };
         state.save_peer_proof0(peer_proof0);
         // The KES details have been exchanged.
         let kes_proof = KesProof { proof: "kes_0001".into() };
@@ -297,12 +305,28 @@ pub mod test {
 
     pub fn payment(state: &mut EstablishedChannelState, amount: &str) -> u64 {
         let delta = MoneroDelta::from(MoneroAmount::from_xmr(amount).unwrap());
-        let proofs = b"transfer_proof".to_vec(); // Placeholder for actual proof data
         let update_count = state.update_count() + 1;
-        let new_balances = state.balance().apply_delta(delta).unwrap();
-        let update =
-            ChannelUpdate { update_count, new_balances, delta, commitment_tx: CommitmentTransaction {}, proofs };
-        state.new_transfer(update).unwrap()
+        let my_proofs = UpdateProofs {
+            public_outputs: PublicUpdateOutputs::default(),
+            private_outputs: PrivateUpdateOutputs {
+                update_count,
+                witness_i: Default::default(),
+                delta_bjj: Default::default(),
+                delta_ed: Default::default(),
+            },
+            proof: b"my_update_proof".to_vec(),
+        };
+        let update_info = UpdateInfo {
+            index: update_count,
+            delta,
+            proof: PublicUpdateProof {
+                public_outputs: PublicUpdateOutputs::default(),
+                proof: b"peer_update_proof".to_vec(),
+            },
+        };
+        let updated_index = state.store_update(my_proofs, update_info);
+        assert_eq!(updated_index, update_count);
+        update_count
     }
 
     #[test]

@@ -11,9 +11,9 @@ use futures::channel::{
     oneshot,
 };
 use futures::{SinkExt, StreamExt};
-use libgrease::crypto::zk_objects::PublicProof0;
+use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, StartChannelUpdateConfirmation, TransactionRecord,
+    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
 };
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
@@ -209,7 +209,7 @@ event_loop!(
     Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
     Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
     Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
-    Command(InitiateNewUpdate): StartChannelUpdate => ConfirmUpdate[StartChannelUpdateConfirmation]
+    Command(ChannelUpdate): ChannelUpdate => ChannelUpdate[UpdateInfo]
 );
 
 impl EventLoop {

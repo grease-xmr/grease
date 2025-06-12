@@ -12,12 +12,12 @@ use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use libgrease::crypto::zk_objects::{generate_txc0_nonces, GenericPoint, KesProof, PublicProof0, ShardInfo};
-use libgrease::monero::data_objects::{
-    ChannelUpdate, ChannelUpdateFinalization, FundingTransaction, MessageEnvelope, MultisigKeyInfo,
-    MultisigSplitSecrets, MultisigSplitSecretsResponse, PaymentRejection, StartChannelUpdateConfirmation,
+use libgrease::crypto::zk_objects::{
+    generate_txc0_nonces, GenericPoint, GenericScalar, KesProof, PublicProof0, ShardInfo, UpdateInfo, UpdateProofs,
 };
-use libgrease::payment_channel::UpdateError;
+use libgrease::monero::data_objects::{
+    FundingTransaction, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, Updated,
+};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use libgrease::state_machine::{LifeCycleEvent, NewChannelBuilder, ProposedChannelInfo};
@@ -73,6 +73,11 @@ where
 
     pub fn controller(&self) -> InnerEventHandler<D> {
         self.inner.clone()
+    }
+
+    /// Ensures that there's an active connection to the `name`d channel's peer.
+    pub async fn ensure_connection(&self, name: &str) -> Result<(), PeerConnectionError> {
+        self.inner.ensure_connection(name).await
     }
 
     pub fn contact_info(&self) -> ContactInfo {
@@ -149,24 +154,8 @@ where
     /// A convenience function for [`Self::update_balance`] that pays the given amount from customer to merchant.
     ///
     /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn pay(
-        &mut self,
-        channel: &str,
-        amount: MoneroAmount,
-    ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
+    pub async fn pay(&mut self, channel: &str, amount: MoneroAmount) -> Result<Updated, ChannelServerError> {
         let delta = MoneroDelta::from(amount);
-        self.update_balance(channel, delta).await
-    }
-
-    /// A convenience function for [`Self::update_balance`] that refunds the given amount from merchant to customer.
-    ///
-    /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn refund(
-        &mut self,
-        channel: &str,
-        amount: MoneroAmount,
-    ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
-        let delta = -MoneroDelta::from(amount);
         self.update_balance(channel, delta).await
     }
 
@@ -174,21 +163,9 @@ where
     ///
     /// It is assumed that the user has verified that the payment is acceptable. There is no recourse to interrupt
     /// the update process manually at this point (although the update can still fail for a myriad reasons).
-    ///
-    /// The usual flow is:
-    /// 1. Generating the necessary proofs for the update.
-    /// 2. Sending the update request and proofs to the remote peer.
-    /// 3. Waiting for the remote peer to confirm the update (or reject it) and respond with the final partial
-    ///    signature and transaction.
-    /// 4. Verify the partial signature and transaction.
-    /// 5. Inform peer of the result of the verification.
-    /// 6. Return the same result to the client.
-    pub async fn update_balance(
-        &mut self,
-        channel: &str,
-        delta: MoneroDelta,
-    ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
-        self.inner.update_balance_protocol(channel, delta).await
+    pub async fn update_balance(&mut self, channel: &str, delta: MoneroDelta) -> Result<Updated, ChannelServerError> {
+        self.ensure_connection(channel).await?;
+        self.inner.customer_channel_update(channel, delta).await
     }
 
     pub async fn rescan_for_funding(&self, channel: &str) {
@@ -233,6 +210,25 @@ where
 
     async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
         self.network_client.start_listening(addr).await?;
+        Ok(())
+    }
+
+    async fn ensure_connection(&self, name: &str) -> Result<(), PeerConnectionError> {
+        debug!("Ensuring connection to peer for channel {name}");
+        let mut client = self.network_client.clone();
+        let channel = self.channels.peek(name).await.ok_or(PeerConnectionError::ChannelNotFound(name.to_string()))?;
+        let contact_info = channel.peer_info().clone();
+        drop(channel);
+        let current_peers = client.connected_peers().await?;
+        if current_peers.contains(&contact_info.peer_id) {
+            debug!("Channel {name} is already connected. Great!");
+        } else {
+            client.dial(contact_info.address.clone()).await?;
+            info!(
+                "Reconnected to peer {}({}) for channel {name}",
+                contact_info.name, contact_info.peer_id
+            );
+        }
         Ok(())
     }
 
@@ -892,6 +888,140 @@ where
         Ok(())
     }
 
+    // ----------------------------             Channel update methods              ----------------------------------//
+    async fn customer_channel_update(&self, name: &str, delta: MoneroDelta) -> Result<Updated, ChannelServerError> {
+        let proofs = self.generate_next_witness(name, delta).await?;
+        let index = proofs.private_outputs.update_count;
+        info!("💸️  Exchange proofs for update {index} in channel {name} with merchant");
+        let update_info = UpdateInfo { index, delta, proof: proofs.public_only() };
+        let merchant_proofs = self.customer_send_update(name, update_info).await?;
+        info!("💸️  Received update {index} proofs for channel {name} for merchant");
+        self.validate_update_proofs(name, index, delta, &merchant_proofs).await?;
+        let result = self.store_update_proofs(name, proofs, merchant_proofs).await?;
+        Ok(result)
+    }
+
+    async fn generate_next_witness(
+        &self,
+        channel_name: &str,
+        delta: MoneroDelta,
+    ) -> Result<UpdateProofs, ChannelServerError> {
+        debug!("💸️  Fetching last update for channel {channel_name}.");
+        let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let state = channel.state().as_open()?;
+        let last_witness = state.current_witness();
+        let mut index = state.update_count();
+        let metadata = state.metadata().clone();
+        drop(channel);
+        index += 1;
+        info!("💸️  Generating witness_{index} for channel {channel_name}.");
+        let blinding_dleq = GenericScalar::random(&mut rand::rng());
+        let proofs = self.delegate.generate_update(index, delta, &last_witness, &blinding_dleq, &metadata).await?;
+        info!("💸️  Witness_{index} for channel {channel_name} successfully generated.");
+        Ok(proofs)
+    }
+
+    async fn customer_send_update(&self, name: &str, info: UpdateInfo) -> Result<UpdateInfo, ChannelServerError> {
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let peer = channel.peer_id();
+        drop(channel);
+        let mut client = self.network_client.clone();
+        debug!("💸️  Exchanging update {} proofs with merchant for channel {name}.", info.index);
+        let merchant_update = client.send_update(peer, name, info).await??;
+        let (remote_name, remote_proofs) = merchant_update.open();
+        confirm_channel_matches(&remote_name, name)?;
+        Ok(remote_proofs)
+    }
+
+    async fn merchant_exchange_update(
+        &self,
+        envelope: MessageEnvelope<UpdateInfo>,
+    ) -> Result<GreaseResponse, GreaseResponse> {
+        let (name, info) = envelope.open();
+        info!("💸️  Received new channel update request from customer for channel {name}");
+        let delta = info.delta;
+        let channel = self.channels.peek(&name).await.ok_or_else(|| {
+            GreaseResponse::ChannelUpdate(Err(RemoteServerError::internal(format!("Channel {name} not found."))))
+        })?;
+        let state = channel.state().as_open().map_err(|e| {
+            GreaseResponse::ChannelUpdate(Err(RemoteServerError::internal(format!("Channel is not open. {e}"))))
+        })?;
+        // Expect the update index to be one more than the current update count.
+        let index = state.update_count() + 1;
+        drop(channel);
+        info!("💸️  Validating update {index} for channel {name}");
+        self.validate_update_proofs(&name, index, delta, &info)
+            .await
+            .map_err(|e| GreaseResponse::ChannelUpdate(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
+        info!("💸️  Validating update {index} for channel {name} is VALID.");
+        let my_proofs = self.generate_next_witness(&name, delta).await.map_err(|e| {
+            GreaseResponse::ChannelUpdate(Err(RemoteServerError::internal(format!(
+                "Could not generate update proof. {e}"
+            ))))
+        })?;
+        let proof = my_proofs.public_only();
+        let updated = self.store_update_proofs(&name, my_proofs, info).await.map_err(|e| {
+            GreaseResponse::ChannelUpdate(Err(RemoteServerError::internal(format!(
+                "Could not generate update proof. {e}"
+            ))))
+        })?;
+        info!(
+            "💸️  Channel {name} update #{}. Merchant: {} XMR. Customer: {} XMR",
+            updated.update_count, updated.new_balances.merchant, updated.new_balances.customer
+        );
+        let peer_proofs = UpdateInfo { index, delta, proof };
+        let envelope = MessageEnvelope::new(name, peer_proofs);
+        Ok(GreaseResponse::ChannelUpdate(Ok(envelope)))
+    }
+
+    async fn validate_update_proofs(
+        &self,
+        name: &str,
+        index: u64,
+        delta: MoneroDelta,
+        peer_proofs: &UpdateInfo,
+    ) -> Result<(), ChannelServerError> {
+        // The update index must match the one we generated.
+        if peer_proofs.index != index {
+            return Err(ChannelServerError::ProtocolError(format!(
+                "Mismatched update index. Expected {index}, got {}",
+                peer_proofs.index
+            )));
+        }
+        // The update delta must match the one we requested.
+        if peer_proofs.delta != delta {
+            return Err(ChannelServerError::ProtocolError(format!(
+                "Mismatched update delta. Expected {:?}, got {:?}",
+                delta, peer_proofs.delta
+            )));
+        }
+        // Verify the peer's proofs.
+        debug!("💸️  Validating peer's update {index} proofs for channel {name}.");
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let metadata = channel.state().metadata().clone();
+        drop(channel);
+        self.delegate.verify_update(index, delta, &peer_proofs.proof, &metadata).await?;
+        debug!("💸️  Peer's update {index} proofs are VALID for channel {name}.");
+        Ok(())
+    }
+
+    // Make sure proofs are validated before calling this!
+    async fn store_update_proofs(
+        &self,
+        name: &str,
+        my_proofs: UpdateProofs,
+        peer_proofs: UpdateInfo,
+    ) -> Result<Updated, ChannelServerError> {
+        let index = my_proofs.private_outputs.update_count;
+        let delta = peer_proofs.delta;
+        let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let event = LifeCycleEvent::ChannelUpdate(Box::new((my_proofs, peer_proofs)));
+        channel.handle_event(event)?;
+        debug!("💸️  Update {index} proofs stored for channel {name}.");
+        let result = Updated { new_balances: channel.state().balance(), update_count: index, delta };
+        Ok(result)
+    }
+
     //---------------------------------   Network request handling functions   ---------------------------------//
 
     /// Business logic handling for payment channel requests.
@@ -945,139 +1075,8 @@ where
             GreaseRequest::ExchangeProof0(envelope) => {
                 self.merchant_exchange_proof0(envelope).await.unwrap_or_else(|early| early)
             }
-            GreaseRequest::StartChannelUpdate(request) => {
-                let (name, update) = request.open();
-                trace!("🖥️  Balance update request received for channel {name}");
-                let response = self.respond_to_update_request(name, update).await;
-                GreaseResponse::ConfirmUpdate(response)
-            }
-            GreaseRequest::FinalizeChannelUpdate(request) => {
-                let (name, update) = request.open();
-                trace!("🖥️  Channel update finalization request received for channel {name}");
-                self.respond_to_finalization(name, update).await;
-                GreaseResponse::NoResponse
-            }
-        }
-    }
-
-    // ----------------------------             Channel update methods              ----------------------------------//
-    async fn update_balance_protocol(
-        &self,
-        channel_name: &str,
-        delta: MoneroDelta,
-    ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
-        // Get peer ID for the channel
-        let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        let peer = channel.peer_id();
-        drop(channel);
-        // 1. Generating the necessary proofs for the update.
-        let update = self.generate_update_proofs(channel_name, delta).await?;
-        // 2. Send the update request w/ proofs to the peer and 3, wait for the remote peer to confirm/reject
-        let peer_proofs = self.send_update_proofs(channel_name, peer, update).await?;
-        let peer_update = match peer_proofs {
-            StartChannelUpdateConfirmation::Rejected(rej) => {
-                info!("🖥️  Channel update was rejected by peer: {}", rej.reason);
-                debug!("🖥️  Channel rejection. Peer's last update was: {:?}", rej.last_update);
-                // TODO - use the rej.last_update to do error recovery if needed
-                return Err(ChannelServerError::UpdateError(rej.reason));
-            }
-            StartChannelUpdateConfirmation::Confirmed(update) => {
-                trace!("🖥️  Channel update confirmed by peer. Proceeding to verification.");
-                update
-            }
-        };
-        // 4. Verify the partial signature and transaction.
-        let verification_result = self.verify_peer_proofs_and_tx(channel_name, peer_update).await?;
-        // 5. Inform peer of the result of the verification.
-        self.send_finalization(channel_name, peer, verification_result.clone()).await;
-        // 6. Return the same result to the client.
-        Ok(verification_result)
-    }
-
-    async fn generate_update_proofs(
-        &self,
-        _name: &str,
-        _delta: MoneroDelta,
-    ) -> Result<ChannelUpdate, ChannelServerError> {
-        todo!()
-        // let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        // let last_update = channel.state().latest_secrets().ok_or(ChannelServerError::InvalidState(format!(
-        //     "Channel {name} was not in Open state"
-        // )))?;
-        // let update = self.delegate.generate_update_proofs(delta, &last_update)?;
-        // Ok(update)
-    }
-
-    async fn send_update_proofs(
-        &self,
-        name: &str,
-        peer: PeerId,
-        update: ChannelUpdate,
-    ) -> Result<StartChannelUpdateConfirmation, ChannelServerError> {
-        let mut client = self.network_client.clone();
-        let result = client.update_balance(peer, name, update).await?;
-        trace!("🖥️  Channel update: Peer responded with an accept/reject message to our initial update request.");
-        Ok(result)
-    }
-
-    async fn verify_peer_proofs_and_tx(
-        &self,
-        name: &str,
-        confirmation: ChannelUpdate,
-    ) -> Result<ChannelUpdateFinalization, ChannelServerError> {
-        let _proofs_ok = self.verify_peer_proofs(name, &confirmation).await;
-        todo!("verify_peer_proofs not implemented yet");
-    }
-
-    async fn send_finalization(&self, _name: &str, _peer: PeerId, _confirmation: ChannelUpdateFinalization) {
-        todo!()
-    }
-
-    async fn verify_peer_proofs(&self, _name: &str, _confirmation: &ChannelUpdate) -> Result<(), UpdateError> {
-        todo!()
-    }
-
-    async fn get_latest_update(&self, name: &str) -> Result<Option<ChannelUpdate>, ChannelServerError> {
-        let _channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        todo!()
-    }
-
-    /// Carry out the steps need to handle a payment channel update as a Responder. This entails:
-    /// 1. Verifying the update proofs and transaction partial signature. If they are invalid, we reject the update.
-    /// 2. Generate our own update proofs.
-    /// 3. Return the update confirmation response.
-    /// 4. Wait for the finalization from the peer and note the outcome.
-    async fn respond_to_update_request(
-        &self,
-        name: String,
-        update: ChannelUpdate,
-    ) -> Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError> {
-        if let Err(err) = self.verify_peer_proofs(&name, &update).await {
-            info!("🖥️  Update proofs are invalid. Rejecting update request. {err}");
-            let my_update = self.get_latest_update(&name).await?;
-            let rej = PaymentRejection::new(err, my_update);
-            let result = StartChannelUpdateConfirmation::Rejected(rej);
-            return Ok(MessageEnvelope::new(name, result));
-        }
-        let update = self.generate_update_proofs(&name, update.delta).await?;
-        // TODO - add a pending update to the channel state
-        let confirmation = StartChannelUpdateConfirmation::Confirmed(update);
-        Ok(MessageEnvelope::new(name, confirmation))
-    }
-
-    async fn respond_to_finalization(&self, _name: String, update: ChannelUpdateFinalization) {
-        match update {
-            ChannelUpdateFinalization::Finalized { txid, balances } => {
-                trace!(
-                    "⚡️  Channel update finalized with txid {txid}. Merchant: {}. Customer: {}",
-                    balances.merchant,
-                    balances.customer
-                );
-                todo!("move the pending update in the state to the updates Vector");
-            }
-            ChannelUpdateFinalization::Rejected(rej) => {
-                info!("⚡️  Channel update was rejected at the final hurdle :(. Reason: {}", rej.reason);
-                todo!("Drop the pending update in the state");
+            GreaseRequest::ChannelUpdate(envelope) => {
+                self.merchant_exchange_update(envelope).await.unwrap_or_else(|early| early)
             }
         }
     }

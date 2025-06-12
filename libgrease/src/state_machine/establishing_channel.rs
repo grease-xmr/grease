@@ -158,7 +158,9 @@ impl EstablishingState {
             my_proof0: self.my_proof0.unwrap(),
             peer_proof0: self.peer_proof0.unwrap(),
             kes_proof: self.kes_proof.unwrap(),
-            current_commitment_tx_proof: vec![],
+            current_private_outputs: None,
+            current_public_outputs: None,
+            current_peer_public_outputs: None,
             update_count: 0,
         };
         Ok(open_channel)
