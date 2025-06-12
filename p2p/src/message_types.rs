@@ -2,6 +2,7 @@ use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
+use libgrease::crypto::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
     ChannelUpdate, ChannelUpdateFinalization, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
     MultisigSplitSecretsResponse, StartChannelUpdateConfirmation, TransactionRecord,
@@ -19,15 +20,18 @@ use std::fmt::{Display, Formatter};
 /// channel.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum GreaseRequest {
+    /// The customer proposes a new channel to the merchant.
     ProposeChannelRequest(NewChannelProposal),
     /// The customer sends its multisig wallet key and expects the merchant keys as a response.
     MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
     /// The customer sends its split secrets to the merchant, and expects the merchant's split secrets and a
     /// signature from the KES in return.
     MsSplitSecretExchange(MessageEnvelope<MultisigSplitSecrets>),
-    /// The merchant wants customer to confirm that the wallet is created correctly by checking the address of the
-    /// 2-of-2 wallet, and send over the split secrets at the same time (Final prep phase).
+    /// The customer wants to confirm that the wallet is created correctly.
     ConfirmMsAddress(MessageEnvelope<String>),
+    /// The customer is requesting an exchange of witness0 proofs as one of the final steps for establishing a new
+    /// channel
+    ExchangeProof0(MessageEnvelope<PublicProof0>),
     /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
     /// proofs and respond their own proofs. The responder responds with [`GreaseResponse::ConfirmUpdate`].
     StartChannelUpdate(MessageEnvelope<ChannelUpdate>),
@@ -47,6 +51,7 @@ pub enum GreaseResponse {
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
+    ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
     ConfirmUpdate(Result<MessageEnvelope<StartChannelUpdateConfirmation>, RemoteServerError>),
     ChannelClosed,
     ChannelNotFound,
@@ -94,6 +99,7 @@ impl Display for GreaseResponse {
             GreaseResponse::ConfirmUpdate(_) => write!(f, "Confirmation Update"),
             GreaseResponse::NoResponse => write!(f, "No response to send"),
             GreaseResponse::MsSplitSecretExchange(_) => write!(f, "MsSplitSecretExchange"),
+            GreaseResponse::ExchangeProof0(_) => write!(f, "ExchangeProof0"),
         }
     }
 }
@@ -107,6 +113,7 @@ impl GreaseRequest {
             GreaseRequest::StartChannelUpdate(env) => env.channel_name(),
             GreaseRequest::FinalizeChannelUpdate(env) => env.channel_name(),
             GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
+            GreaseRequest::ExchangeProof0(env) => env.channel_name(),
         }
     }
 }
@@ -158,6 +165,11 @@ pub enum ClientCommand {
         peer_id: PeerId,
         envelope: MessageEnvelope<String>,
         sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
+    },
+    ExchangeProof0 {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<PublicProof0>,
+        sender: oneshot::Sender<Result<MessageEnvelope<PublicProof0>, RemoteServerError>>,
     },
     InitiateNewUpdate {
         peer_id: PeerId,

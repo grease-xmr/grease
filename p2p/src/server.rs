@@ -12,7 +12,7 @@ use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use libgrease::crypto::zk_objects::{GenericPoint, KesProof, ShardInfo};
+use libgrease::crypto::zk_objects::{generate_txc0_nonces, GenericPoint, KesProof, PublicProof0, ShardInfo};
 use libgrease::monero::data_objects::{
     ChannelUpdate, ChannelUpdateFinalization, FundingTransaction, MessageEnvelope, MultisigKeyInfo,
     MultisigSplitSecrets, MultisigSplitSecretsResponse, PaymentRejection, StartChannelUpdateConfirmation,
@@ -249,6 +249,9 @@ where
     ///       3. Create a new multisig wallet with the public keys.
     ///    2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
     ///    3. Verify the wallet address with the peer.
+    ///    4. Watch for the funding transaction to be confirmed.
+    ///    5. Generate the proofs to TXc0 (along with witness_0).
+    ///    6. Exchange proofs with the merchant.
     pub async fn customer_establish_new_channel(
         &self,
         proposal: NewChannelProposal,
@@ -304,9 +307,17 @@ where
         let birthday = Some(wallet.birthday());
         info!("👛️ Multisig wallet has been successfully created for channel {name}.");
         self.watch_for_funding_transaction(&name, pvk, pub_spend_key, birthday).await?;
+        info!("👁️‍🗨️ Generating initial ZK-proofs for channel {name}.");
+        let peer_proof = self.generate_and_store_witness0(&name).await?;
+        info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {name} with merchant.");
+        let merchant_proof = self.customer_send_proofs0(&name, peer_id, peer_proof).await?;
+        info!("👁️‍🗨️ Verifying merchant's initial transaction proof for channel {name}. (ZK-Witness0 proof)");
+        self.verify_proof0(&name, &merchant_proof).await?;
+        info!("👁️‍🗨️ Merchant's initial transaction proof is VALID for channel {name}. (ZK-Witness0 proof)");
+        self.store_public_proof0(&name, merchant_proof).await?;
+        info!("👁️‍🗨️ Stored Merchant's initial transaction proof for channel {name}.");
         // This is as far as we can take the channel establishment process for now.
-        // It will be continued once we received the KES creation confirmation from the merchant, as the merchant now
-        // has everything they need to create the KES.
+        // If Txf has already been confirmed, then we will be in the Established state.
         Ok(name)
     }
 
@@ -317,12 +328,13 @@ where
             return None;
         }
         let wallet_info = match channel.state().as_establishing().ok()?.wallet() {
-            Some(info) => info,
+            Some(info) => info.clone(),
             None => {
                 debug!("Channel {name} does not have a wallet, so no need to scan for funding transaction.");
                 return None;
             }
         };
+        drop(channel);
         let pvt_vk = wallet_info.joint_private_view_key.clone();
         let pub_sk = wallet_info.joint_public_spend_key.clone();
         let bday = wallet_info.birthday.saturating_sub(5);
@@ -460,7 +472,7 @@ where
         Ok(name)
     }
 
-    //----------------------------   Channel establishment functions (Customer)   ----------------------------------//
+    //----------------------------        Channel establishment functions         ----------------------------------//
 
     async fn exchange_wallet_keys(
         &self,
@@ -784,6 +796,80 @@ where
         Ok(())
     }
 
+    async fn generate_and_store_witness0(&self, name: &str) -> Result<PublicProof0, ChannelServerError> {
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let metadata = channel.state().metadata().clone();
+        drop(channel);
+        debug!("👁️‍🗨️ Generating witness_0 proof for channel {name}.");
+        let inputs = generate_txc0_nonces(&mut rand::rng());
+        let proof = self.delegate.generate_initial_proofs(inputs, &metadata).await?;
+        let pub_proof = proof.public_only();
+        debug!("👁️‍🗨️ Storing witness_0 proof for channel {name}.");
+        let event = LifeCycleEvent::MyProof0Generated(Box::new(proof));
+        let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        channel.handle_event(event)?;
+        Ok(pub_proof)
+    }
+
+    async fn customer_send_proofs0(
+        &self,
+        name: &str,
+        peer_id: PeerId,
+        proof: PublicProof0,
+    ) -> Result<PublicProof0, ChannelServerError> {
+        debug!("👁️‍🗨️ Sending public witness_0 proof to peer for channel {name}.");
+        let mut client = self.network_client.clone();
+        let proof = client.send_proof0(peer_id, name, proof).await??;
+        let (remote_name, remote_proof) = proof.open();
+        confirm_channel_matches(&remote_name, name)?;
+        debug!("👁️‍🗨️ Received witness_0 proof from peer for channel {name}.");
+        Ok(remote_proof)
+    }
+
+    async fn store_public_proof0(&self, name: &str, peer_proof: PublicProof0) -> Result<(), ChannelServerError> {
+        let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof));
+        channel.handle_event(event)?;
+        debug!("👁️‍🗨️ Stored peer's witness_0 proof for channel {name}.");
+        Ok(())
+    }
+
+    /// The merchant receives the witness0 proof from the customer and returns their own proof.
+    async fn merchant_exchange_proof0(
+        &self,
+        envelope: MessageEnvelope<PublicProof0>,
+    ) -> Result<GreaseResponse, GreaseResponse> {
+        debug!("👁️‍🗨️  Received witness_0 proof exchange request");
+        let (name, peer_proof) = envelope.open();
+        debug!("👁️‍🗨️  Verifying received witness0 proof for channel {name}.");
+        self.verify_proof0(&name, &peer_proof)
+            .await
+            .map_err(|e| GreaseResponse::ExchangeProof0(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
+        debug!("👁️‍🗨️  Storing witness0 proof for channel {name}.");
+        self.store_public_proof0(&name, peer_proof).await.map_err(|e| {
+            GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
+                "Error storing witness_0 proof: {e}"
+            ))))
+        })?;
+        debug!("👁️‍🗨️  Customer's witness0 proof is VALID for channel {name}.");
+        let pub_proof = self.generate_and_store_witness0(&name).await.map_err(|e| {
+            GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
+                "Failed to generate witness_0 proof: {e}"
+            ))))
+        })?;
+        debug!("👁️‍🗨️  Sending witness_0 proof to customer for channel {name}.");
+        let envelope = MessageEnvelope::new(name, pub_proof);
+        Ok(GreaseResponse::ExchangeProof0(Ok(envelope)))
+    }
+
+    async fn verify_proof0(&self, name: &str, proof: &PublicProof0) -> Result<(), ChannelServerError> {
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let metadata = channel.state().metadata().clone();
+        drop(channel);
+        self.delegate.verify_initial_proofs(proof, &metadata).await?;
+        Ok(())
+    }
+
     /// Returns the channel metadata for the given channel name, if the current lifecycle state has the information
     /// available.
     async fn get_channel_metadata(&self, channel_name: &str) -> Option<ChannelMetadata> {
@@ -805,8 +891,6 @@ where
         channel.handle_event(event)?;
         Ok(())
     }
-
-    // ------------------------------   State machine handling functions (Common)   ----------------------------------//
 
     //---------------------------------   Network request handling functions   ---------------------------------//
 
@@ -857,6 +941,9 @@ where
                 let response = self.address_matches(&channel_name, &address).await.unwrap_or(false);
                 let envelope = MessageEnvelope::new(channel_name, response);
                 GreaseResponse::ConfirmMsAddress(Ok(envelope))
+            }
+            GreaseRequest::ExchangeProof0(envelope) => {
+                self.merchant_exchange_proof0(envelope).await.unwrap_or_else(|early| early)
             }
             GreaseRequest::StartChannelUpdate(request) => {
                 let (name, update) = request.open();

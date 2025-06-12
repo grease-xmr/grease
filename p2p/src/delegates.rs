@@ -4,7 +4,7 @@ use libgrease::amount::MoneroAmount;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    Comm0PrivateInputs, Comm0PublicOutputs, GenericPoint, InitialProofsResult, KesProof, PartialEncryptedKey,
+    Comm0PrivateInputs, GenericPoint, KesProof, PartialEncryptedKey, Proofs0, PublicProof0,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
@@ -63,15 +63,14 @@ pub trait FundChannel {
 
 pub trait GreaseInitializer {
     fn generate_initial_proofs(
-        &mut self,
+        &self,
         inputs: Comm0PrivateInputs,
         metadata: &ChannelMetadata,
-    ) -> impl Future<Output = Result<InitialProofsResult, DelegateError>> + Send;
+    ) -> impl Future<Output = Result<Proofs0, DelegateError>> + Send;
 
     fn verify_initial_proofs(
         &self,
-        public_outputs: &Comm0PublicOutputs,
-        proofs: &[u8],
+        proof: &PublicProof0,
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
@@ -122,18 +121,17 @@ impl ProposalVerifier for DummyDelegate {
 
 impl GreaseInitializer for DummyDelegate {
     async fn generate_initial_proofs(
-        &mut self,
+        &self,
         _in: Comm0PrivateInputs,
         metadata: &ChannelMetadata,
-    ) -> Result<InitialProofsResult, DelegateError> {
+    ) -> Result<Proofs0, DelegateError> {
         info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
-        Ok(InitialProofsResult::default())
+        Ok(Proofs0::default())
     }
 
     async fn verify_initial_proofs(
         &self,
-        _outputs: &Comm0PublicOutputs,
-        _proof: &[u8],
+        _proof: &PublicProof0,
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());

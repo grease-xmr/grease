@@ -81,7 +81,7 @@ pub struct WalletBalance {
     pub blocks_left: usize,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct TransactionId {
     pub id: String,
 }
