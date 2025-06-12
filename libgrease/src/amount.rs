@@ -111,7 +111,10 @@ impl SubAssign for MoneroAmount {
 
 impl Sum for MoneroAmount {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(MoneroAmount::default(), |acc, x| acc + x)
+        iter.fold(MoneroAmount::default(), |acc, x| {
+            let total = acc.amount.checked_add(x.amount).expect("MoneroAmount overflow");
+            MoneroAmount { amount: total }
+        })
     }
 }
 
