@@ -20,6 +20,7 @@ async fn main() -> Result<(), WalletError> {
             .unwrap();
     println!("Alice: {} / {}", k_a.as_hex(), p_a.as_hex());
     // Bob generates a keypair
+    // Bob's address: 4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3
     let (k_b, p_b) =
         Curve25519PublicKey::keypair_from_hex("73ee459dd8a774afdbffafe6879ebc3b925fb23ceec9ac631f4ae02acff05f07")
             .unwrap();

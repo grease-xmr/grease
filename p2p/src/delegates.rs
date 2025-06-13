@@ -96,13 +96,6 @@ pub trait KesProver {
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
-pub trait GreaseChannelDelegate:
-    GreaseInitializer + Updater + ProposalVerifier + VerifiableSecretShare + FundChannel + KesProver + Sync + Send + Clone
-{
-}
-
-//------------------------------    Update generation and verification   -----------------------------------------------
-
 pub trait Updater {
     fn generate_update(
         &self,
@@ -122,7 +115,35 @@ pub trait Updater {
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
+//------------------------------              Channel closing            -----------------------------------------------
+
+pub trait ChannelClosure {
+    /// Verifies that the witness (ω_i) shared by the peer is valid for the given commitment, T_i.
+    fn verify_peer_witness(
+        &self,
+        witness_i: &GenericScalar,
+        commitment: &GenericPoint,
+        metadata: &ChannelMetadata,
+    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
+}
+//--------------------       Convenience all-inclusive delegate trait     ----------------------------------------------
+
+pub trait GreaseChannelDelegate:
+    Sync
+    + Send
+    + Clone
+    + GreaseInitializer
+    + Updater
+    + ChannelClosure
+    + ProposalVerifier
+    + VerifiableSecretShare
+    + FundChannel
+    + KesProver
+{
+}
+
 //----------------------------------------   Dummy Delegate ------------------------------------------------------------
+
 #[derive(Debug, Clone)]
 pub struct DummyDelegate {
     pub rpc_address: String,
@@ -301,6 +322,21 @@ impl Updater for DummyDelegate {
         } else {
             Err(DelegateError("Invalid update proof".to_string()))
         }
+    }
+}
+
+impl ChannelClosure for DummyDelegate {
+    async fn verify_peer_witness(
+        &self,
+        _w: &GenericScalar,
+        _c: &GenericPoint,
+        metadata: &ChannelMetadata,
+    ) -> Result<(), DelegateError> {
+        info!(
+            "DummyDelegate: Verifying peer witness for channel {} is correct.",
+            metadata.channel_id().name()
+        );
+        Ok(())
     }
 }
 

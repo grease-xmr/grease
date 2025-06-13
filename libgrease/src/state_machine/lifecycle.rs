@@ -202,15 +202,20 @@ pub mod test {
         KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, PublicUpdateProof,
         ShardInfo, UpdateInfo, UpdateProofs,
     };
-    use crate::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId};
+    use crate::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
     use crate::state_machine::new_channel::NewChannelBuilder;
     use crate::state_machine::open_channel::EstablishedChannelState;
-    use crate::state_machine::NewChannelState;
+    use crate::state_machine::{ChannelCloseRecord, NewChannelState};
     use blake2::Blake2b512;
     use log::*;
+
+    const ALICE_ADDRESS: &str =
+        "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
+    const BOB_ADDRESS: &str =
+        "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state() -> NewChannelState {
         // All this info is known, or can be scanned in from a QR code etc
@@ -218,12 +223,15 @@ pub mod test {
         let initial_customer_amount = MoneroAmount::from_xmr("1.25").unwrap();
         let initial_merchant_amount = MoneroAmount::from_xmr("0.0").unwrap();
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
+        let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
         let initial_state = initial_state
             .with_kes_public_key(kes_pubkey)
             .with_customer_initial_balance(initial_customer_amount)
             .with_merchant_initial_balance(initial_merchant_amount)
             .with_my_user_label("me")
             .with_peer_label("you")
+            .with_merchant_closing_address(closing.merchant)
+            .with_customer_closing_address(closing.customer)
             .build::<Blake2b512>()
             .expect("Failed to build initial state");
         // Create a new channel state machine
@@ -347,7 +355,12 @@ pub mod test {
         assert_eq!(state.update_count(), 3);
         assert_eq!(state.role(), ChannelRole::Customer);
         assert_eq!(state.my_balance(), MoneroAmount::from_xmr("0.65").unwrap());
-        let Ok(mut state) = state.close() else {
+        let close = ChannelCloseRecord {
+            final_balance: state.balance(),
+            update_count: state.update_count(),
+            witness: Default::default(),
+        };
+        let Ok(mut state) = state.close(close) else {
             panic!("Failed to transition to closing state");
         };
         state.with_final_tx(TransactionId::new("finaltx1"));

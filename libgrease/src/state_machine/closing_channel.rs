@@ -1,19 +1,40 @@
+use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_metadata::ChannelMetadata;
+use crate::crypto::zk_objects::{
+    GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, ShardInfo,
+};
 use crate::lifecycle_impl;
-use crate::monero::data_objects::TransactionId;
+use crate::monero::data_objects::{MultisigWalletData, TransactionId};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
-use crate::state_machine::commitment_tx::CommitmentTransaction;
 use crate::state_machine::error::LifeCycleError;
 use monero::Network;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelCloseRecord {
+    pub final_balance: Balances,
+    pub update_count: u64,
+    pub witness: GenericScalar,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClosingChannelState {
     pub(crate) metadata: ChannelMetadata,
-    pub(crate) commitment_tx: CommitmentTransaction,
-    pub(crate) final_tx: Option<TransactionId>,
     pub(crate) reason: ChannelClosedReason,
+    pub(crate) shards: ShardInfo,
+    pub(crate) multisig_wallet: MultisigWalletData,
+    pub(crate) funding_transactions: HashMap<TransactionId, MoneroAmount>,
+    pub(crate) peer_witness: GenericScalar,
+    pub(crate) my_proof0: Proofs0,
+    pub(crate) peer_proof0: PublicProof0,
+    pub(crate) kes_proof: KesProof,
+    pub(crate) last_private_outputs: PrivateUpdateOutputs,
+    pub(crate) last_public_outputs: PublicUpdateOutputs,
+    pub(crate) last_peer_public_outputs: PublicUpdateOutputs,
+    pub(crate) update_count: u64,
+    pub(crate) final_tx: Option<TransactionId>,
 }
 
 impl ClosingChannelState {

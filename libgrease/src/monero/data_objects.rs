@@ -1,8 +1,8 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
-use monero::{Address, Network, PrivateKey, PublicKey, ViewPair};
+use monero::{Address, Error as AddressError, Network, PrivateKey, PublicKey, ViewPair};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
-
+use std::str::FromStr;
 // re-export
 use crate::balance::Balances;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
@@ -194,4 +194,26 @@ pub struct TransactionRecord {
     pub channel_name: String,
     pub transaction_id: TransactionId,
     pub amount: MoneroAmount,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ClosingAddresses {
+    pub customer: Address,
+    pub merchant: Address,
+}
+
+impl ClosingAddresses {
+    pub fn new(customer: &str, merchant: &str) -> Result<Self, AddressError> {
+        let customer = Address::from_str(customer)?;
+        let merchant = Address::from_str(merchant)?;
+        Ok(Self { customer, merchant })
+    }
+
+    pub fn customer(&self) -> &Address {
+        &self.customer
+    }
+
+    pub fn merchant(&self) -> &Address {
+        &self.merchant
+    }
 }

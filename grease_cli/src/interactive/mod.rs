@@ -1,6 +1,7 @@
 use crate::interactive::menus::{top_menu, Menu};
 use grease_p2p::{ConversationIdentity, NetworkServer, OutOfBandMerchantInfo, PaymentChannels};
 use std::fmt::Display;
+use std::str::FromStr;
 
 pub mod formatting;
 pub mod menus;
@@ -19,6 +20,7 @@ use libgrease::state_machine::lifecycle::LifecycleStage;
 use libgrease::state_machine::ChannelSeedBuilder;
 use log::*;
 use menus::*;
+use monero::Address;
 use rand::{Rng, RngCore};
 
 pub type MoneroNetworkServer = NetworkServer<DummyDelegate>;
@@ -125,7 +127,7 @@ impl InteractiveApp {
                 PROPOSE_CHANNEL => handle_response(self.propose_new_channel().await),
                 SUBMIT_FUNDING_TX => handle_response(self.submit_funding_tx().await),
                 CONNECT_TO_CHANNEL => handle_response(self.connect_to_channel().await),
-                CLOSE_CHANNEL => println!("Coming soon"),
+                CLOSE_CHANNEL => handle_response(self.close_channel().await),
                 DISPUTE_CHANNEL_CLOSE => println!("Coming soon"),
                 FORCE_CLOSE_CHANNEL => println!("Coming soon"),
                 LIST_CHANNELS => self.print_channel_names().await,
@@ -181,7 +183,15 @@ impl InteractiveApp {
         // Get the merchant details and add our info
         let oob_info = dialoguer::Input::<String>::new().with_prompt("Paste merchant info").interact()?;
         let oob_info = serde_json::from_str::<OutOfBandMerchantInfo>(&oob_info)?;
-        let proposal = self.create_channel_proposal(oob_info)?;
+        let address = match self.config.refund_address {
+            Some(addr) => addr,
+            None => {
+                let address =
+                    dialoguer::Input::<String>::new().with_prompt("Paste return Monero address").interact()?;
+                Address::from_str(&address).map_err(|e| anyhow!("Invalid address: {e}"))?
+            }
+        };
+        let proposal = self.create_channel_proposal(oob_info, address)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
         let name = self.server.establish_new_channel(proposal.clone()).await?;
@@ -224,9 +234,30 @@ impl InteractiveApp {
         Ok(result)
     }
 
+    async fn close_channel(&mut self) -> Result<String> {
+        if self.current_channel.is_none() {
+            return Err(anyhow!("No channel selected"));
+        }
+        let name = self.current_channel.as_ref().expect("Just checked that a channel is selected");
+        let closing_balance = self.server.close_channel(name).await?;
+        self.save_channels().await?;
+        info!("Channels saved.");
+        Ok(format!(
+            "Channel {name} closed successfully. Final transaction should be broadcast shortly.\n\
+        Closing balances:\n\
+        Merchant: {:15}\n\
+        Customer: {:15}\n\
+        Total:    {:15}",
+            closing_balance.merchant,
+            closing_balance.customer,
+            closing_balance.total()
+        ))
+    }
+
     pub fn create_channel_proposal(
         &self,
         oob_info: OutOfBandMerchantInfo,
+        my_closing_address: Address,
     ) -> Result<NewChannelProposal, anyhow::Error> {
         let my_contact_info = self.identity.contact_info();
         let peer_info = oob_info.contact;
@@ -234,7 +265,8 @@ impl InteractiveApp {
         let key_index = rand::rng().next_u64();
         let user_label = self.identity.id();
         let my_user_label = format!("{user_label}-{key_index}");
-        let proposal = NewChannelProposal::new(seed_info, my_user_label, my_contact_info, peer_info);
+        let proposal =
+            NewChannelProposal::new(seed_info, my_user_label, my_contact_info, my_closing_address, peer_info);
         Ok(proposal)
     }
 
@@ -293,11 +325,16 @@ impl InteractiveApp {
             .ok_or_else(|| anyhow!("No user label found. Is `user_label` configured in the config file?"))?;
         let index = rand::rng().random();
         let channel_id = format!("{label}-{index}");
+        let address = self
+            .config
+            .refund_address()
+            .ok_or_else(|| anyhow!("No refund address found. Is `refund_address` configured in the config file?"))?;
         let seed_info = ChannelSeedBuilder::default()
             .with_key_id(index)
             .with_kes_public_key(kes)
             .with_initial_balances(balances)
             .with_user_label(channel_id)
+            .with_closing_address(address)
             .build()?;
         let info = OutOfBandMerchantInfo::new(contact_info, seed_info);
         let val = serde_json::to_string(&info)?;

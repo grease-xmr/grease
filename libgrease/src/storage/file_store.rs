@@ -53,7 +53,7 @@ mod test {
     use crate::monero::data_objects::TransactionId;
     use crate::state_machine::error::LifeCycleError;
     use crate::state_machine::lifecycle::test::*;
-    use crate::state_machine::ChannelClosedReason;
+    use crate::state_machine::{ChannelCloseRecord, ChannelClosedReason};
 
     /// Saves and loads the state after every transition. We should be able to carry on as if nothing happened.
     #[test]
@@ -80,7 +80,12 @@ mod test {
             let state = store.load_channel(&name).expect("Failed to load Open channel").to_open()?;
             assert_eq!(state.update_count(), 1);
             assert_eq!(state.my_balance(), MoneroAmount::from_xmr("1.15").unwrap());
-            let state = state.close().unwrap().to_channel_state();
+            let close = ChannelCloseRecord {
+                final_balance: state.balance(),
+                update_count: state.update_count(),
+                witness: Default::default(),
+            };
+            let state = state.close(close).unwrap().to_channel_state();
             store.write_channel(&state).expect("Failed to write channel");
             let loaded = store.load_channel(&name).expect("Failed to load Closing channel");
             let mut state = loaded.to_closing()?;

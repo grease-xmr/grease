@@ -4,14 +4,16 @@ use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionRecord,
+    ClosingAddresses, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
+    TransactionRecord,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
-use libgrease::state_machine::{ChannelSeedInfo, ProposedChannelInfo};
+use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, ProposedChannelInfo};
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
+use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -34,6 +36,8 @@ pub enum GreaseRequest {
     /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
     /// proofs and respond their own proofs.
     ChannelUpdate(MessageEnvelope<UpdateInfo>),
+    /// Either party can issue this request, asking for the channel to be closed co-operatively.
+    ChannelClose(MessageEnvelope<ChannelCloseRecord>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -49,8 +53,7 @@ pub enum GreaseResponse {
     ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
     ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
     ChannelUpdate(Result<MessageEnvelope<UpdateInfo>, RemoteServerError>),
-    ChannelClosed,
-    ChannelNotFound,
+    ChannelClose(Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>),
     Error(String),
     /// Do not return a response to the peer at all.
     NoResponse,
@@ -90,12 +93,11 @@ impl Display for GreaseResponse {
                 "Remote server error ({e}) at MsConfirmMsAddress \
             stage"
             ),
-            GreaseResponse::ChannelClosed => write!(f, "Channel Closed"),
-            GreaseResponse::ChannelNotFound => write!(f, "Channel Not Found"),
             GreaseResponse::ChannelUpdate(_) => write!(f, "Channel Update"),
             GreaseResponse::NoResponse => write!(f, "No response to send"),
             GreaseResponse::MsSplitSecretExchange(_) => write!(f, "MsSplitSecretExchange"),
             GreaseResponse::ExchangeProof0(_) => write!(f, "ExchangeProof0"),
+            GreaseResponse::ChannelClose(_) => write!(f, "ChannelClose"),
         }
     }
 }
@@ -109,6 +111,7 @@ impl GreaseRequest {
             GreaseRequest::ChannelUpdate(env) => env.channel_name(),
             GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
             GreaseRequest::ExchangeProof0(env) => env.channel_name(),
+            GreaseRequest::ChannelClose(env) => env.channel_name(),
         }
     }
 }
@@ -171,6 +174,11 @@ pub enum ClientCommand {
         envelope: MessageEnvelope<UpdateInfo>,
         sender: oneshot::Sender<Result<MessageEnvelope<UpdateInfo>, RemoteServerError>>,
     },
+    ChannelClose {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<ChannelCloseRecord>,
+        sender: oneshot::Sender<Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>>,
+    },
     /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
     ConnectedPeers {
         sender: oneshot::Sender<Vec<PeerId>>,
@@ -203,6 +211,8 @@ pub struct NewChannelProposal {
     pub contact_info_proposee: ContactInfo,
     /// Salt used to derive the channel ID - customer (usually) portion
     pub proposer_label: String,
+    /// The address that the proposer will use to close the channel.
+    pub closing_address: Address,
 }
 
 impl NewChannelProposal {
@@ -210,6 +220,7 @@ impl NewChannelProposal {
         seed: ChannelSeedInfo,
         my_label: impl Into<String>,
         my_contact_info: ContactInfo,
+        my_closing_address: Address,
         their_contact_info: ContactInfo,
     ) -> Self {
         Self {
@@ -217,6 +228,7 @@ impl NewChannelProposal {
             contact_info_proposer: my_contact_info,
             contact_info_proposee: their_contact_info,
             proposer_label: my_label.into(),
+            closing_address: my_closing_address,
         }
     }
 
@@ -231,8 +243,17 @@ impl NewChannelProposal {
             ChannelRole::Merchant => (self.proposer_label.clone(), self.seed.user_label.clone()),
             ChannelRole::Customer => (self.seed.user_label.clone(), self.proposer_label.clone()),
         };
-        let channel_id =
-            ChannelId::new::<blake2::Blake2b512>(&merchant_label, &customer_label, self.seed.initial_balances);
+        let (merchant_address, customer_address) = match self.seed.role {
+            ChannelRole::Merchant => (self.closing_address, self.seed.closing_address),
+            ChannelRole::Customer => (self.seed.closing_address, self.closing_address),
+        };
+        let closing_addresses = ClosingAddresses { merchant: merchant_address, customer: customer_address };
+        let channel_id = ChannelId::new::<blake2::Blake2b512>(
+            &merchant_label,
+            &customer_label,
+            self.seed.initial_balances,
+            closing_addresses,
+        );
         ProposedChannelInfo {
             role: self.seed.role,
             kes_public_key: self.seed.kes_public_key.clone(),
@@ -320,6 +341,7 @@ impl From<LifeCycleError> for RejectReason {
             LifeCycleError::NotEnoughFunds => RejectReason::NotANewChannel,
             LifeCycleError::InternalError(s) => RejectReason::Internal(s),
             LifeCycleError::MismatchedUpdateCount { .. } => unreachable!("Mismatched update count"),
+            LifeCycleError::StateMismatch(_) => unreachable!("State mismatch"),
         }
     }
 }
