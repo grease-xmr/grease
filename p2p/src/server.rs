@@ -1093,7 +1093,14 @@ where
             .verify_peer_witness(&peer_witness, &commitment, &metadata)
             .await
             .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
+        // Transition to closing state.
+        
         info!("🔚️  Closing transaction details are VALID for {name}. Closing channel and responding to peer.");
+        let event = LifeCycleEvent::CloseChannel(Box::new(close_info.clone()));
+        let mut channel = self.channels.checkout(&name).await
+            .ok_or(GreaseResponse::ChannelClose(Err(RemoteServerError::ChannelDoesNotExist)))?;
+        channel.handle_event(event)
+            .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::internal(e.to_string()))))?;
         let envelope = MessageEnvelope::new(name, close_info);
         Ok(GreaseResponse::ChannelClose(Ok(envelope)))
     }
