@@ -1094,7 +1094,7 @@ where
             .await
             .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
         // Transition to closing state.
-        
+
         info!("🔚️  Closing transaction details are VALID for {name}. Closing channel and responding to peer.");
         let event = LifeCycleEvent::CloseChannel(Box::new(close_info.clone()));
         let mut channel = self.channels.checkout(&name).await
