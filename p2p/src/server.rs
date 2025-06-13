@@ -10,6 +10,7 @@ use crate::{
 use futures::future::join;
 use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
+use libgrease::balance::Balances;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use libgrease::crypto::zk_objects::{
@@ -20,7 +21,7 @@ use libgrease::monero::data_objects::{
 };
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
-use libgrease::state_machine::{LifeCycleEvent, NewChannelBuilder, ProposedChannelInfo};
+use libgrease::state_machine::{ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, ProposedChannelInfo};
 use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
@@ -88,11 +89,6 @@ where
         self.inner.start_listening(at).await
     }
 
-    /// Provides a cheap clone of the network client. It is thread-safe.
-    pub fn client(&self) -> Client {
-        self.inner.network_client.clone()
-    }
-
     pub async fn list_channels(&self) -> Vec<String> {
         self.inner.channels.list_channels().await
     }
@@ -113,6 +109,7 @@ where
         self.inner.channels.add(channel).await
     }
 
+    /// Returns the multisig wallet address for the given channel and network.
     pub async fn wallet_address(&self, channel_name: &str, network: &str) -> Result<String, ChannelServerError> {
         let channel = self.inner.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let network = match network.to_ascii_lowercase().as_str() {
@@ -154,16 +151,22 @@ where
     /// A convenience function for [`Self::update_balance`] that pays the given amount from customer to merchant.
     ///
     /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn pay(&mut self, channel: &str, amount: MoneroAmount) -> Result<Updated, ChannelServerError> {
+    pub async fn pay(&self, channel: &str, amount: MoneroAmount) -> Result<Updated, ChannelServerError> {
         let delta = MoneroDelta::from(amount);
         self.update_balance(channel, delta).await
+    }
+
+    /// Start the co-operative close process for a channel.
+    pub async fn close_channel(&self, channel: &str) -> Result<Balances, ChannelServerError> {
+        self.ensure_connection(channel).await?;
+        self.inner.close_channel(channel).await
     }
 
     /// Perform a channel update.
     ///
     /// It is assumed that the user has verified that the payment is acceptable. There is no recourse to interrupt
     /// the update process manually at this point (although the update can still fail for a myriad reasons).
-    pub async fn update_balance(&mut self, channel: &str, delta: MoneroDelta) -> Result<Updated, ChannelServerError> {
+    pub async fn update_balance(&self, channel: &str, delta: MoneroDelta) -> Result<Updated, ChannelServerError> {
         self.ensure_connection(channel).await?;
         self.inner.customer_channel_update(channel, delta).await
     }
@@ -408,6 +411,8 @@ where
             .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
             .with_customer_initial_balance(prop.seed.initial_balances.customer)
             .with_kes_public_key(prop.seed.kes_public_key)
+            .with_customer_closing_address(prop.closing_address)
+            .with_merchant_closing_address(prop.seed.closing_address)
             .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data");
         new_state.to_channel_state()
@@ -422,6 +427,8 @@ where
             .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
             .with_customer_initial_balance(prop.seed.initial_balances.customer)
             .with_kes_public_key(prop.seed.kes_public_key)
+            .with_customer_closing_address(prop.closing_address)
+            .with_merchant_closing_address(prop.seed.closing_address)
             .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data");
         new_state.to_channel_state()
@@ -665,7 +672,9 @@ where
     ) -> Result<GreaseResponse, GreaseResponse> {
         trace!("👛️  Split secrets exchange request received");
         let (name, my_shards) = envelope.open();
-        let channel = self.channels.peek(&name).await.ok_or(GreaseResponse::ChannelNotFound)?;
+        let channel = self.channels.peek(&name).await.ok_or(GreaseResponse::MsSplitSecretExchange(Err(
+            RemoteServerError::ChannelDoesNotExist,
+        )))?;
         let state = channel
             .state()
             .as_establishing()
@@ -1022,6 +1031,79 @@ where
         Ok(result)
     }
 
+    //---------------------------------         Channel Closure functions      ---------------------------------//
+
+    async fn close_channel(&self, name: &str) -> Result<Balances, ChannelServerError> {
+        info!("🔚️  Closing channel {name}...");
+        let (close_info, commitment, metadata, peer) = self.get_close_data(name).await?;
+
+        info!("🔚️  Requesting closing transaction info from peer for channel {name}");
+        let mut client = self.network_client.clone();
+        let final_balance = close_info.final_balance;
+        let close_response = client.send_close_request(peer, name, close_info).await??;
+        info!("🔚️  Received closing transaction info for channel {name} from peer. Verifying its authenticity.");
+        let (remote_name, close_response) = close_response.open();
+        confirm_channel_matches(&remote_name, name)?;
+        // Validate the response - in particular, the witness_i should match the T_i that we have on record.
+        let peer_witness = close_response.witness;
+        self.delegate.verify_peer_witness(&peer_witness, &commitment, &metadata).await?;
+
+        // Happy, so close the channel.
+        info!("🔚️  Closing transaction details are VALID for channel {name}. Moving to close channel.");
+        let event = LifeCycleEvent::CloseChannel(Box::new(close_response));
+        let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        channel.handle_event(event)?;
+        info!("🔚️  Channel {name} is is the closing state. Waiting for final transaction to be confirmed.");
+        Ok(final_balance)
+    }
+
+    async fn get_close_data(
+        &self,
+        name: &str,
+    ) -> Result<(ChannelCloseRecord, GenericPoint, ChannelMetadata, PeerId), ChannelServerError> {
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        if !channel.is_open() {
+            return Err(ChannelServerError::InvalidState(format!(
+                "Channel {name} is not open. Cannot close."
+            )));
+        }
+        let state = channel.state().as_open()?;
+        let close_info = state.get_close_record();
+        let commitment = state.current_peer_commitment();
+        let metadata = state.metadata().clone();
+        let peer = channel.peer_id();
+        Ok((close_info, commitment, metadata, peer))
+    }
+
+    async fn respond_to_channel_close(
+        &self,
+        envelope: MessageEnvelope<ChannelCloseRecord>,
+    ) -> Result<GreaseResponse, GreaseResponse> {
+        let (name, peer_close) = envelope.open();
+        info!("🔚️  Received request to close channel {name}");
+        let (close_info, commitment, metadata, _) = self
+            .get_close_data(&name)
+            .await
+            .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::internal(e.to_string()))))?;
+
+        info!("🔚️  Received closing transaction info for channel {name} from peer. Verifying its authenticity.");
+        // Validate the response - in particular, the witness_i should match the T_i that we have on record.
+        let peer_witness = peer_close.witness;
+        self.delegate
+            .verify_peer_witness(&peer_witness, &commitment, &metadata)
+            .await
+            .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
+        // Transition to closing state.
+        
+        info!("🔚️  Closing transaction details are VALID for {name}. Closing channel and responding to peer.");
+        let event = LifeCycleEvent::CloseChannel(Box::new(close_info.clone()));
+        let mut channel = self.channels.checkout(&name).await
+            .ok_or(GreaseResponse::ChannelClose(Err(RemoteServerError::ChannelDoesNotExist)))?;
+        channel.handle_event(event)
+            .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::internal(e.to_string()))))?;
+        let envelope = MessageEnvelope::new(name, close_info);
+        Ok(GreaseResponse::ChannelClose(Ok(envelope)))
+    }
     //---------------------------------   Network request handling functions   ---------------------------------//
 
     /// Business logic handling for payment channel requests.
@@ -1043,7 +1125,7 @@ where
                 GreaseRequest::ProposeChannelRequest(proposal) => self.merchant_handle_proposal(proposal).await,
                 _ => {
                     warn!("🖥️  Request made for unknown channel: {name}");
-                    GreaseResponse::ChannelNotFound
+                    GreaseResponse::Error(format!("Channel {name} does not exist."))
                 }
             }
         };
@@ -1077,6 +1159,9 @@ where
             }
             GreaseRequest::ChannelUpdate(envelope) => {
                 self.merchant_exchange_update(envelope).await.unwrap_or_else(|early| early)
+            }
+            GreaseRequest::ChannelClose(envelope) => {
+                self.respond_to_channel_close(envelope).await.unwrap_or_else(|early| early)
             }
         }
     }

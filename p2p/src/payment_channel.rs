@@ -6,8 +6,8 @@ use libgrease::monero::data_objects::{MultisigWalletData, TransactionId};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
-    ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState, LifeCycleEvent, NewChannelState,
-    ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
+    ChannelCloseRecord, ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState,
+    LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
 };
 use libp2p::PeerId;
 use log::*;
@@ -169,7 +169,7 @@ impl PaymentChannel {
         } else if self.is_open() {
             match event {
                 LifeCycleEvent::ChannelUpdate(updates) => self.on_channel_update(*updates),
-                LifeCycleEvent::OnStartClose => self.on_cooperative_close(),
+                LifeCycleEvent::CloseChannel(info) => self.on_cooperative_close(*info),
                 _ => Err(LifeCycleError::InvalidState(format!(
                     "Received event {event} in New state, which is not allowed"
                 ))),
@@ -326,9 +326,9 @@ impl PaymentChannel {
         })
     }
 
-    fn on_cooperative_close(&mut self) -> Result<(), LifeCycleError> {
+    fn on_cooperative_close(&mut self, close_record: ChannelCloseRecord) -> Result<(), LifeCycleError> {
         self.update_open(|open| {
-            open.close()
+            open.close(close_record)
                 .map(|s| {
                     debug!("⚡️  Transitioned to Closing state after cooperative close");
                     s.to_channel_state()
@@ -484,10 +484,17 @@ mod test {
     };
     use libgrease::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId};
     use libgrease::payment_channel::ChannelRole;
-    use libgrease::state_machine::{LifeCycleEvent, NewChannelBuilder, NewChannelState};
+    use libgrease::state_machine::lifecycle::LifeCycle;
+    use libgrease::state_machine::{ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, NewChannelState};
     use libp2p::{Multiaddr, PeerId};
+    use monero::Address;
+    use std::str::FromStr;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
+    const ALICE_ADDRESS: &str =
+        "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
+    const BOB_ADDRESS: &str =
+        "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state() -> NewChannelState {
         // All this info is known, or can be scanned in from a QR code etc
@@ -498,6 +505,8 @@ mod test {
             .with_merchant_initial_balance(MoneroAmount::default())
             .with_my_user_label("me")
             .with_peer_label("you")
+            .with_customer_closing_address(Address::from_str(ALICE_ADDRESS).unwrap())
+            .with_merchant_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
             .build::<Blake2b512>()
             .expect("Failed to build initial state");
         initial_state
@@ -563,7 +572,12 @@ mod test {
         let event = LifeCycleEvent::ChannelUpdate(Box::new((my_proof, peer_proof)));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
-        let event = LifeCycleEvent::OnStartClose;
+        let close = ChannelCloseRecord {
+            final_balance: channel.state().balance(),
+            update_count: 1,
+            witness: Default::default(),
+        };
+        let event = LifeCycleEvent::CloseChannel(Box::new(close));
         channel.handle_event(event).unwrap();
         assert!(channel.is_closing());
         let final_tx = TransactionId::new("final_tx123");

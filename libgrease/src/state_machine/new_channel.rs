@@ -3,6 +3,7 @@ use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
 use crate::lifecycle_impl;
+use crate::monero::data_objects::ClosingAddresses;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::{InvalidProposal, LifeCycleError};
 use crate::state_machine::establishing_channel::EstablishingState;
@@ -11,7 +12,7 @@ use crate::state_machine::timeouts::TimeoutReason;
 use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
 use digest::Digest;
 use log::*;
-use monero::Network;
+use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -31,6 +32,8 @@ pub struct NewChannelBuilder {
     customer_amount: Option<MoneroAmount>,
     peer_label: Option<String>,
     my_label: Option<String>,
+    merchant_closing: Option<Address>,
+    customer_closing: Option<Address>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,8 @@ impl NewChannelBuilder {
             peer_label: None,
             merchant_amount: None,
             customer_amount: None,
+            merchant_closing: None,
+            customer_closing: None,
         }
     }
 
@@ -65,6 +70,8 @@ impl NewChannelBuilder {
             || self.peer_label.is_none()
             || (self.merchant_amount.is_none() && self.customer_amount.is_none())
             || self.kes_public_key.is_none()
+            || self.merchant_closing.is_none()
+            || self.customer_closing.is_none()
         {
             return None;
         }
@@ -82,7 +89,13 @@ impl NewChannelBuilder {
             ChannelRole::Merchant => (self.my_label.clone().unwrap(), self.peer_label.clone().unwrap()),
             ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
         };
-        let channel_id = ChannelId::new::<D>(merchant_label.clone(), customer_label.clone(), initial_balances);
+
+        let closing = ClosingAddresses {
+            customer: self.customer_closing.clone().unwrap(),
+            merchant: self.merchant_closing.clone().unwrap(),
+        };
+
+        let channel_id = ChannelId::new::<D>(merchant_label.clone(), customer_label.clone(), initial_balances, closing);
         let channel_info = ChannelMetadata::new(
             self.network.unwrap_or(Network::Mainnet),
             self.channel_role,
@@ -114,6 +127,16 @@ impl NewChannelBuilder {
 
     pub fn with_kes_public_key(mut self, kes_public_key: impl Into<String>) -> Self {
         self.kes_public_key = Some(kes_public_key.into());
+        self
+    }
+
+    pub fn with_customer_closing_address(mut self, address: Address) -> Self {
+        self.customer_closing = Some(address);
+        self
+    }
+
+    pub fn with_merchant_closing_address(mut self, address: Address) -> Self {
+        self.merchant_closing = Some(address);
         self
     }
 }
@@ -240,6 +263,8 @@ pub struct ChannelSeedInfo {
     pub initial_balances: Balances,
     /// The user label for the (usually) merchant.
     pub user_label: String,
+    /// The address that the closing transaction must pay into
+    pub closing_address: Address,
 }
 
 /// The builder struct for the [`ChannelSeedInfo`].
@@ -250,6 +275,7 @@ pub struct ChannelSeedBuilder {
     kes_public_key: Option<String>,
     initial_balances: Option<Balances>,
     user_label: Option<String>,
+    closing_address: Option<Address>,
 }
 
 impl ChannelSeedBuilder {
@@ -260,6 +286,7 @@ impl ChannelSeedBuilder {
             kes_public_key: None,
             initial_balances: None,
             user_label: None,
+            closing_address: None,
         }
     }
 
@@ -283,13 +310,19 @@ impl ChannelSeedBuilder {
         self
     }
 
+    pub fn with_closing_address(mut self, address: Address) -> Self {
+        self.closing_address = Some(address);
+        self
+    }
+
     pub fn build(self) -> Result<ChannelSeedInfo, MissingSeedInfo> {
         let key_id = self.key_id.ok_or(MissingSeedInfo::Missing)?;
         let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::KesPublicKey)?;
         let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
         let user_label = self.user_label.ok_or(MissingSeedInfo::PartialChannelId)?;
+        let closing_address = self.closing_address.ok_or(MissingSeedInfo::ClosingAddress)?;
 
-        Ok(ChannelSeedInfo { role: self.role, key_id, kes_public_key, initial_balances, user_label })
+        Ok(ChannelSeedInfo { role: self.role, key_id, kes_public_key, initial_balances, user_label, closing_address })
     }
 }
 
@@ -311,4 +344,6 @@ pub enum MissingSeedInfo {
     InitialBalances,
     #[error("Missing partial channel ID")]
     PartialChannelId,
+    #[error("Missing closing address")]
+    ClosingAddress,
 }

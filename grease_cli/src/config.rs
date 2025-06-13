@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use libgrease::crypto::keys::Curve25519Secret;
 use libp2p::Multiaddr;
+use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -84,6 +85,8 @@ pub struct GlobalOptions {
     /// `channel_storage_directory` can be a relative or absolute path. If relative, it is a subdirectory of the
     /// `base_path`.
     pub channel_storage_directory: Option<PathBuf>,
+    /// The address of the wallet that will receive funds on channel closures.
+    pub refund_address: Option<Address>,
 }
 
 impl GlobalOptions {
@@ -110,6 +113,11 @@ impl GlobalOptions {
     /// Returns a clone of the configured Curve25519 public key, if set.
     pub fn kes_public_key(&self) -> Option<String> {
         self.kes_public_key.clone()
+    }
+
+    /// Returns the address to which channel refunds will be sent.
+    pub fn refund_address(&self) -> Option<Address> {
+        self.refund_address.clone()
     }
 
     /// Returns the optional user label configured for channels.

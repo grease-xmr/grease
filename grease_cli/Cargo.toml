@@ -8,19 +8,17 @@ grease-p2p = { workspace = true }
 libgrease = { workspace = true }
 
 anyhow = { workspace = true }
-blake2 = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "unicode"] }
 dialoguer = { version = "0.11.0", default-features = false, features = ["completion", "fuzzy-select", "history", "editor"] }
 env_logger = { workspace = true }
-futures = { workspace = true }
 libp2p = { workspace = true }
 log = { workspace = true }
+monero = { workspace = true }
 prettytable-rs = { version = "0.10.0" }
 rand = { workspace = true }
 qrcode = {  version = "0.14.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-ron = { workspace = true }
 serde_yml = {  workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

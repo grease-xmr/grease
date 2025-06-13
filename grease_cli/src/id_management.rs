@@ -104,7 +104,10 @@ pub fn delete_identity(config: &GlobalOptions, id: &String) -> Result<bool, anyh
 
 /// Creates and saves a new conversation identity, optionally with a specified ID.
 ///
-/// If a name is provided, generates a random identity using that name as its ID; otherwise, generates a random identity with an automatically assigned ID. Fails if an identity with the same ID already exists. The new identity is persisted to the configured identities file.
+/// If a name is provided, generates a random identity using that name as its ID; otherwise, generates a random identity
+/// with an automatically assigned ID. Fails if an identity with the same ID already exists.
+///
+/// The new identity is persisted to the configured identities file.
 ///
 /// # Errors
 ///
@@ -237,7 +240,8 @@ pub fn load_or_create_identities<P: AsRef<Path>>(path: P) -> Result<LocalIdentit
 
 /// Selects and removes a conversation identity from the local identity set.
 ///
-/// Loads identities from the specified path and returns the identity matching the given name, or the first available identity if no name is provided. Returns an error if no identities exist or if the specified identity is not found.
+/// Loads identities from the specified path and returns the identity matching the given name, or the first available
+/// identity if no name is provided. Returns an error if no identities exist or if the specified identity is not found.
 pub fn assign_identity<P: AsRef<Path>>(
     path: P,
     id_name: Option<&String>,

@@ -16,6 +16,8 @@ pub enum LifeCycleError {
     NotEnoughFunds,
     #[error("The update count in the channel is incorrect. Expected {exp}, got {actual}")]
     MismatchedUpdateCount { exp: u64, actual: u64 },
+    #[error("Our {0} does not match what was received from the peer")]
+    StateMismatch(String),
     #[error("This is a bug. {0}")]
     InternalError(String),
 }
@@ -41,5 +43,9 @@ pub enum InvalidProposal {
 impl LifeCycleError {
     pub fn invalid_state_for(func: &str) -> Self {
         LifeCycleError::InvalidState(func.into())
+    }
+
+    pub fn mismatch(what: impl Into<String>) -> Self {
+        LifeCycleError::StateMismatch(what.into())
     }
 }

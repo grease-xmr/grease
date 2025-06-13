@@ -15,6 +15,7 @@ use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
     MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
 };
+use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
@@ -145,8 +146,6 @@ macro_rules! event_loop {
                         };
                         let _ = sender.send(result);
                     }
-                    GreaseResponse::ChannelNotFound => {}
-                    GreaseResponse::ChannelClosed => {}
                     GreaseResponse::Error(_) => {}
                     GreaseResponse::NoResponse => {
                         trace!("No response will be sent for request id: {request_id}");
@@ -209,7 +208,8 @@ event_loop!(
     Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
     Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
     Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
-    Command(ChannelUpdate): ChannelUpdate => ChannelUpdate[UpdateInfo]
+    Command(ChannelUpdate): ChannelUpdate => ChannelUpdate[UpdateInfo],
+    Command(ChannelClose): ChannelClose => ChannelClose[ChannelCloseRecord]
 );
 
 impl EventLoop {
