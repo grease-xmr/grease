@@ -10,7 +10,7 @@
 use crate::amount::MoneroAmount;
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{
-    GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, ShardInfo,
+    GenericPoint, GenericScalar, KesProof, PeerProof0, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo,
     UpdateInfo, UpdateProofs,
 };
 use crate::lifecycle_impl;
@@ -31,7 +31,7 @@ pub struct EstablishedChannelState {
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, MoneroAmount>,
     pub(crate) my_proof0: Proofs0,
-    pub peer_proof0: PublicProof0,
+    pub peer_proof0: PeerProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) current_private_outputs: Option<PrivateUpdateOutputs>,
     pub current_public_outputs: Option<PublicUpdateOutputs>,
@@ -71,7 +71,10 @@ impl EstablishedChannelState {
     }
 
     pub fn current_peer_commitment(&self) -> GenericPoint {
-        self.current_peer_public_outputs.as_ref().map(|o| o.T_current).unwrap_or(self.peer_proof0.public_outputs.T_0)
+        self.current_peer_public_outputs
+            .as_ref()
+            .map(|o| o.T_current)
+            .unwrap_or(self.peer_proof0.public_proof0.public_outputs.T_0)
     }
 
     /// Return the record to send to the peer to co-operatively close the channel.
@@ -112,7 +115,7 @@ impl EstablishedChannelState {
         let mut pub_out = PublicUpdateOutputs::default();
         pub_out.T_current = self.my_proof0.public_outputs.T_0;
         let mut peer_pub_out = PublicUpdateOutputs::default();
-        peer_pub_out.T_current = self.peer_proof0.public_outputs.T_0;
+        peer_pub_out.T_current = self.peer_proof0.public_proof0.public_outputs.T_0;
         self.current_private_outputs = Some(pvt_out);
         self.current_public_outputs = Some(pub_out);
         self.current_peer_public_outputs = Some(peer_pub_out);

@@ -5,7 +5,7 @@ use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
-use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
+use libgrease::crypto::zk_objects::{PeerProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
     ConfirmMsAddress, ConfirmMsAddressResponse, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
     MultisigSplitSecretsResponse, TransactionRecord,
@@ -147,7 +147,7 @@ impl Client {
         ConfirmMsAddress,
         ConfirmMsAddressResponse
     );
-    grease_request!(send_proof0, ExchangeProof0, PublicProof0, PublicProof0);
+    grease_request!(send_proof0, ExchangeProof0, PeerProof0, PeerProof0);
     grease_request!(send_update, ChannelUpdate, UpdateInfo, UpdateInfo);
     grease_request!(send_close_request, ChannelClose, ChannelCloseRecord, ChannelCloseRecord);
 

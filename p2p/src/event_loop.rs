@@ -11,7 +11,7 @@ use futures::channel::{
     oneshot,
 };
 use futures::{SinkExt, StreamExt};
-use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
+use libgrease::crypto::zk_objects::{PeerProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
     ConfirmMsAddressResponse, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
 };
@@ -207,7 +207,7 @@ event_loop!(
     Command(MultiSigKeyExchange): MsKeyExchange => MsKeyExchange[MultisigKeyInfo],
     Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
     Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[ConfirmMsAddressResponse],
-    Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
+    Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PeerProof0],
     Command(ChannelUpdate): ChannelUpdate => ChannelUpdate[UpdateInfo],
     Command(ChannelClose): ChannelClose => ChannelClose[ChannelCloseRecord]
 );

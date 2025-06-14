@@ -2,7 +2,7 @@ use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
-use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
+use libgrease::crypto::zk_objects::{PeerProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
     ClosingAddresses, ConfirmMsAddress, ConfirmMsAddressResponse, MessageEnvelope, MultisigKeyInfo,
     MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionRecord,
@@ -32,7 +32,7 @@ pub enum GreaseRequest {
     ConfirmMsAddress(MessageEnvelope<ConfirmMsAddress>),
     /// The customer is requesting an exchange of witness0 proofs as one of the final steps for establishing a new
     /// channel
-    ExchangeProof0(MessageEnvelope<PublicProof0>),
+    ExchangeProof0(MessageEnvelope<PeerProof0>),
     /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
     /// proofs and respond their own proofs.
     ChannelUpdate(MessageEnvelope<UpdateInfo>),
@@ -51,7 +51,7 @@ pub enum GreaseResponse {
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(Result<MessageEnvelope<ConfirmMsAddressResponse>, RemoteServerError>),
-    ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
+    ExchangeProof0(Result<MessageEnvelope<PeerProof0>, RemoteServerError>),
     ChannelUpdate(Result<MessageEnvelope<UpdateInfo>, RemoteServerError>),
     ChannelClose(Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>),
     Error(String),
@@ -166,8 +166,8 @@ pub enum ClientCommand {
     },
     ExchangeProof0 {
         peer_id: PeerId,
-        envelope: MessageEnvelope<PublicProof0>,
-        sender: oneshot::Sender<Result<MessageEnvelope<PublicProof0>, RemoteServerError>>,
+        envelope: MessageEnvelope<PeerProof0>,
+        sender: oneshot::Sender<Result<MessageEnvelope<PeerProof0>, RemoteServerError>>,
     },
     ChannelUpdate {
         peer_id: PeerId,
