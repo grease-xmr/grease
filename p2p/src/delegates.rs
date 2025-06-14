@@ -32,6 +32,12 @@ pub enum DelegateError {
     TODO(),
 }
 
+impl From<String> for DelegateError {
+    fn from(value: String) -> Self {
+        DelegateError::String(value)
+    }
+}
+
 //---------------------------------   Verify Channel Proposals    ------------------------------------------------------
 
 pub trait ProposalVerifier {
@@ -106,7 +112,7 @@ pub trait KesProver {
         channel_name: String,
         customer_key: PartialEncryptedKey,
         merchant_key: PartialEncryptedKey,
-        kes_public_key: GenericPoint,
+        kes_public_key: &GenericPoint,
         proofs: KesProof,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
@@ -224,7 +230,7 @@ impl KesProver for DummyDelegate {
         channel_name: String,
         _c_key: PartialEncryptedKey,
         _m_key: PartialEncryptedKey,
-        _kes_pubkey: GenericPoint,
+        _kes_pubkey: &GenericPoint,
         proofs: KesProof,
     ) -> Result<(), DelegateError> {
         if proofs.proof == format!("KesProof|{channel_name}").into_bytes() {

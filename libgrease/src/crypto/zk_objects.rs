@@ -82,7 +82,7 @@ impl Into<[u8; 32]> for GenericScalar {
 }
 
 /// A curve-agnostic representation of a point.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 pub struct GenericPoint(
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")] [u8; 32],
 );
@@ -106,10 +106,24 @@ impl Into<GenericPoint> for [u8; 32] {
     }
 }
 
+impl Into<GenericPoint> for babyjubjub_rs::Point {
+    fn into(self) -> GenericPoint {
+        GenericPoint { 0: self.compress() }
+    }
+}
+
 impl TryFrom<GenericPoint> for babyjubjub_rs::Point {
     type Error = String;
 
     fn try_from(value: GenericPoint) -> Result<babyjubjub_rs::Point, Self::Error> {
+        babyjubjub_rs::decompress_point(value.0)
+    }
+}
+
+impl TryFrom<&GenericPoint> for babyjubjub_rs::Point {
+    type Error = String;
+
+    fn try_from(value: &GenericPoint) -> Result<babyjubjub_rs::Point, Self::Error> {
         babyjubjub_rs::decompress_point(value.0)
     }
 }
@@ -130,11 +144,12 @@ impl Into<GenericPoint> for MontgomeryPoint {
 pub struct Comm0PublicInputs {
     /// 𝛎_ꞷ0 - Random public value
     pub nonce_peer: GenericScalar,
+    pub pubkey_peer: GenericPoint,
 }
 
 impl Comm0PublicInputs {
-    pub fn new(nonce_peer: &GenericScalar) -> Self {
-        Comm0PublicInputs { nonce_peer: nonce_peer.clone() }
+    pub fn new(nonce_peer: &GenericScalar, pubkey_peer: &GenericPoint) -> Self {
+        Comm0PublicInputs { nonce_peer: nonce_peer.clone(), pubkey_peer: pubkey_peer.clone() }
     }
 }
 
@@ -250,6 +265,17 @@ impl Proofs0 {
     }
 }
 
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
+pub struct PeerProof0 {
+    pub public_proof0: PublicProof0,
+    pub comm0_public_inputs: Comm0PublicInputs,
+}
+
+impl PeerProof0 {
+    pub fn new(public_proof0: PublicProof0, comm0_public_inputs: Comm0PublicInputs) -> PeerProof0 {
+        PeerProof0 { public_proof0, comm0_public_inputs }
+    }
+}
 /// The output of the ZK proof for a channel update.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct UpdateProofs {

@@ -2,7 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
-use crate::crypto::zk_objects::GenericScalar;
+use crate::crypto::zk_objects::{GenericPoint, GenericScalar};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::ClosingAddresses;
 use crate::payment_channel::ChannelRole;
@@ -29,13 +29,18 @@ pub struct NewChannelBuilder {
     network: Option<Network>,
     channel_role: ChannelRole,
     // The KES public key used to encrypt the multisig spend key
-    kes_public_key: Option<String>,
+    kes_public_key: Option<GenericPoint>,
     merchant_amount: Option<MoneroAmount>,
     customer_amount: Option<MoneroAmount>,
     peer_label: Option<String>,
     my_label: Option<String>,
     merchant_closing: Option<Address>,
     customer_closing: Option<Address>,
+    public_key_self: Option<GenericPoint>,
+    private_key_self: Option<GenericScalar>,
+    nonce_self: Option<GenericScalar>,
+    public_key_peer: Option<GenericPoint>,
+    nonce_peer: Option<GenericScalar>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,16 +69,26 @@ impl NewChannelBuilder {
             customer_amount: None,
             merchant_closing: None,
             customer_closing: None,
+            public_key_self: None,
+            private_key_self: None,
+            nonce_self: None,
+            public_key_peer: None,
+            nonce_peer: None,
         }
     }
 
-    pub fn build<D: Digest, R: CryptoRng + RngCore>(&self, rng: &mut R) -> Option<NewChannelState> {
+    pub fn build<D: Digest, R: CryptoRng + RngCore>(&self, _rng: &mut R) -> Option<NewChannelState> {
         if self.my_label.is_none()
             || self.peer_label.is_none()
             || (self.merchant_amount.is_none() && self.customer_amount.is_none())
             || self.kes_public_key.is_none()
             || self.merchant_closing.is_none()
             || self.customer_closing.is_none()
+            || self.public_key_self.is_none()
+            || self.private_key_self.is_none()
+            || self.nonce_self.is_none()
+            || self.public_key_peer.is_none()
+            || self.nonce_peer.is_none()
         {
             return None;
         }
@@ -97,14 +112,16 @@ impl NewChannelBuilder {
 
         let channel_id = ChannelId::new::<D>(merchant_label.clone(), customer_label.clone(), initial_balances, closing);
 
-        let nonce = GenericScalar::random(rng);
-
         let channel_info = ChannelMetadata::new(
             self.network.unwrap_or(Network::Mainnet),
             self.channel_role,
             channel_id,
             self.kes_public_key.clone().unwrap(),
-            nonce,
+            self.public_key_self?,
+            self.private_key_self?,
+            self.nonce_self?,
+            self.public_key_peer?,
+            self.nonce_peer?,
         );
         Some(NewChannelState { metadata: channel_info, customer_label, merchant_label })
     }
@@ -129,7 +146,7 @@ impl NewChannelBuilder {
         self
     }
 
-    pub fn with_kes_public_key(mut self, kes_public_key: impl Into<String>) -> Self {
+    pub fn with_kes_public_key(mut self, kes_public_key: impl Into<GenericPoint>) -> Self {
         self.kes_public_key = Some(kes_public_key.into());
         self
     }
@@ -141,6 +158,31 @@ impl NewChannelBuilder {
 
     pub fn with_merchant_closing_address(mut self, address: Address) -> Self {
         self.merchant_closing = Some(address);
+        self
+    }
+
+    pub fn with_public_key_self(mut self, public_key_self: GenericPoint) -> Self {
+        self.public_key_self = Some(public_key_self);
+        self
+    }
+
+    pub fn with_private_key_self(mut self, private_key_self: GenericScalar) -> Self {
+        self.private_key_self = Some(private_key_self);
+        self
+    }
+
+    pub fn with_nonce_self(mut self, nonce_self: GenericScalar) -> Self {
+        self.nonce_self = Some(nonce_self);
+        self
+    }
+
+    pub fn with_public_key_peer(mut self, public_key_peer: GenericPoint) -> Self {
+        self.public_key_peer = Some(public_key_peer);
+        self
+    }
+
+    pub fn with_nonce_peer(mut self, nonce_peer: GenericScalar) -> Self {
+        self.nonce_peer = Some(nonce_peer);
         self
     }
 }
@@ -165,7 +207,7 @@ impl NewChannelState {
         if self.metadata.balances() != proposal.initial_balances {
             return Err(InvalidProposal::MismatchedBalances);
         }
-        if self.metadata.kes_public_key() != proposal.kes_public_key {
+        if *self.metadata.kes_public_key() != proposal.kes_public_key {
             return Err(InvalidProposal::MismatchedKesPublicKey);
         }
         if self.metadata.channel_id().name() != proposal.channel_name {
@@ -178,7 +220,7 @@ impl NewChannelState {
     pub fn for_proposal(&self) -> ProposedChannelInfo {
         ProposedChannelInfo {
             role: self.metadata.role(),
-            kes_public_key: self.metadata.kes_public_key().to_string(),
+            kes_public_key: self.metadata.kes_public_key().clone(),
             initial_balances: self.metadata.balances(),
             customer_label: self.customer_label.clone(),
             merchant_label: self.merchant_label.clone(),
@@ -242,7 +284,7 @@ lifecycle_impl!(NewChannelState, New);
 #[derive(Clone)]
 pub struct ProposedChannelInfo {
     pub role: ChannelRole,
-    pub kes_public_key: String,
+    pub kes_public_key: GenericPoint,
     /// The amount of money in the channel
     pub initial_balances: Balances,
     /// Salt used to derive the channel ID - customer portion
@@ -262,7 +304,7 @@ pub struct ChannelSeedInfo {
     /// The key id for the merchant, to help them identify this proposal.
     pub key_id: u64,
     /// The proposed KES public key. May or may not be accepted by the peer.
-    pub kes_public_key: String,
+    pub kes_public_key: GenericPoint,
     /// The proposed initial set of channel balances
     pub initial_balances: Balances,
     /// The user label for the (usually) merchant.
@@ -276,7 +318,7 @@ pub struct ChannelSeedInfo {
 pub struct ChannelSeedBuilder {
     role: ChannelRole,
     key_id: Option<u64>,
-    kes_public_key: Option<String>,
+    kes_public_key: Option<GenericPoint>,
     initial_balances: Option<Balances>,
     user_label: Option<String>,
     closing_address: Option<Address>,
@@ -294,7 +336,7 @@ impl ChannelSeedBuilder {
         }
     }
 
-    pub fn with_kes_public_key(mut self, kes_public_key: impl Into<String>) -> Self {
+    pub fn with_kes_public_key(mut self, kes_public_key: impl Into<GenericPoint>) -> Self {
         self.kes_public_key = Some(kes_public_key.into());
         self
     }
