@@ -38,6 +38,10 @@ pub enum InvalidProposal {
     MismatchedKesPublicKey,
     #[error("The channel ID in the proposal does not match the one that was expected")]
     MismatchedChannelId,
+
+    #[cfg(debug_assertions)]
+    #[error("Feature is not implemented")]
+    TODO(),
 }
 
 impl LifeCycleError {

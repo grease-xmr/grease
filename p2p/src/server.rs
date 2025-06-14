@@ -15,13 +15,14 @@ use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::balance::Balances;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::crypto::zk_objects::Comm0PublicInputs;
 use libgrease::crypto::zk_objects::{
     generate_txc0_nonces, AdaptedSignature, GenericPoint, GenericScalar, KesProof, PublicProof0, PublicUpdateProof,
     ShardInfo, UpdateProofs,
 };
 use libgrease::monero::data_objects::{
-    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    TransactionId, TransactionRecord,
+    ConfirmMsAddress, ConfirmMsAddressResponse, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo,
+    MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionId, TransactionRecord,
 };
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
@@ -40,8 +41,9 @@ use tokio::task::JoinHandle;
 use wallet::utils::publish_transaction;
 use wallet::virtual_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
 use wallet::{connect_to_rpc, MultisigWallet};
-
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
+use libgrease::crypto::zk_objects::Comm0PrivateInputs;
+use rand::{CryptoRng, RngCore};
 
 pub struct NetworkServer<D: GreaseChannelDelegate> {
     id: ConversationIdentity,
@@ -153,8 +155,12 @@ where
     ///      3. Create a new multisig wallet with the public keys.
     ///   2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
     ///   3. Verify the wallet address with the peer.
-    pub async fn establish_new_channel(&self, proposal: NewChannelProposal) -> Result<String, ChannelServerError> {
-        self.inner.customer_establish_new_channel(proposal).await
+    pub async fn establish_new_channel<R: CryptoRng + RngCore>(
+        &self,
+        proposal: NewChannelProposal,
+        rng: &mut R,
+    ) -> Result<String, ChannelServerError> {
+        self.inner.customer_establish_new_channel(proposal, rng).await
     }
 
     /// A convenience function for [`Self::update_balance`] that pays the given amount from customer to merchant.
@@ -273,15 +279,16 @@ where
     ///    4. Watch for the funding transaction to be confirmed.
     ///    5. Generate the proofs to TXc0 (along with witness_0).
     ///    6. Exchange proofs with the merchant.
-    pub async fn customer_establish_new_channel(
+    pub async fn customer_establish_new_channel<R: CryptoRng + RngCore>(
         &self,
         proposal: NewChannelProposal,
+        rng: &mut R,
     ) -> Result<String, ChannelServerError> {
         // 1. Proposal phase
         info!("💍️ Sending new channel proposal to merchant");
         // Needed for KES verification later..
         let kes_public_key = proposal.seed.kes_public_key.clone();
-        let name = self.customer_send_proposal(proposal).await?.map_err(ChannelServerError::ProposalRejected)?;
+        let name = self.customer_send_proposal(proposal, rng).await?.map_err(ChannelServerError::ProposalRejected)?;
         info!("💍️ Proposal accepted. Channel name: {name}");
         // 2. We're in establishing phase now.
         let channel = self.channels.peek(&name).await.ok_or(ChannelServerError::ChannelNotFound)?;
@@ -291,10 +298,11 @@ where
                 "Channel {name} should be in Establishing phase"
             )));
         }
-        drop(channel);
+        let nonce = channel.state().metadata().nonce();
+        // drop(channel);
         // 2.1.1. Create a new keypair for the wallet.
         info!("👛️ Creating new multisig wallet keys for channel {name}");
-        let (k, p) = Curve25519PublicKey::keypair(&mut rng());
+        let (k, p) = Curve25519PublicKey::keypair(rng);
         // 2.1.2. Exchange the public keys with the merchant.
         debug!("👛️ Sharing public key with merchant for channel {name}");
         let peer_key_info = self.exchange_wallet_keys(peer_id, &name, &p).await?;
@@ -315,9 +323,10 @@ where
         debug!("👛️ Wallet shards are valid and are stored for channel {name}");
         // 2.3. Verify the wallet address with the peer.
         let address = wallet.address();
+        let confirmation = ConfirmMsAddress::new(&address.to_string(), &Comm0PublicInputs::new(nonce));
         debug!("👛️ Verifying wallet address with peer for channel {name}. Address: {address}");
-        let confirmed = self.customer_verify_wallet_address(peer_id, &name, address.to_string()).await?;
-        if !confirmed {
+        let confirmed = self.customer_verify_wallet_address_and_get_nonce(peer_id, &name, confirmation).await?;
+        if !confirmed.confirmed {
             warn!("📢️ Wallet address verification failed for channel {name}. Address: {address}");
             return Err(ChannelServerError::ProtocolError(format!(
                 "Wallet address verification failed for channel {name}"
@@ -329,13 +338,14 @@ where
         info!("👛️ Multisig wallet has been successfully created for channel {name}.");
         self.watch_for_funding_transaction(&name, pvk, pub_spend_key, birthday).await?;
         info!("👁️‍🗨️ Generating initial ZK-proofs for channel {name}.");
-        let peer_proof = self.generate_and_store_witness0(&name).await?;
+        let input_private = generate_txc0_nonces(rng);
+        let peer_proof = self.generate_and_store_witness0(&name, &confirmed.input_public, &input_private).await?;
         info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {name} with merchant.");
         let merchant_proof = self.customer_send_proofs0(&name, peer_id, peer_proof).await?;
         info!("👁️‍🗨️ Verifying merchant's initial transaction proof for channel {name}. (ZK-Witness0 proof)");
         self.verify_proof0(&name, &merchant_proof).await?;
         info!("👁️‍🗨️ Merchant's initial transaction proof is VALID for channel {name}. (ZK-Witness0 proof)");
-        self.store_public_proof0(&name, merchant_proof).await?;
+        self.store_public_proof0(&name, &merchant_proof).await?;
         info!("👁️‍🗨️ Stored Merchant's initial transaction proof for channel {name}.");
         // This is as far as we can take the channel establishment process for now.
         // If Txf has already been confirmed, then we will be in the Established state.
@@ -372,16 +382,17 @@ where
     /// Sends a channel proposal to the merchant and waits for a response. If the merchant ACKs the proposal, we
     /// verify the terms and create a new channel state machine. If the merchant rejects the proposal, or if we
     /// reject the final proposal, we return the reason to the client.
-    async fn customer_send_proposal(
+    async fn customer_send_proposal<R: CryptoRng + RngCore>(
         &self,
         proposal: NewChannelProposal,
+        rng: &mut R,
     ) -> Result<Result<String, RejectChannelProposal>, PeerConnectionError> {
         let mut client = self.network_client.clone();
         let address = proposal.contact_info_proposee.dial_address();
         // todo: check what happens if there's already a connection?
         client.dial(address).await?;
         trace!("Sending channel proposal to merchant.");
-        let state = self.customer_create_new_state(proposal.clone());
+        let state = self.customer_create_new_state(proposal.clone(), rng);
         let res = client.new_channel_proposal(proposal).await?;
         let result = match res {
             ChannelProposalResult::Accepted(final_proposal) => {
@@ -426,7 +437,7 @@ where
     }
 
     /// Helper function. Creates a [`NewChannelState`] from the given proposal and secret.
-    fn customer_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
+    fn customer_create_new_state<R: CryptoRng + RngCore>(&self, prop: NewChannelProposal, rng: &mut R) -> ChannelState {
         let new_state = NewChannelBuilder::new(prop.seed.role)
             .with_my_user_label(&prop.proposer_label)
             .with_peer_label(&prop.seed.user_label)
@@ -435,14 +446,14 @@ where
             .with_kes_public_key(prop.seed.kes_public_key)
             .with_customer_closing_address(prop.closing_address)
             .with_merchant_closing_address(prop.seed.closing_address)
-            .build::<blake2::Blake2b512>()
+            .build::<blake2::Blake2b512, R>(rng)
             .expect("Missing new channel state data");
         new_state.to_channel_state()
     }
 
     // TODO - the merchant label should be used to extract data that was generated ourselves, rather than trusting
     // the proposal.
-    fn merchant_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
+    fn merchant_create_new_state<R: CryptoRng + RngCore>(&self, prop: NewChannelProposal, rng: &mut R) -> ChannelState {
         let new_state = NewChannelBuilder::new(prop.seed.role.other())
             .with_my_user_label(&prop.seed.user_label)
             .with_peer_label(&prop.proposer_label)
@@ -451,7 +462,7 @@ where
             .with_kes_public_key(prop.seed.kes_public_key)
             .with_customer_closing_address(prop.closing_address)
             .with_merchant_closing_address(prop.seed.closing_address)
-            .build::<blake2::Blake2b512>()
+            .build::<blake2::Blake2b512, R>(rng)
             .expect("Missing new channel state data");
         new_state.to_channel_state()
     }
@@ -489,7 +500,7 @@ where
         // Construct the new channel
         let peer_info = data.contact_info_proposer.clone();
         let info = data.proposed_channel_info();
-        let new_state = self.merchant_create_new_state(data);
+        let new_state = self.merchant_create_new_state(data, &mut rand::rng());
         let name = self.common_create_channel(new_state, peer_info, info).await.map_err(|e| {
             warn!("Error creating new channel {e}");
             RejectChannelProposal::internal("Error creating new channel")
@@ -666,14 +677,14 @@ where
         Ok(())
     }
 
-    async fn customer_verify_wallet_address(
+    async fn customer_verify_wallet_address_and_get_nonce(
         &self,
         peer_id: PeerId,
         name: &str,
-        address: String,
-    ) -> Result<bool, ChannelServerError> {
+        confirmation: ConfirmMsAddress,
+    ) -> Result<ConfirmMsAddressResponse, ChannelServerError> {
         let mut client = self.network_client.clone();
-        let envelope = client.send_wallet_confirmation(peer_id, name, address).await??;
+        let envelope = client.send_wallet_confirmation(peer_id, name, confirmation).await??;
         let (remote_name, confirmation) = envelope.open();
         confirm_channel_matches(&remote_name, name)?;
         Ok(confirmation)
@@ -755,7 +766,13 @@ where
         Ok(GreaseResponse::MsSplitSecretExchange(Ok(envelope)))
     }
 
-    async fn address_matches(&self, name: &str, address: &str) -> Result<bool, ChannelServerError> {
+    async fn address_matches(
+        &self,
+        name: &str,
+        confirmation: &ConfirmMsAddress,
+    ) -> Result<ConfirmMsAddressResponse, ChannelServerError> {
+        let address = &confirmation.address;
+
         let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         debug!("👛️  Verifying address {address} for channel {name}.");
         let state = channel.state().as_establishing()?;
@@ -764,9 +781,12 @@ where
             state.wallet().ok_or(ChannelServerError::InvalidState("Multisig wallet not available".to_string()))?;
         let rpc = connect_to_rpc(&self.rpc_address).await?;
         let wallet = MultisigWallet::from_serializable(rpc, wallet.clone())?;
-        if wallet.address().to_string() == address {
+        if wallet.address().to_string() == *address {
             debug!("👛️  Address {address} matches for channel {name}.");
-            Ok(true)
+            Ok(ConfirmMsAddressResponse::new(
+                true,
+                &Comm0PublicInputs::new(channel.state().metadata().nonce()),
+            ))
         } else {
             Err(ChannelServerError::ProtocolError(format!(
                 "Address mismatch for channel {name}. Expected {}, got {}",
@@ -822,16 +842,20 @@ where
         Ok(())
     }
 
-    async fn generate_and_store_witness0(&self, name: &str) -> Result<PublicProof0, ChannelServerError> {
+    async fn generate_and_store_witness0(
+        &self,
+        name: &str,
+        input_public: &Comm0PublicInputs,
+        input_private: &Comm0PrivateInputs,
+    ) -> Result<PublicProof0, ChannelServerError> {
         let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let metadata = channel.state().metadata().clone();
         drop(channel);
         debug!("👁️‍🗨️ Generating witness_0 proof for channel {name}.");
-        let inputs = generate_txc0_nonces(&mut rand::rng());
-        let proof = self.delegate.generate_initial_proofs(inputs, &metadata).await?;
-        let pub_proof = proof.public_only();
+        let proof_self = self.delegate.generate_initial_proofs(&input_public, input_private, &metadata).await?;
+        let pub_proof = proof_self.public_only();
         debug!("👁️‍🗨️ Storing witness_0 proof for channel {name}.");
-        let event = LifeCycleEvent::MyProof0Generated(Box::new(proof));
+        let event = LifeCycleEvent::MyProof0Generated(Box::new(proof_self));
         let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         channel.handle_event(event)?;
         Ok(pub_proof)
@@ -852,9 +876,9 @@ where
         Ok(remote_proof)
     }
 
-    async fn store_public_proof0(&self, name: &str, peer_proof: PublicProof0) -> Result<(), ChannelServerError> {
+    async fn store_public_proof0(&self, name: &str, peer_proof: &PublicProof0) -> Result<(), ChannelServerError> {
         let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
-        let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof));
+        let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof.clone()));
         channel.handle_event(event)?;
         debug!("👁️‍🗨️ Stored peer's witness_0 proof for channel {name}.");
         Ok(())
@@ -872,17 +896,19 @@ where
             .await
             .map_err(|e| GreaseResponse::ExchangeProof0(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
         debug!("👁️‍🗨️  Storing witness0 proof for channel {name}.");
-        self.store_public_proof0(&name, peer_proof).await.map_err(|e| {
+        self.store_public_proof0(&name, &peer_proof).await.map_err(|e| {
             GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
                 "Error storing witness_0 proof: {e}"
             ))))
         })?;
         debug!("👁️‍🗨️  Customer's witness0 proof is VALID for channel {name}.");
-        let pub_proof = self.generate_and_store_witness0(&name).await.map_err(|e| {
-            GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
-                "Failed to generate witness_0 proof: {e}"
-            ))))
-        })?;
+        let input_private = generate_txc0_nonces(&mut rand::rng());
+        let pub_proof =
+            self.generate_and_store_witness0(&name, &peer_proof.public_inputs, &input_private).await.map_err(|e| {
+                GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
+                    "Failed to generate witness_0 proof: {e}"
+                ))))
+            })?;
         debug!("👁️‍🗨️  Sending witness_0 proof to customer for channel {name}.");
         let envelope = MessageEnvelope::new(name, pub_proof);
         Ok(GreaseResponse::ExchangeProof0(Ok(envelope)))
@@ -1487,8 +1513,11 @@ where
             }
             GreaseRequest::ConfirmMsAddress(envelope) => {
                 trace!("🖥️  Customer: Confirm multisig address request received");
-                let (channel_name, address) = envelope.open();
-                let response = self.address_matches(&channel_name, &address).await.unwrap_or(false);
+                let (channel_name, confirmation) = envelope.open();
+                let response = self
+                    .address_matches(&channel_name, &confirmation)
+                    .await
+                    .unwrap_or(ConfirmMsAddressResponse::not_confirmed());
                 let envelope = MessageEnvelope::new(channel_name, response);
                 GreaseResponse::ConfirmMsAddress(Ok(envelope))
             }

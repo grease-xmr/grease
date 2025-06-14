@@ -198,7 +198,7 @@ impl InteractiveApp {
         let proposal = self.create_channel_proposal(oob_info, address)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
-        let name = self.server.establish_new_channel(proposal.clone()).await?;
+        let name = self.server.establish_new_channel(proposal.clone(), &mut rand::rng()).await?;
         self.save_channels().await?;
         info!("Channels saved.");
         self.current_channel = Some(name.clone());

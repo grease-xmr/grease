@@ -5,12 +5,14 @@ members = [
     "grease_cli",
     "p2p",
     "wallet",
+    "circuits",
 ]
 
 [workspace.dependencies]
 grease-p2p = { version = "0.1.0", path = "./p2p" }
 libgrease = { version = "0.1.0", path = "./libgrease" }
 wallet = { version = "0.1.0", path = "./wallet" }
+circuits = { version = "*", path = "./circuits" }
 
 anyhow = { version = "1.0.96" }
 blake2 = {  version = "0.10.6"}
