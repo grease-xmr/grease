@@ -3,6 +3,7 @@
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use libgrease::crypto::keys::Curve25519Secret;
+use libgrease::crypto::zk_objects::GenericPoint;
 use libp2p::Multiaddr;
 use monero::Address;
 use serde::{Deserialize, Serialize};
@@ -76,7 +77,7 @@ pub struct GlobalOptions {
     /// The address other parties can use to contact this identity on the internet.
     pub server_address: Option<Multiaddr>,
     /// The public key of the Key Escrow Service (KES).
-    pub kes_public_key: Option<String>,
+    pub kes_public_key: Option<GenericPoint>,
     /// A name, or label that will be inserted into every channel you are part of.
     /// Make it descriptive and unique.
     pub user_label: Option<String>,
@@ -111,7 +112,7 @@ impl GlobalOptions {
     }
 
     /// Returns a clone of the configured Curve25519 public key, if set.
-    pub fn kes_public_key(&self) -> Option<String> {
+    pub fn kes_public_key(&self) -> Option<GenericPoint> {
         self.kes_public_key.clone()
     }
 

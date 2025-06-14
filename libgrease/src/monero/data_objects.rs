@@ -6,7 +6,7 @@ use std::str::FromStr;
 // re-export
 use crate::balance::Balances;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use crate::crypto::zk_objects::{Comm0PublicInputs, KesProof, PartialEncryptedKey};
+use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecrets {
@@ -29,28 +29,26 @@ pub struct MultisigSplitSecretsResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfirmMsAddress {
     pub address: String,
-    pub input_public: Comm0PublicInputs,
 }
 
 impl ConfirmMsAddress {
-    pub fn new(address: &String, input_public: &Comm0PublicInputs) -> ConfirmMsAddress {
-        ConfirmMsAddress { address: address.clone(), input_public: input_public.clone() }
+    pub fn new(address: &String) -> ConfirmMsAddress {
+        ConfirmMsAddress { address: address.clone() }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfirmMsAddressResponse {
     pub confirmed: bool,
-    pub input_public: Comm0PublicInputs,
 }
 
 impl ConfirmMsAddressResponse {
-    pub fn new(confirmed: bool, input_public: &Comm0PublicInputs) -> ConfirmMsAddressResponse {
-        ConfirmMsAddressResponse { confirmed: confirmed, input_public: input_public.clone() }
+    pub fn new(confirmed: bool) -> ConfirmMsAddressResponse {
+        ConfirmMsAddressResponse { confirmed: confirmed }
     }
 
     pub fn not_confirmed() -> ConfirmMsAddressResponse {
-        ConfirmMsAddressResponse { confirmed: false, input_public: Comm0PublicInputs::default() }
+        ConfirmMsAddressResponse { confirmed: false }
     }
 }
 

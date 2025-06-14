@@ -42,7 +42,7 @@ use wallet::utils::publish_transaction;
 use wallet::virtual_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
 use wallet::{connect_to_rpc, MultisigWallet};
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
-use libgrease::crypto::zk_objects::Comm0PrivateInputs;
+use libgrease::crypto::zk_objects::{Comm0PrivateInputs, PeerProof0};
 use rand::{CryptoRng, RngCore};
 
 pub struct NetworkServer<D: GreaseChannelDelegate> {
@@ -298,7 +298,6 @@ where
                 "Channel {name} should be in Establishing phase"
             )));
         }
-        let nonce = channel.state().metadata().nonce();
         // drop(channel);
         // 2.1.1. Create a new keypair for the wallet.
         info!("👛️ Creating new multisig wallet keys for channel {name}");
@@ -323,7 +322,7 @@ where
         debug!("👛️ Wallet shards are valid and are stored for channel {name}");
         // 2.3. Verify the wallet address with the peer.
         let address = wallet.address();
-        let confirmation = ConfirmMsAddress::new(&address.to_string(), &Comm0PublicInputs::new(nonce));
+        let confirmation = ConfirmMsAddress::new(&address.to_string());
         debug!("👛️ Verifying wallet address with peer for channel {name}. Address: {address}");
         let confirmed = self.customer_verify_wallet_address_and_get_nonce(peer_id, &name, confirmation).await?;
         if !confirmed.confirmed {
@@ -339,11 +338,21 @@ where
         self.watch_for_funding_transaction(&name, pvk, pub_spend_key, birthday).await?;
         info!("👁️‍🗨️ Generating initial ZK-proofs for channel {name}.");
         let input_private = generate_txc0_nonces(rng);
-        let peer_proof = self.generate_and_store_witness0(&name, &confirmed.input_public, &input_private).await?;
+
+        let nonce_peer = channel.state().metadata().nonce_peer();
+        let pubkey_peer = channel.state().metadata().public_key_peer();
+
+        let input_public = Comm0PublicInputs::new(nonce_peer, pubkey_peer);
+        let peer_proof = self.generate_and_store_witness0(&name, &input_public, &input_private).await?;
         info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {name} with merchant.");
-        let merchant_proof = self.customer_send_proofs0(&name, peer_id, peer_proof).await?;
+
+        let nonce_self = channel.state().metadata().nonce_self();
+        let pubkey_self = channel.state().metadata().public_key_self();
+        let peer_proof0: PeerProof0 = PeerProof0::new(peer_proof, Comm0PublicInputs::new(nonce_self, pubkey_self));
+
+        let merchant_proof = self.customer_send_proofs0(&name, peer_id, peer_proof0).await?;
         info!("👁️‍🗨️ Verifying merchant's initial transaction proof for channel {name}. (ZK-Witness0 proof)");
-        self.verify_proof0(&name, &merchant_proof).await?;
+        self.verify_proof0(&name, &merchant_proof.public_proof0).await?;
         info!("👁️‍🗨️ Merchant's initial transaction proof is VALID for channel {name}. (ZK-Witness0 proof)");
         self.store_public_proof0(&name, &merchant_proof).await?;
         info!("👁️‍🗨️ Stored Merchant's initial transaction proof for channel {name}.");
@@ -611,12 +620,12 @@ where
     async fn split_secrets(
         &self,
         secret: &Curve25519Secret,
-        kes_pubkey: &str,
+        kes_pubkey: &GenericPoint,
         peer: &Curve25519PublicKey,
     ) -> Result<MultisigSplitSecrets, ChannelServerError> {
-        let kes = GenericPoint::from_hex(kes_pubkey)
-            .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
-        let split_secrets = self.delegate.split_secret_share(secret, &kes, peer)?;
+        // let kes = GenericPoint::from_hex(kes_pubkey)
+        //     .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
+        let split_secrets = self.delegate.split_secret_share(secret, kes_pubkey, peer)?;
         Ok(split_secrets)
     }
 
@@ -625,7 +634,7 @@ where
         peer_id: PeerId,
         name: &str,
         shards_for_merchant: MultisigSplitSecrets,
-        kes_public_key: &str,
+        kes_public_key: &GenericPoint,
     ) -> Result<MultisigSplitSecretsResponse, ChannelServerError> {
         let mut client = self.network_client.clone();
         let merchant_kes_shard = shards_for_merchant.kes_shard.clone();
@@ -636,14 +645,14 @@ where
         let (remote_channel, shards_for_customer) = env.open();
         confirm_channel_matches(&remote_channel, name)?;
         info!("🔐️ Verifying KES proofs for channel {name}.");
-        let pubkey = GenericPoint::from_hex(kes_public_key)
-            .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
+        // let pubkey = GenericPoint::from_hex(kes_public_key)
+        //     .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
         self.delegate
             .verify_kes_proofs(
                 name.to_string(),
                 merchant_kes_shard,
                 shards_for_customer.kes_shard.clone(),
-                pubkey,
+                kes_public_key,
                 shards_for_customer.kes_proof.clone(),
             )
             .await?;
@@ -719,8 +728,8 @@ where
         })?;
         let key = wallet.my_spend_key.clone();
         let peer = wallet.peer_public_key().clone();
-        let kes_pubkey = channel.state().metadata().kes_public_key().to_string();
-        drop(channel);
+        let kes_pubkey = channel.state().metadata().kes_public_key();
+        // drop(channel);
         debug!("👛️  Splitting multisig wallet spend key for customer and KES.");
         let customer_shards = self.split_secrets(&key, &kes_pubkey, &peer).await.map_err(|e| {
             GreaseResponse::MsKeyExchange(Err(RemoteServerError::internal(format!(
@@ -731,18 +740,18 @@ where
         info!("🔐️ Establishing KES.");
         // Remember, `my_shards` are the shards FOR ME. So the customer's KES-encrypted secret is in
         // `my_shards.kes_shard`.
-        let kes = GenericPoint::from_hex(&kes_pubkey).map_err(|e| {
-            GreaseResponse::MsSplitSecretExchange(Err(RemoteServerError::InternalError(format!(
-                "Failed to derive KES public key: {e}."
-            ))))
-        })?;
+        // let kes = GenericPoint::from_hex(&kes_pubkey).map_err(|e| {
+        //     GreaseResponse::MsSplitSecretExchange(Err(RemoteServerError::InternalError(format!(
+        //         "Failed to derive KES public key: {e}."
+        //     ))))
+        // })?;
         let proof = self
             .delegate
             .create_kes_proofs(
                 name.clone(),
                 my_shards.kes_shard.clone(),
                 customer_shards.kes_shard.clone(),
-                kes,
+                *kes_pubkey,
             )
             .await
             .map_err(|e| {
@@ -783,10 +792,8 @@ where
         let wallet = MultisigWallet::from_serializable(rpc, wallet.clone())?;
         if wallet.address().to_string() == *address {
             debug!("👛️  Address {address} matches for channel {name}.");
-            Ok(ConfirmMsAddressResponse::new(
-                true,
-                &Comm0PublicInputs::new(channel.state().metadata().nonce()),
-            ))
+
+            Ok(ConfirmMsAddressResponse::new(true))
         } else {
             Err(ChannelServerError::ProtocolError(format!(
                 "Address mismatch for channel {name}. Expected {}, got {}",
@@ -865,18 +872,18 @@ where
         &self,
         name: &str,
         peer_id: PeerId,
-        proof: PublicProof0,
-    ) -> Result<PublicProof0, ChannelServerError> {
+        peer_proof0: PeerProof0,
+    ) -> Result<PeerProof0, ChannelServerError> {
         debug!("👁️‍🗨️ Sending public witness_0 proof to peer for channel {name}.");
         let mut client = self.network_client.clone();
-        let proof = client.send_proof0(peer_id, name, proof).await??;
+        let proof = client.send_proof0(peer_id, name, peer_proof0).await??;
         let (remote_name, remote_proof) = proof.open();
         confirm_channel_matches(&remote_name, name)?;
         debug!("👁️‍🗨️ Received witness_0 proof from peer for channel {name}.");
         Ok(remote_proof)
     }
 
-    async fn store_public_proof0(&self, name: &str, peer_proof: &PublicProof0) -> Result<(), ChannelServerError> {
+    async fn store_public_proof0(&self, name: &str, peer_proof: &PeerProof0) -> Result<(), ChannelServerError> {
         let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof.clone()));
         channel.handle_event(event)?;
@@ -887,12 +894,12 @@ where
     /// The merchant receives the witness0 proof from the customer and returns their own proof.
     async fn merchant_exchange_proof0(
         &self,
-        envelope: MessageEnvelope<PublicProof0>,
+        envelope: MessageEnvelope<PeerProof0>,
     ) -> Result<GreaseResponse, GreaseResponse> {
         debug!("👁️‍🗨️  Received witness_0 proof exchange request");
         let (name, peer_proof) = envelope.open();
         debug!("👁️‍🗨️  Verifying received witness0 proof for channel {name}.");
-        self.verify_proof0(&name, &peer_proof)
+        self.verify_proof0(&name, &peer_proof.public_proof0)
             .await
             .map_err(|e| GreaseResponse::ExchangeProof0(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
         debug!("👁️‍🗨️  Storing witness0 proof for channel {name}.");
@@ -903,14 +910,24 @@ where
         })?;
         debug!("👁️‍🗨️  Customer's witness0 proof is VALID for channel {name}.");
         let input_private = generate_txc0_nonces(&mut rand::rng());
-        let pub_proof =
-            self.generate_and_store_witness0(&name, &peer_proof.public_inputs, &input_private).await.map_err(|e| {
+
+        // let nonce_peer = channel.state().metadata().nonce_peer();
+        // let pubkey_peer = channel.state().metadata().public_key_peer();
+
+        // let input_public = Comm0PublicInputs::new(nonce_peer, pubkey_peer);
+        let pub_proof = self
+            .generate_and_store_witness0(&name, &peer_proof.comm0_public_inputs, &input_private)
+            .await
+            .map_err(|e| {
                 GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
                     "Failed to generate witness_0 proof: {e}"
                 ))))
             })?;
+
+        let peer_proof0: PeerProof0 = PeerProof0::new(pub_proof, peer_proof.comm0_public_inputs);
+
         debug!("👁️‍🗨️  Sending witness_0 proof to customer for channel {name}.");
-        let envelope = MessageEnvelope::new(name, pub_proof);
+        let envelope = MessageEnvelope::new(name, peer_proof0);
         Ok(GreaseResponse::ExchangeProof0(Ok(envelope)))
     }
 

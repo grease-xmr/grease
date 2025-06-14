@@ -10,6 +10,7 @@ use ff_ce::Field;
 use hex;
 use num_traits::ops::euclid::Euclid;
 use poseidon_rs::Fr;
+use rand::{CryptoRng, RngCore};
 use serde::Serialize;
 use std::io::Write;
 use std::io::{self, Read};
@@ -155,6 +156,10 @@ fn byte_array_to_string_array(bytes: &[u8; 32]) -> [String; 32] {
     array
 }
 
+pub fn make_keypair<R: CryptoRng + RngCore>(_rng: &mut R) -> (BigUint, babyjubjub_rs::Point) {
+    todo!();
+}
+
 pub fn make_witness0(
     nonce_peer: &BigUint,
     blinding: &BigUint,
@@ -240,7 +245,7 @@ pub fn encrypt_message_ecdh(
     message: &BigUint,
     r: &BigUint,
     pubkey: &babyjubjub_rs::Point,
-    private_key: &BigUint,
+    private_key: Option<&BigUint>,
 ) -> Result<(babyjubjub_rs::Point, BigUint), BBError> {
     let R = B8.mul_scalar(&r.clone().into());
     let r_p = pubkey.mul_scalar(&r.clone().into());
@@ -272,7 +277,7 @@ pub fn encrypt_message_ecdh(
     let fi = R;
     let enc = cipher;
 
-    {
+    if let Some(private_key) = private_key {
         //Verify
         let private_key_i: BigInt = private_key.clone().into();
 
