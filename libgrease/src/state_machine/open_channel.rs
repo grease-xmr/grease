@@ -148,13 +148,13 @@ impl EstablishedChannelState {
         // Essentially, only witness_0 is important here, and maybe T_0. which is witness_0.G.
         // The proofs are only needed in a dispute, but when update count is 0, there's no future state to prove in a
         // dispute anyway.
-        let pvt_out = PrivateUpdateOutputs {
+        let _pvt_out = PrivateUpdateOutputs {
             witness_i: self.my_proof0.private_outputs.witness_0,
             ..PrivateUpdateOutputs::default()
         };
-        let pub_out =
+        let _pub_out =
             PublicUpdateOutputs { T_current: self.my_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
-        let peer_pub_out =
+        let _peer_pub_out =
             PublicUpdateOutputs { T_current: self.peer_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
         todo!("Finalize the channel if no updates have been made");
     }

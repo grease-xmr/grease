@@ -2,6 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
+use crate::crypto::zk_objects::GenericScalar;
 use crate::lifecycle_impl;
 use crate::monero::data_objects::ClosingAddresses;
 use crate::payment_channel::ChannelRole;
@@ -13,6 +14,7 @@ use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
 use digest::Digest;
 use log::*;
 use monero::{Address, Network};
+use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -65,7 +67,7 @@ impl NewChannelBuilder {
         }
     }
 
-    pub fn build<D: Digest>(&self) -> Option<NewChannelState> {
+    pub fn build<D: Digest, R: CryptoRng + RngCore>(&self, rng: &mut R) -> Option<NewChannelState> {
         if self.my_label.is_none()
             || self.peer_label.is_none()
             || (self.merchant_amount.is_none() && self.customer_amount.is_none())
@@ -94,11 +96,15 @@ impl NewChannelBuilder {
             ClosingAddresses { customer: self.customer_closing.unwrap(), merchant: self.merchant_closing.unwrap() };
 
         let channel_id = ChannelId::new::<D>(merchant_label.clone(), customer_label.clone(), initial_balances, closing);
+
+        let nonce = GenericScalar::random(rng);
+
         let channel_info = ChannelMetadata::new(
             self.network.unwrap_or(Network::Mainnet),
             self.channel_role,
             channel_id,
             self.kes_public_key.clone().unwrap(),
+            nonce,
         );
         Some(NewChannelState { metadata: channel_info, customer_label, merchant_label })
     }

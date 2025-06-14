@@ -1,7 +1,7 @@
-use crate::amount::MoneroDelta;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::payment_channel::ChannelRole;
+use crate::{amount::MoneroDelta, crypto::zk_objects::GenericScalar};
 use monero::Network;
 use serde::{Deserialize, Serialize};
 
@@ -21,15 +21,27 @@ pub struct ChannelMetadata {
     channel_id: ChannelId,
     /// The KES identifier.
     kes_public_key: String,
+    /// Random nonce
+    nonce: GenericScalar,
 }
 
 impl ChannelMetadata {
-    pub fn new(network: Network, role: ChannelRole, channel_id: ChannelId, kes_public_key: String) -> Self {
-        Self { network, role, current_balances: channel_id.initial_balance(), channel_id, kes_public_key }
+    pub fn new(
+        network: Network,
+        role: ChannelRole,
+        channel_id: ChannelId,
+        kes_public_key: String,
+        nonce: GenericScalar,
+    ) -> Self {
+        Self { network, role, current_balances: channel_id.initial_balance(), channel_id, kes_public_key, nonce }
     }
 
     pub fn channel_id(&self) -> &ChannelId {
         &self.channel_id
+    }
+
+    pub fn nonce(&self) -> &GenericScalar {
+        &self.nonce
     }
 
     pub fn role(&self) -> ChannelRole {

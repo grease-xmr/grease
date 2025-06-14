@@ -13,7 +13,8 @@ use futures::channel::{
 use futures::{SinkExt, StreamExt};
 use libgrease::crypto::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
-    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
+    ConfirmMsAddressResponse, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse,
+    TransactionRecord,
 };
 use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::core::transport::ListenerId;
@@ -206,7 +207,7 @@ macro_rules! event_loop {
 event_loop!(
     Command(MultiSigKeyExchange): MsKeyExchange => MsKeyExchange[MultisigKeyInfo],
     Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
-    Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
+    Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[ConfirmMsAddressResponse],
     Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
     Command(PrepareUpdate): PrepareUpdate => UpdatePrepared[UpdatePrepared],
     Command(CommitUpdate): CommitUpdate => UpdateCommitted[FinalizedUpdate],

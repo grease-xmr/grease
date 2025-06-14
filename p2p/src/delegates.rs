@@ -1,11 +1,13 @@
 use crate::message_types::NewChannelProposal;
 use crate::Client;
+use circuits::BBError;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    AdaptedSignature, Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey,
-    PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
+    AdaptedSignature, Comm0PrivateInputs, Comm0PublicInputs, GenericPoint, GenericScalar, KesProof,
+    PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof,
+    UpdateProofs,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
@@ -16,9 +18,19 @@ use thiserror::Error;
 use wallet::watch_only::WatchOnlyWallet;
 use wallet::{connect_to_rpc, Rpc};
 
-#[derive(Debug, Error)]
-#[error("Delegate error: {0}")]
-pub struct DelegateError(pub String);
+#[derive(Error, Debug)]
+pub enum DelegateError {
+    #[error("An error occurred while zkSNARK processing. {0}")]
+    BBError(#[from] BBError),
+    #[error("An error occurred. {0}")]
+    String(String),
+    #[error("NIZK DLEQ failed to verify")]
+    DLEQVerify,
+
+    #[cfg(debug_assertions)]
+    #[error("Feature is not implemented")]
+    TODO(),
+}
 
 //---------------------------------   Verify Channel Proposals    ------------------------------------------------------
 
@@ -65,7 +77,8 @@ pub trait FundChannel {
 pub trait GreaseInitializer {
     fn generate_initial_proofs(
         &self,
-        inputs: Comm0PrivateInputs,
+        input_public: &Comm0PublicInputs,
+        input_private: &Comm0PrivateInputs,
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<Proofs0, DelegateError>> + Send;
 
@@ -75,6 +88,8 @@ pub trait GreaseInitializer {
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
+
+//----------------------------------------   Commitment TX0 ------------------------------------------------------------
 
 /// Co-ordinate with the L2 to produce a signature from the KES that it has been set up correctly.
 pub trait KesProver {
@@ -172,10 +187,12 @@ impl ProposalVerifier for DummyDelegate {
 impl GreaseInitializer for DummyDelegate {
     async fn generate_initial_proofs(
         &self,
-        _in: Comm0PrivateInputs,
+        _input_public: &Comm0PublicInputs,
+        _input_private: &Comm0PrivateInputs,
         metadata: &ChannelMetadata,
     ) -> Result<Proofs0, DelegateError> {
         info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
+
         Ok(Proofs0::default())
     }
 
@@ -185,6 +202,7 @@ impl GreaseInitializer for DummyDelegate {
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
+
         Ok(())
     }
 }
@@ -213,7 +231,7 @@ impl KesProver for DummyDelegate {
             info!("DummyDelegate: KES proofs verified successfully");
             Ok(())
         } else {
-            Err(DelegateError("Invalid KES proofs".to_string()))
+            Err(DelegateError::String("Invalid KES proofs".to_string()))
         }
     }
 }
@@ -332,7 +350,7 @@ impl Updater for DummyDelegate {
             );
             Ok(())
         } else {
-            Err(DelegateError("Invalid update proof".to_string()))
+            Err(DelegateError::String("Invalid update proof".to_string()))
         }
     }
 

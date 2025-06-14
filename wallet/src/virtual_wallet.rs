@@ -387,7 +387,7 @@ impl MultisigWallet {
         Ok(())
     }
 
-    pub fn verify_adapted_signature(&self, adapted: &AdaptedSignature) -> Result<(), WalletError> {
+    pub fn verify_adapted_signature(&self, _adapted: &AdaptedSignature) -> Result<(), WalletError> {
         // TODO: Implement verification logic for adapted signatures
         Ok(())
     }
