@@ -4,8 +4,8 @@ use futures::channel::oneshot;
 use libgrease::channel_id::ChannelId;
 use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
 use libgrease::monero::data_objects::{
-    ClosingAddresses, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    TransactionRecord,
+    ClosingAddresses, ConfirmMsAddress, ConfirmMsAddressResponse, MessageEnvelope, MultisigKeyInfo,
+    MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionRecord,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -29,7 +29,7 @@ pub enum GreaseRequest {
     /// signature from the KES in return.
     MsSplitSecretExchange(MessageEnvelope<MultisigSplitSecrets>),
     /// The customer wants to confirm that the wallet is created correctly.
-    ConfirmMsAddress(MessageEnvelope<String>),
+    ConfirmMsAddress(MessageEnvelope<ConfirmMsAddress>),
     /// The customer is requesting an exchange of witness0 proofs as one of the final steps for establishing a new
     /// channel
     ExchangeProof0(MessageEnvelope<PublicProof0>),
@@ -50,7 +50,7 @@ pub enum GreaseResponse {
     MsSplitSecretExchange(Result<MessageEnvelope<MultisigSplitSecretsResponse>, RemoteServerError>),
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
-    ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
+    ConfirmMsAddress(Result<MessageEnvelope<ConfirmMsAddressResponse>, RemoteServerError>),
     ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
     ChannelUpdate(Result<MessageEnvelope<UpdateInfo>, RemoteServerError>),
     ChannelClose(Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>),
@@ -85,7 +85,7 @@ impl Display for GreaseResponse {
             ({e})"
             ),
             GreaseResponse::ConfirmMsAddress(Ok(env)) => {
-                let status = if env.payload { "OK" } else { "NOT OK" };
+                let status = if env.payload.confirmed { "OK" } else { "NOT OK" };
                 write!(f, "Multisig address confirmation: {status}")
             }
             GreaseResponse::ConfirmMsAddress(Err(e)) => write!(
@@ -161,8 +161,8 @@ pub enum ClientCommand {
     },
     ConfirmMultiSigAddressRequest {
         peer_id: PeerId,
-        envelope: MessageEnvelope<String>,
-        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
+        envelope: MessageEnvelope<ConfirmMsAddress>,
+        sender: oneshot::Sender<Result<MessageEnvelope<ConfirmMsAddressResponse>, RemoteServerError>>,
     },
     ExchangeProof0 {
         peer_id: PeerId,
