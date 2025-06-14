@@ -2,6 +2,7 @@ const blake = require('blakejs')
 const { Base8, mulPointEscalar, addPoint, packPoint, r, inCurve } = require( "@zk-kit/baby-jubjub")
 const { ed25519 } = require('@noble/curves/ed25519');
 const crypto = require('crypto');
+const os = require('os');
 
 //Constants
 // Baby Jubjub curve order [251 bit value]
@@ -83,14 +84,14 @@ function hexTo32ByteArrayDecimal(hexVariable) {
   // Uint8Array (32 bytes)
   const array = new Uint8Array(buffer);
 
-  let output = '["';
+  let output = '[' + os.EOL;
   array.forEach((byte, index) => {
-      output += byte.toString(10);
-      if (index < array.length - 1) {
-          output += '", "'; // Add comma separator except for the last byte
-      }
+      output += '    "' + byte.toString(10) + '",' + os.EOL;
+      // if (index < array.length - 1) {
+      //    output += '", "'; // Add comma separator except for the last byte
+      // }
   });
-  output += '"]';
+  output += ']';
 
   return output;
 }
@@ -381,33 +382,33 @@ console.log(`witness_0 = "${witness_0.toString()}"`);
 
 console.log('');
 console.log('[T_0]');
-console.log(`  x="0x${T_0[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${T_0[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${T_0[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${T_0[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[c_1]');
-console.log(`  x="0x${c_1[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${c_1[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${c_1[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${c_1[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[fi_1]');
-console.log(`  x="0x${fi_1[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${fi_1[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${fi_1[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${fi_1[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[fi_2]');
-console.log(`  x="0x${fi_2[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${fi_2[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${fi_2[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${fi_2[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[pubkey_KES]');
-console.log(`  x="0x${pubkey_KES[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${pubkey_KES[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${pubkey_KES[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${pubkey_KES[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[pubkey_peer]');
-console.log(`  x="0x${pubkey_peer[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${pubkey_peer[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${pubkey_peer[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${pubkey_peer[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 //Update/VerifyCOF
@@ -437,10 +438,10 @@ let T_i = mulPointEscalar(Base8, witness_1);
 
 console.log('');
 console.log('[T_i]');
-console.log(`  x="0x${T_i[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${T_i[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${T_i[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${T_i[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[T_im1]');
-console.log(`  x="0x${T_0[0].toString(16).padStart(64, '0')}"`);
-console.log(`  y="0x${T_0[1].toString(16).padStart(64, '0')}"`);
+console.log(`x="0x${T_0[0].toString(16).padStart(64, '0')}"`);
+console.log(`y="0x${T_0[1].toString(16).padStart(64, '0')}"`);

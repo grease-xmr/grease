@@ -1,7 +1,7 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo, UpdateInfo, UpdateProofs};
+use libgrease::crypto::zk_objects::{KesProof, PeerProof0, Proofs0, ShardInfo, UpdateInfo, UpdateProofs};
 use libgrease::monero::data_objects::{MultisigWalletData, TransactionId};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
@@ -253,9 +253,9 @@ impl PaymentChannel {
         })
     }
 
-    fn on_peer_proof0(&mut self, peer_proof: PublicProof0) -> Result<(), LifeCycleError> {
+    fn on_peer_proof0(&mut self, peer_proof: PeerProof0) -> Result<(), LifeCycleError> {
         self.update_establishing(|mut establishing| {
-            establishing.save_peer_proof0(peer_proof);
+            establishing.save_peer_proof0(peer_proof.public_proof0, peer_proof.comm0_public_inputs);
             match establishing.next() {
                 Ok(established) => {
                     debug!("⚡️  Transitioned to Established state after receiving peer's proof0");

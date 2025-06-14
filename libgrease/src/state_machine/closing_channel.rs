@@ -2,7 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{
-    GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, ShardInfo,
+    GenericScalar, KesProof, PeerProof0, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo,
 };
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{MultisigWalletData, TransactionId};
@@ -28,7 +28,7 @@ pub struct ClosingChannelState {
     pub(crate) funding_transactions: HashMap<TransactionId, MoneroAmount>,
     pub(crate) peer_witness: GenericScalar,
     pub(crate) my_proof0: Proofs0,
-    pub(crate) peer_proof0: PublicProof0,
+    pub(crate) peer_proof0: PeerProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) last_private_outputs: PrivateUpdateOutputs,
     pub(crate) last_public_outputs: PublicUpdateOutputs,
