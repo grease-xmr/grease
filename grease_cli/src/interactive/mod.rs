@@ -211,7 +211,7 @@ impl InteractiveApp {
         let info = self.server.channel_metadata(name).await.ok_or_else(|| anyhow!("No channel metadata found"))?;
         let customer_balance = info.balances().customer;
         let amount = dialoguer::Input::<String>::new()
-            .with_prompt(format!("Send amount (available: {customer_balance} XMR)"))
+            .with_prompt(format!("Send amount (available: {customer_balance})"))
             .interact()?;
         let amount = MoneroAmount::from_xmr(&amount).ok_or_else(|| anyhow!("Invalid XMR value"))?;
         // We could easily add a check here to ensure the amount is not greater than the available balance

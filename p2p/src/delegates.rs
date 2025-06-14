@@ -4,8 +4,8 @@ use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0,
-    PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
+    AdaptedSignature, Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey,
+    PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
@@ -112,6 +112,13 @@ pub trait Updater {
         delta: MoneroDelta,
         proof: &PublicUpdateProof,
         metadata: &ChannelMetadata,
+    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
+
+    fn verify_adapted_signature(
+        &self,
+        update_count: u64,
+        peer_proof: &PublicUpdateProof,
+        adapted_sig: &AdaptedSignature,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
@@ -264,7 +271,9 @@ impl FundChannel for DummyDelegate {
             let output = wallet.outputs().first().expect("No outputs").clone();
             let amount = MoneroAmount::from(output.commitment().amount);
             let id = hex::encode(output.transaction());
-            let record = TransactionRecord { channel_name: name, amount, transaction_id: TransactionId { id } };
+            let serialized = output.serialize();
+            let record =
+                TransactionRecord { channel_name: name, amount, transaction_id: TransactionId { id }, serialized };
             info!("Funding transaction found: {:?}", record);
             let _ = client.notify_tx_mined(record).await.map_err(|e| {
                 warn!("Failed to notify tx mined block: {:?}", e);
@@ -282,8 +291,11 @@ impl Updater for DummyDelegate {
         _blinding_dleq: &GenericScalar,
         metadata: &ChannelMetadata,
     ) -> Result<UpdateProofs, DelegateError> {
-        info!("Generating update {index} proof for channel.  {}", delta.amount);
+        info!("DummyDelegate: Generating update {index} proof for channel.  {}", delta.amount);
         let mut rng = rand::rng();
+        // The witnesses need to be valid scalars
+        let next_witness = Curve25519Secret::random(&mut rng);
+        let witness_i = GenericScalar(next_witness.as_scalar().to_bytes());
         let public_outputs = PublicUpdateOutputs {
             T_prev: GenericPoint::random(&mut rng),
             T_current: GenericPoint::random(&mut rng),
@@ -296,7 +308,7 @@ impl Updater for DummyDelegate {
         };
         let private_outputs = PrivateUpdateOutputs {
             update_count: index,
-            witness_i: GenericScalar::random(&mut rng),
+            witness_i,
             delta_bjj: GenericScalar::random(&mut rng),
             delta_ed: GenericScalar::random(&mut rng),
         };
@@ -322,6 +334,16 @@ impl Updater for DummyDelegate {
         } else {
             Err(DelegateError("Invalid update proof".to_string()))
         }
+    }
+
+    async fn verify_adapted_signature(
+        &self,
+        _index: u64,
+        _proof: &PublicUpdateProof,
+        _sig: &AdaptedSignature,
+    ) -> Result<(), DelegateError> {
+        info!("Dummy delegate: Verifying adapted signature");
+        Ok(())
     }
 }
 

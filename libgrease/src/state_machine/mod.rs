@@ -20,7 +20,7 @@ pub use new_channel::{
     ChannelSeedBuilder, ChannelSeedInfo, NewChannelBuilder, NewChannelState, ProposedChannelInfo,
     RejectNewChannelReason,
 };
-pub use open_channel::EstablishedChannelState;
+pub use open_channel::{EstablishedChannelState, UpdateRecord};
 pub use timeouts::TimeoutReason;
 
 pub use commitment_tx::CommitmentTransaction;

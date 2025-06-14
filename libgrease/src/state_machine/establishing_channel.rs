@@ -2,7 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
 use crate::lifecycle_impl;
-use crate::monero::data_objects::{MultisigWalletData, TransactionId};
+use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::lifecycle::ChannelState;
 use crate::state_machine::new_channel::NewChannelState;
@@ -20,7 +20,7 @@ pub struct EstablishingState {
     pub(crate) shards: Option<ShardInfo>,
     pub(crate) my_proof0: Option<Proofs0>,
     pub(crate) peer_proof0: Option<PublicProof0>,
-    pub(crate) funding_transaction_ids: HashMap<TransactionId, MoneroAmount>,
+    pub(crate) funding_transaction_ids: HashMap<TransactionId, TransactionRecord>,
     pub(crate) kes_proof: Option<KesProof>,
     /// Data used to watch for the funding transaction. Implementation agnostic.
     #[serde(
@@ -81,7 +81,7 @@ impl EstablishingState {
     }
 
     pub fn funding_total(&self) -> MoneroAmount {
-        self.funding_transaction_ids.values().copied().sum()
+        self.funding_transaction_ids.values().map(|r| r.amount).sum()
     }
 
     pub fn wallet(&self) -> Option<&MultisigWalletData> {
@@ -137,9 +137,9 @@ impl EstablishingState {
         }
     }
 
-    pub fn funding_tx_confirmed(&mut self, funding_tx_id: TransactionId, amount: MoneroAmount) {
+    pub fn funding_tx_confirmed(&mut self, transaction: TransactionRecord) {
         debug!("Funding transaction broadcasted");
-        self.funding_transaction_ids.insert(funding_tx_id, amount);
+        self.funding_transaction_ids.insert(transaction.transaction_id.clone(), transaction);
     }
 
     #[allow(clippy::result_large_err)]
@@ -158,9 +158,7 @@ impl EstablishingState {
             my_proof0: self.my_proof0.unwrap(),
             peer_proof0: self.peer_proof0.unwrap(),
             kes_proof: self.kes_proof.unwrap(),
-            current_private_outputs: None,
-            current_public_outputs: None,
-            current_peer_public_outputs: None,
+            current_update: None,
             update_count: 0,
         };
         Ok(open_channel)

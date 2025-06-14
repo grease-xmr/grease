@@ -1,5 +1,6 @@
-use crate::amount::MoneroDelta;
+use crate::crypto::keys::Curve25519Secret;
 use crate::monero::data_objects::MultisigSplitSecrets;
+use curve25519_dalek::Scalar;
 use hex::FromHexError;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -7,8 +8,18 @@ use serde::{Deserialize, Serialize};
 /// A curve-agnostic representation of a scalar.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct GenericScalar(
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")] [u8; 32],
+    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")]
+    pub  [u8; 32],
 );
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdaptedSignature(pub Curve25519Secret);
+
+impl AdaptedSignature {
+    pub fn as_scalar(&self) -> &Scalar {
+        self.0.as_scalar()
+    }
+}
 
 impl GenericScalar {
     pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
@@ -158,13 +169,6 @@ impl UpdateProofs {
 pub struct PublicUpdateProof {
     pub public_outputs: PublicUpdateOutputs,
     pub proof: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct UpdateInfo {
-    pub index: u64,
-    pub delta: MoneroDelta,
-    pub proof: PublicUpdateProof,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]

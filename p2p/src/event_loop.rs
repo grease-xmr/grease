@@ -4,16 +4,16 @@
 
 use crate::behaviour::ConnectionBehaviorEvent as Event;
 use crate::errors::{PeerConnectionError, RemoteServerError};
-use crate::message_types::ChannelProposalResult;
+use crate::message_types::{ChannelProposalResult, UpdatePrepared};
 use crate::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnection, PeerConnectionEvent};
 use futures::channel::{
     mpsc::{Receiver, Sender},
     oneshot,
 };
 use futures::{SinkExt, StreamExt};
-use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
+use libgrease::crypto::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
-    MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
+    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
 };
 use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::core::transport::ListenerId;
@@ -208,7 +208,8 @@ event_loop!(
     Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
     Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
     Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
-    Command(ChannelUpdate): ChannelUpdate => ChannelUpdate[UpdateInfo],
+    Command(PrepareUpdate): PrepareUpdate => UpdatePrepared[UpdatePrepared],
+    Command(CommitUpdate): CommitUpdate => UpdateCommitted[FinalizedUpdate],
     Command(ChannelClose): ChannelClose => ChannelClose[ChannelCloseRecord]
 );
 

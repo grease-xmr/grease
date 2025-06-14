@@ -6,16 +6,20 @@ use monero_simple_request_rpc::SimpleRequestRpc;
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::mem;
 use std::path::Path;
 use zeroize::Zeroizing;
 
+use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::crypto::zk_objects::AdaptedSignature;
 use libgrease::monero::data_objects::MultisigWalletData;
-use log::debug;
+use log::*;
 use modular_frost::dkg::musig::musig;
 use modular_frost::dkg::DkgError;
-use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare};
-use modular_frost::{FrostError, Participant, ThresholdKeys, ThresholdParams};
+use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
+use modular_frost::{FrostError, Participant, ThresholdKeys};
+use monero::{Address as UAddress, AddressType as UAddressType};
 use monero_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
 use monero_serai::ringct::clsag::ClsagAddendum;
@@ -29,7 +33,7 @@ use monero_wallet::{OutputWithDecoys, Scanner, ViewPair, WalletOutput};
 use rand_core::{OsRng, SeedableRng};
 use thiserror::Error;
 
-pub type Commitment = Preprocess<Ed25519, ClsagAddendum>;
+pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
 
 #[derive(Debug, Clone, Error)]
 pub enum WalletError {
@@ -45,6 +49,8 @@ pub enum WalletError {
     FrostError(#[from] FrostError),
     #[error("Error deserializing: {0}")]
     DeserializeError(String),
+    #[error("Error signing transaction: {0}")]
+    SigningError(String),
 }
 
 pub struct MultisigWallet {
@@ -58,9 +64,9 @@ pub struct MultisigWallet {
     joint_public_spend_key: Curve25519PublicKey,
     birthday: u64,
     known_outputs: Vec<WalletOutput>,
-    preprocess_data: Option<Vec<Commitment>>,
+    preprocess_data: Option<Vec<MoneroPreprocess>>,
     sign_machine: Option<TransactionSignMachine>,
-    shares: Option<Vec<SignatureShare<Ed25519>>>,
+    shared_spend_key: Option<SignatureShare<Ed25519>>,
     final_signer: Option<TransactionSignatureMachine>,
 }
 
@@ -93,7 +99,7 @@ impl MultisigWallet {
             known_outputs: Vec::new(),
             preprocess_data: None,
             sign_machine: None,
-            shares: None,
+            shared_spend_key: None,
             final_signer: None,
         })
     }
@@ -150,7 +156,7 @@ impl MultisigWallet {
             known_outputs,
             preprocess_data: None,
             sign_machine: None,
-            shares: None,
+            shared_spend_key: None,
             final_signer: None,
         })
     }
@@ -203,6 +209,13 @@ impl MultisigWallet {
         }
         debug!("Scanned {scanned} blocks. {found} outputs found");
         Ok(found)
+    }
+
+    pub fn import_output(&mut self, serialized: &Vec<u8>) -> Result<(), WalletError> {
+        let mut reader = serialized.as_slice();
+        let output = WalletOutput::read(&mut reader).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
+        self.known_outputs.push(output);
+        Ok(())
     }
 
     pub fn outputs(&self) -> &[WalletOutput] {
@@ -322,35 +335,92 @@ impl MultisigWallet {
         Ok(())
     }
 
-    pub fn my_pre_process_data(&self) -> Option<Vec<Commitment>> {
-        self.preprocess_data.clone()
+    pub fn my_pre_process_data(&self) -> Option<Vec<u8>> {
+        self.preprocess_data.as_ref().and_then(|v| {
+            trace!("** Pre-allocate: Preprocess has {} elements", v.len());
+            v.first().map(|pp| {
+                let mut buf = Vec::with_capacity(160);
+                pp.write(&mut buf).unwrap();
+                trace!("** Pre-allocate: Preprocess data length: {}", buf.len());
+                trace!("buf_before: {}", hex::encode(&buf));
+                buf
+            })
+        })
     }
 
-    pub fn partial_sign(&mut self, peer_data: Vec<Commitment>) -> Result<(), WalletError> {
+    pub fn partial_sign(&mut self, peer_data: &[u8]) -> Result<(), WalletError> {
         if self.sign_machine.is_none() || self.preprocess_data.is_none() {
             return Err(WalletError::KeyError("Sign machine or preprocess data not initialized".into()));
         }
+        let data = peer_data.to_vec();
         let machine = self.sign_machine.take().unwrap();
-        debug!("peer data length: {}", peer_data.len());
-        debug!("my preprocess data length: {}", self.preprocess_data.as_ref().unwrap().len());
-        let commitments = self.assign_commitments(peer_data);
-        let (tx_machine, shares) = machine.sign(commitments, &[])?;
-        debug!("Signing completed with {} shares", shares.len());
-        self.shares = Some(shares);
+        let preprocess = machine
+            .read_preprocess(&mut data.as_slice())
+            .map_err(|e| WalletError::SigningError(format!("Invalid preprocess data: {e}")))?;
+        trace!("Deserialized preprocess data: {} elements", preprocess.len());
+        let commitments = self.assign_commitments(preprocess);
+        let (tx_machine, mut shares) = machine.sign(commitments, &[])?;
+        if shares.len() != 1 {
+            error!(
+                "There should only ever be one signature share, in a 2-of-2 wallet but got {}",
+                shares.len()
+            );
+        }
+        self.shared_spend_key = Some(shares.remove(0));
         self.final_signer = Some(tx_machine);
         Ok(())
     }
 
-    pub fn my_signing_shares(&self) -> Option<Vec<SignatureShare<Ed25519>>> {
-        self.shares.clone()
+    pub fn verify_adapted_signature(&self, adapted: &AdaptedSignature) -> Result<(), WalletError> {
+        // TODO: Implement verification logic for adapted signatures
+        Ok(())
     }
 
-    pub fn sign(&mut self, peer_shares: Vec<SignatureShare<Ed25519>>) -> Result<Transaction, WalletError> {
-        if self.final_signer.is_none() || self.shares.is_none() {
+    pub fn my_signing_shares(&self) -> Option<SignatureShare<Ed25519>> {
+        self.shared_spend_key.clone()
+    }
+
+    pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptedSignature, WalletError> {
+        let real_sig = self
+            .my_signing_shares()
+            .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
+        let real_sig = signature_share_to_secret(real_sig);
+        let adapted = real_sig.as_scalar() + witness.as_scalar();
+        Ok(AdaptedSignature(Curve25519Secret::from(adapted)))
+    }
+
+    pub fn bytes_to_signature_share(&self, bytes: &[u8]) -> Result<SignatureShare<Ed25519>, WalletError> {
+        let mut reader = bytes;
+        let machine = self.final_signer.as_ref().ok_or_else(|| {
+            WalletError::SigningError("Call partial_sign before trying to read a signature share".into())
+        })?;
+        let mut share = machine
+            .read_share(&mut reader)
+            .map_err(|e| WalletError::SigningError(format!("Invalid signature share: {e}")))?;
+        if share.len() != 1 {
+            return Err(WalletError::SigningError(
+                "There should only be 1 share in a 2-of-2 wallet".into(),
+            ));
+        }
+        Ok(share.remove(0))
+    }
+    pub fn extract_true_signature(
+        &self,
+        adapted: &AdaptedSignature,
+        offset: &Curve25519Secret,
+    ) -> Result<SignatureShare<Ed25519>, WalletError> {
+        let sig = adapted.as_scalar() - offset.as_scalar();
+        let bytes = sig.as_bytes();
+        let sig = self.bytes_to_signature_share(bytes)?;
+        Ok(sig)
+    }
+
+    pub fn sign(&mut self, peer_share: SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
+        if self.final_signer.is_none() || self.shared_spend_key.is_none() {
             return Err(WalletError::KeyError("Final signer or shares not initialized".into()));
         }
         let machine = self.final_signer.take().unwrap();
-        let shares = self.assign_shares(peer_shares);
+        let shares = self.assign_shares(vec![peer_share]);
         let tx = machine.complete(shares)?;
         debug!("Final signing completed");
         Ok(tx)
@@ -365,7 +435,7 @@ impl MultisigWallet {
         }
     }
 
-    fn assign_commitments(&self, peer_data: Vec<Commitment>) -> HashMap<Participant, Vec<Commitment>> {
+    fn assign_commitments(&self, peer_data: Vec<MoneroPreprocess>) -> HashMap<Participant, Vec<MoneroPreprocess>> {
         let mut commitments = HashMap::new();
         let (me, them) = self.participants();
         debug!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
@@ -381,7 +451,6 @@ impl MultisigWallet {
         let mut shares = HashMap::new();
         let (me, them) = self.participants();
         debug!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
-        //shares.insert(me, self.shares.clone().expect("We should have signature shares"));
         shares.insert(them, peer_shares);
         shares
     }
@@ -435,11 +504,60 @@ impl MultisigWallet {
     }
 }
 
-pub fn threshold_params(p: &Participant) -> ThresholdParams {
-    ThresholdParams::new(2, 2, *p).expect("not to fail with valid hardcoded params")
+/// Converts a vector of payments from the state machine into one that can be used by the wallet.
+/// Also accounts for fees.
+pub fn adapt_payments(
+    unadjusted: [(UAddress, MoneroAmount); 2],
+    fee: MoneroAmount,
+) -> Result<Vec<(MoneroAddress, u64)>, WalletError> {
+    if unadjusted[0].1 + unadjusted[1].1 <= fee {
+        return Err(WalletError::InsufficientFunds);
+    };
+    // split fee equally between the two addresses if possible
+    let fee = fee.to_piconero();
+    let fair_share = fee / 2;
+    let fee_0 = unadjusted[0].1.to_piconero().min(fair_share);
+    let val0 = unadjusted[0].1.to_piconero() - fee_0;
+    let val1 = unadjusted[1].1.to_piconero() - (fee - fee_0);
+    Ok(vec![
+        (convert_address(unadjusted[0].0), val0),
+        (convert_address(unadjusted[1].0), val1),
+    ])
 }
 
-pub fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
+pub fn signature_share_to_secret(signature: SignatureShare<Ed25519>) -> Curve25519Secret {
+    // Safety: SignatureShare<Ed25519> is a wrapper around a DScalar, as is Curve25519Secret
+    let sig = unsafe {
+        let scalar: DScalar = mem::transmute(signature);
+        scalar
+    };
+    Curve25519Secret::from(sig)
+}
+
+pub fn signature_share_to_bytes(secret: &SignatureShare<Ed25519>) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(64);
+    secret.write(&mut buf).expect("Failed to write signature share to buffer");
+    trace!("signature_share_to_bytes buf={}", buf.len());
+    buf
+}
+
+pub fn convert_address(address: UAddress) -> MoneroAddress {
+    let kind = match address.addr_type {
+        UAddressType::Standard => AddressType::Legacy,
+        UAddressType::Integrated(v) => AddressType::LegacyIntegrated(v.0),
+        UAddressType::SubAddress => AddressType::Subaddress,
+    };
+    let network = match address.network {
+        monero::Network::Mainnet => Network::Mainnet,
+        monero::Network::Testnet => Network::Testnet,
+        monero::Network::Stagenet => Network::Stagenet,
+    };
+    let spend = address.public_spend.point.decompress().expect("Addresses weren't compatible?");
+    let view = address.public_view.point.decompress().expect("Addresses weren't compatible?");
+    MoneroAddress::new(network, kind, spend, view)
+}
+
+fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
     let mut result = [0u8; 64 + 5];
     result[..5].copy_from_slice(b"Musig");
     result[5..5 + 32].copy_from_slice(keys[0].as_compressed().as_bytes());
@@ -447,11 +565,11 @@ pub fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
     result
 }
 
-pub fn sort_pubkeys(keys: &mut [Curve25519PublicKey; 2]) {
+fn sort_pubkeys(keys: &mut [Curve25519PublicKey; 2]) {
     keys.sort_unstable_by(|a, b| a.as_compressed().as_bytes().cmp(b.as_compressed().as_bytes()));
 }
 
-pub fn musig_2_of_2(
+fn musig_2_of_2(
     secret: &Curve25519Secret,
     sorted_pubkeys: &[Curve25519PublicKey; 2],
 ) -> Result<ThresholdKeys<Ed25519>, DkgError<()>> {
@@ -463,10 +581,7 @@ pub fn musig_2_of_2(
     Ok(ThresholdKeys::new(core))
 }
 
-pub fn musig_dh_viewkey(
-    secret: &Curve25519Secret,
-    other_key: &Curve25519PublicKey,
-) -> (Zeroizing<Scalar>, EdwardsPoint) {
+fn musig_dh_viewkey(secret: &Curve25519Secret, other_key: &Curve25519PublicKey) -> (Zeroizing<Scalar>, EdwardsPoint) {
     let shared = other_key.as_point() * secret.as_scalar();
     let hashed =
         blake2::Blake2b512::new().chain_update(b"MuSigViewKey").chain_update(shared.compress().as_bytes()).finalize();
@@ -477,12 +592,7 @@ pub fn musig_dh_viewkey(
     (Zeroizing::new(private_view_key), public_view_key)
 }
 
-pub async fn get_highest_block(rpc: &SimpleRequestRpc) -> Result<Block, RpcError> {
-    let height = rpc.get_height().await?;
-    rpc.get_block_by_number(height - 1).await
-}
-
-pub fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<DScalar> {
+fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<DScalar> {
     let mut data = [0u8; 32 + 8];
     data[..32].copy_from_slice(spend_key.as_compressed().as_bytes());
     data[32..].copy_from_slice(&index.to_le_bytes());

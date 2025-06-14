@@ -1,8 +1,9 @@
-use crate::amount::MoneroAmount;
-use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo, UpdateInfo, UpdateProofs};
-use crate::monero::data_objects::{MultisigWalletData, TransactionId};
+use crate::amount::{MoneroDelta};
+use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
+use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::closing_channel::ChannelCloseRecord;
 use crate::state_machine::new_channel::RejectNewChannelReason;
+use crate::state_machine::open_channel::UpdateRecord;
 use crate::state_machine::timeouts::TimeoutReason;
 use crate::state_machine::ProposedChannelInfo;
 use std::fmt::{Display, Formatter};
@@ -18,9 +19,9 @@ pub enum LifeCycleEvent {
     PeerProof0Received(Box<PublicProof0>),
     KesShards(Box<ShardInfo>),
     KesCreated(Box<KesProof>),
-    FundingTxConfirmed(Box<(TransactionId, MoneroAmount)>),
+    FundingTxConfirmed(Box<TransactionRecord>),
     FinalTxConfirmed(Box<TransactionId>),
-    ChannelUpdate(Box<(UpdateProofs, UpdateInfo)>),
+    ChannelUpdate(Box<(MoneroDelta, UpdateRecord)>),
     CloseChannel(Box<ChannelCloseRecord>),
     OnForceClose,
     OnDisputeResolved,
@@ -37,7 +38,7 @@ impl Display for LifeCycleEvent {
             LifeCycleEvent::FundingTxConfirmed(_) => write!(f, "FundingTxConfirmed"),
             LifeCycleEvent::MyProof0Generated(_) => write!(f, "MyProof0Generated"),
             LifeCycleEvent::PeerProof0Received(_) => write!(f, "PeerProof0Received"),
-            LifeCycleEvent::ChannelUpdate(u) => write!(f, "ChannelUpdate_{}", u.1.index),
+            LifeCycleEvent::ChannelUpdate(_) => write!(f, "ChannelUpdate"),
             LifeCycleEvent::CloseChannel(_) => write!(f, "CloseChannel"),
             LifeCycleEvent::RejectNewChannel(_) => write!(f, "OnRejectNewChannel"),
             LifeCycleEvent::OnForceClose => write!(f, "OnForceClose"),

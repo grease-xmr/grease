@@ -3,7 +3,7 @@ use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use wallet::utils::publish_transaction;
-use wallet::virtual_wallet::{MultisigWallet, WalletError};
+use wallet::virtual_wallet::{signature_share_to_bytes, MultisigWallet, WalletError};
 use wallet::watch_only::WatchOnlyWallet;
 
 #[tokio::main]
@@ -85,19 +85,33 @@ async fn main() -> Result<(), WalletError> {
 
     println!("Preprocessing step completed for both wallets");
 
-    wallet_a.partial_sign(wallet_b.my_pre_process_data().unwrap())?;
+    let wallet_a_pp = wallet_a.my_pre_process_data().unwrap();
+    let wallet_b_pp = wallet_b.my_pre_process_data().unwrap();
+
+    wallet_a.partial_sign(&wallet_b_pp)?;
     println!("Partial Signing completed for Alice");
-    let pp = wallet_a.my_pre_process_data().unwrap();
-    wallet_b.partial_sign(pp)?;
+
+    wallet_b.partial_sign(&wallet_a_pp)?;
     println!("Partial Signing completed for Bob");
 
-    let ss = wallet_b.my_signing_shares().unwrap();
+    // Create adaptor signature
+    let offset = Curve25519Secret::random(&mut rand::rng());
+    let adapted = wallet_b.adapt_signature(&offset)?;
 
-    println!("Signing shares prepared for Bob: {}", ss.len());
+    // Test signature conversion for ss_a
+    let ss_a = wallet_a.my_signing_shares().unwrap();
+    let ss_a_bytes = signature_share_to_bytes(&ss_a);
+    let ss_a = wallet_a.bytes_to_signature_share(&ss_a_bytes)?;
 
-    let tx_a = wallet_a.sign(ss)?;
+    // Alice signs with an adaptor signature
+    wallet_a.verify_adapted_signature(&adapted)?;
+    println!("Adaptor signature is valid (but can't create a valid transaction yet)");
+    // Recreate the original signature share
+    let ss_b = wallet_a.extract_true_signature(&adapted, &offset)?;
+    let tx_a = wallet_a.sign(ss_b)?;
     println!("Alice's transaction signed successfully");
-    let tx_b = wallet_b.sign(wallet_a.my_signing_shares().unwrap())?;
+
+    let tx_b = wallet_b.sign(ss_a)?;
     println!("Bob's transaction signed successfully");
 
     println!("Wallet transaction from Alice: {}", hex::encode(tx_a.hash()));
