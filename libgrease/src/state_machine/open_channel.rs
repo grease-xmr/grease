@@ -7,40 +7,62 @@
 //! - `ChannelForceClose`: This indicates a force close of the channel, and will move the channel to the `Disputed` state.
 //!
 
-use crate::amount::MoneroAmount;
+use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{
-    GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, ShardInfo,
-    UpdateInfo, UpdateProofs,
+    AdaptedSignature, GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0,
+    PublicUpdateOutputs, PublicUpdateProof, ShardInfo, UpdateProofs,
 };
 use crate::lifecycle_impl;
-use crate::monero::data_objects::{MultisigWalletData, TransactionId};
+use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;
 use log::info;
-use monero::Network;
+use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
+
+/// Container struct carrying all the information needed to record a payment channel update.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct UpdateRecord {
+    // My half of the spend authority for this transaction.
+    pub my_signature: Vec<u8>,
+    pub my_adapted_signature: AdaptedSignature,
+    pub peer_adapted_signature: AdaptedSignature,
+    // Data needed to reconstruct the Monero transaction for this update.
+    pub my_preprocess: Vec<u8>,
+    pub peer_preprocess: Vec<u8>,
+    // ZK proof data for this update.
+    pub my_proofs: UpdateProofs,
+    pub peer_proofs: PublicUpdateProof,
+}
+
+impl Debug for UpdateRecord {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UpdateRecord(...)")
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EstablishedChannelState {
     pub(crate) metadata: ChannelMetadata,
+    /// The shards of the multisig wallet, containing the split secrets for the multisig wallet.
+    /// Getting hold of both parts gives full control of the wallet.
     pub(crate) shards: ShardInfo,
+    /// Information needed to reconstruct the multisig wallet.
     pub(crate) multisig_wallet: MultisigWalletData,
-    pub(crate) funding_transactions: HashMap<TransactionId, MoneroAmount>,
+    pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     pub(crate) my_proof0: Proofs0,
     pub peer_proof0: PublicProof0,
     pub(crate) kes_proof: KesProof,
-    pub(crate) current_private_outputs: Option<PrivateUpdateOutputs>,
-    pub current_public_outputs: Option<PublicUpdateOutputs>,
-    pub current_peer_public_outputs: Option<PublicUpdateOutputs>,
+    pub(crate) current_update: Option<UpdateRecord>,
     pub(crate) update_count: u64,
 }
 
 impl Debug for EstablishedChannelState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "EstablishedChannelState({} updates, role: {}, channel_id: {})",
@@ -62,7 +84,10 @@ impl EstablishedChannelState {
 
     /// Returns the current witness for the channel. If no updates have been made, it returns the initial witness.
     pub fn current_witness(&self) -> GenericScalar {
-        self.current_private_outputs.as_ref().map(|o| o.witness_i).unwrap_or(self.my_proof0.private_outputs.witness_0)
+        self.current_update
+            .as_ref()
+            .map(|update| update.my_proofs.private_outputs.witness_i)
+            .unwrap_or(self.my_proof0.private_outputs.witness_0)
     }
 
     pub fn multisig_address(&self, network: Network) -> Option<String> {
@@ -71,7 +96,29 @@ impl EstablishedChannelState {
     }
 
     pub fn current_peer_commitment(&self) -> GenericPoint {
-        self.current_peer_public_outputs.as_ref().map(|o| o.T_current).unwrap_or(self.peer_proof0.public_outputs.T_0)
+        self.current_update
+            .as_ref()
+            .map(|update| update.peer_proofs.public_outputs.T_current)
+            .unwrap_or(self.peer_proof0.public_outputs.T_0)
+    }
+
+    /// Returns the keys to be able to reconstruct the multisig wallet.
+    /// Warning! The result of this function contains wallet secrets!
+    pub fn wallet_data(&self) -> MultisigWalletData {
+        self.multisig_wallet.clone()
+    }
+
+    pub fn funding_transactions(&self) -> impl Iterator<Item = &TransactionRecord> {
+        self.funding_transactions.values()
+    }
+
+    /// Returns a vector of payments to be made to the merchant and customer using the current channel state.
+    /// NOTE: This does NOT take fees into account.
+    pub fn get_payments_after_spending(&self, delta: MoneroDelta) -> Option<[(Address, MoneroAmount); 2]> {
+        let new_balance = self.balance().apply_delta(delta)?;
+        let merchant_address = self.metadata.channel_id().closing_addresses().merchant;
+        let customer_address = self.metadata.channel_id().closing_addresses().customer;
+        Some([(merchant_address, new_balance.merchant), (customer_address, new_balance.customer)])
     }
 
     /// Return the record to send to the peer to co-operatively close the channel.
@@ -85,37 +132,31 @@ impl EstablishedChannelState {
         }
     }
 
-    pub fn store_update(&mut self, my_proofs: UpdateProofs, peer_update: UpdateInfo) -> u64 {
-        let delta = peer_update.delta;
-        self.update_count = my_proofs.private_outputs.update_count;
-        self.current_private_outputs = Some(my_proofs.private_outputs);
-        self.current_public_outputs = Some(my_proofs.public_outputs.clone());
-        self.current_peer_public_outputs = Some(peer_update.proof.public_outputs);
+    pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord) -> u64 {
         self.metadata.apply_delta(delta);
+        self.update_count = update.my_proofs.private_outputs.update_count;
+        self.current_update = Some(update);
         self.update_count
     }
 
     fn finalize_with_no_updates(&mut self) {
         // If the proofs are already set, we can skip this step.
-        if self.current_private_outputs.is_some()
-            && self.current_public_outputs.is_some()
-            && self.current_peer_public_outputs.is_some()
-        {
+        if self.current_update.is_some() {
             return;
         }
         // If no updates have been made, we set the current outputs to the initial outputs.
         // Essentially, only witness_0 is important here, and maybe T_0. which is witness_0.G.
         // The proofs are only needed in a dispute, but when update count is 0, there's no future state to prove in a
         // dispute anyway.
-        let mut pvt_out = PrivateUpdateOutputs::default();
-        pvt_out.witness_i = self.my_proof0.private_outputs.witness_0;
-        let mut pub_out = PublicUpdateOutputs::default();
-        pub_out.T_current = self.my_proof0.public_outputs.T_0;
-        let mut peer_pub_out = PublicUpdateOutputs::default();
-        peer_pub_out.T_current = self.peer_proof0.public_outputs.T_0;
-        self.current_private_outputs = Some(pvt_out);
-        self.current_public_outputs = Some(pub_out);
-        self.current_peer_public_outputs = Some(peer_pub_out);
+        let pvt_out = PrivateUpdateOutputs {
+            witness_i: self.my_proof0.private_outputs.witness_0,
+            ..PrivateUpdateOutputs::default()
+        };
+        let pub_out =
+            PublicUpdateOutputs { T_current: self.my_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
+        let peer_pub_out =
+            PublicUpdateOutputs { T_current: self.peer_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
+        todo!("Finalize the channel if no updates have been made");
     }
 
     #[allow(clippy::result_large_err)]
@@ -145,9 +186,7 @@ impl EstablishedChannelState {
             my_proof0: self.my_proof0,
             peer_proof0: self.peer_proof0,
             kes_proof: self.kes_proof,
-            last_private_outputs: self.current_private_outputs.unwrap(),
-            last_public_outputs: self.current_public_outputs.unwrap(),
-            last_peer_public_outputs: self.current_peer_public_outputs.unwrap(),
+            last_update: self.current_update.unwrap(),
             update_count: self.update_count,
             final_tx: None,
         };

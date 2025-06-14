@@ -1,11 +1,12 @@
 use crate::errors::{PeerConnectionError, RemoteServerError};
 use crate::ContactInfo;
 use futures::channel::oneshot;
+use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
-use libgrease::crypto::zk_objects::{PublicProof0, UpdateInfo};
+use libgrease::crypto::zk_objects::{AdaptedSignature, PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
-    ClosingAddresses, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    TransactionRecord,
+    ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
+    MultisigSplitSecretsResponse, TransactionRecord,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -15,7 +16,7 @@ use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Address;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 /// Requests that one peer can make to another peer in the Grease p2p network to create, update or close a payment
 /// channel.
@@ -33,9 +34,9 @@ pub enum GreaseRequest {
     /// The customer is requesting an exchange of witness0 proofs as one of the final steps for establishing a new
     /// channel
     ExchangeProof0(MessageEnvelope<PublicProof0>),
-    /// The initiator of an update sends this request. The responder will validate the proofs, generate their own
-    /// proofs and respond their own proofs.
-    ChannelUpdate(MessageEnvelope<UpdateInfo>),
+    /// The initiator of an update sends this request as the first round of the update process
+    PrepareUpdate(MessageEnvelope<PrepareUpdate>),
+    CommitUpdate(MessageEnvelope<UpdateCommitted>),
     /// Either party can issue this request, asking for the channel to be closed co-operatively.
     ChannelClose(MessageEnvelope<ChannelCloseRecord>),
 }
@@ -52,7 +53,8 @@ pub enum GreaseResponse {
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
     ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
     ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
-    ChannelUpdate(Result<MessageEnvelope<UpdateInfo>, RemoteServerError>),
+    UpdatePrepared(Result<MessageEnvelope<UpdatePrepared>, RemoteServerError>),
+    UpdateCommitted(Result<MessageEnvelope<FinalizedUpdate>, RemoteServerError>),
     ChannelClose(Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>),
     Error(String),
     /// Do not return a response to the peer at all.
@@ -93,11 +95,12 @@ impl Display for GreaseResponse {
                 "Remote server error ({e}) at MsConfirmMsAddress \
             stage"
             ),
-            GreaseResponse::ChannelUpdate(_) => write!(f, "Channel Update"),
             GreaseResponse::NoResponse => write!(f, "No response to send"),
             GreaseResponse::MsSplitSecretExchange(_) => write!(f, "MsSplitSecretExchange"),
             GreaseResponse::ExchangeProof0(_) => write!(f, "ExchangeProof0"),
             GreaseResponse::ChannelClose(_) => write!(f, "ChannelClose"),
+            GreaseResponse::UpdatePrepared(_) => write!(f, "UpdatePrepared"),
+            GreaseResponse::UpdateCommitted(_) => write!(f, "UpdateCommitted"),
         }
     }
 }
@@ -108,10 +111,11 @@ impl GreaseRequest {
             GreaseRequest::ProposeChannelRequest(ref proposal) => proposal.channel_name(),
             GreaseRequest::MsKeyExchange(env) => env.channel_name(),
             GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
-            GreaseRequest::ChannelUpdate(env) => env.channel_name(),
             GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
             GreaseRequest::ExchangeProof0(env) => env.channel_name(),
             GreaseRequest::ChannelClose(env) => env.channel_name(),
+            GreaseRequest::PrepareUpdate(env) => env.channel_name(),
+            GreaseRequest::CommitUpdate(env) => env.channel_name(),
         }
     }
 }
@@ -169,10 +173,15 @@ pub enum ClientCommand {
         envelope: MessageEnvelope<PublicProof0>,
         sender: oneshot::Sender<Result<MessageEnvelope<PublicProof0>, RemoteServerError>>,
     },
-    ChannelUpdate {
+    PrepareUpdate {
         peer_id: PeerId,
-        envelope: MessageEnvelope<UpdateInfo>,
-        sender: oneshot::Sender<Result<MessageEnvelope<UpdateInfo>, RemoteServerError>>,
+        envelope: MessageEnvelope<PrepareUpdate>,
+        sender: oneshot::Sender<Result<MessageEnvelope<UpdatePrepared>, RemoteServerError>>,
+    },
+    CommitUpdate {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<UpdateCommitted>,
+        sender: oneshot::Sender<Result<MessageEnvelope<FinalizedUpdate>, RemoteServerError>>,
     },
     ChannelClose {
         peer_id: PeerId,
@@ -369,4 +378,47 @@ impl RetryOptions {
     pub fn and_retry(&self) -> Self {
         RetryOptions { bitmask: self.bitmask | RETRY }
     }
+}
+
+/// Data packet sent from customer to merchant in first phase of update.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PrepareUpdate {
+    pub update_count: u64,
+    pub delta: MoneroDelta,
+    pub prepare_info_customer: Vec<u8>,
+}
+
+impl Debug for PrepareUpdate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PrepareUpdate(update_count: {}, delta: {})",
+            self.update_count, self.delta.amount
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct UpdatePrepared {
+    pub update_count: u64,
+    pub delta: MoneroDelta,
+    pub prepare_info_merchant: Vec<u8>,
+    pub update_proof: PublicUpdateProof,
+    pub adapted_sig: AdaptedSignature,
+}
+
+impl Debug for UpdatePrepared {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "UpdatePrepared(update_count: {}, delta: {})",
+            self.update_count, self.delta.amount
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateCommitted {
+    pub public_update_proof: PublicUpdateProof,
+    pub adapted_signature: AdaptedSignature,
 }

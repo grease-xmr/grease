@@ -90,10 +90,8 @@ impl NewChannelBuilder {
             ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
         };
 
-        let closing = ClosingAddresses {
-            customer: self.customer_closing.clone().unwrap(),
-            merchant: self.merchant_closing.clone().unwrap(),
-        };
+        let closing =
+            ClosingAddresses { customer: self.customer_closing.unwrap(), merchant: self.merchant_closing.unwrap() };
 
         let channel_id = ChannelId::new::<D>(merchant_label.clone(), customer_label.clone(), initial_balances, closing);
         let channel_info = ChannelMetadata::new(

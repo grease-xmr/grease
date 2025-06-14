@@ -7,6 +7,7 @@ mod key_manager;
 pub mod message_types;
 mod network_client;
 mod payment_channel;
+mod pending_updates;
 mod server;
 
 pub use delegates::GreaseChannelDelegate;

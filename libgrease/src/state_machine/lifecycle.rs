@@ -199,15 +199,17 @@ pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::crypto::zk_objects::{
-        KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, PublicUpdateProof,
-        ShardInfo, UpdateInfo, UpdateProofs,
+        AdaptedSignature, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo,
+        UpdateProofs,
     };
-    use crate::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, MultisigWalletData, TransactionId};
+    use crate::monero::data_objects::{
+        ClosingAddresses, MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord,
+    };
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
     use crate::state_machine::new_channel::NewChannelBuilder;
-    use crate::state_machine::open_channel::EstablishedChannelState;
+    use crate::state_machine::open_channel::{EstablishedChannelState, UpdateRecord};
     use crate::state_machine::{ChannelCloseRecord, NewChannelState};
     use blake2::Blake2b512;
     use log::*;
@@ -282,7 +284,13 @@ pub mod test {
         let shards = ShardInfo { my_shards, their_shards };
         state.save_kes_shards(shards);
         // The funding transaction has been created and broadcast.
-        state.funding_tx_confirmed(TransactionId::new("fundingtx1"), MoneroAmount::from_xmr("1.25").unwrap());
+        let tx = TransactionRecord {
+            channel_name: "channel".to_string(),
+            transaction_id: TransactionId::new("fundingtx1"),
+            amount: MoneroAmount::from_xmr("1.25").unwrap(),
+            serialized: b"serialized_funding_tx".to_vec(),
+        };
+        state.funding_tx_confirmed(tx);
         let proof0 = Proofs0 {
             public_outputs: Default::default(),
             private_outputs: Default::default(),
@@ -324,15 +332,16 @@ pub mod test {
             },
             proof: b"my_update_proof".to_vec(),
         };
-        let update_info = UpdateInfo {
-            index: update_count,
-            delta,
-            proof: PublicUpdateProof {
-                public_outputs: PublicUpdateOutputs::default(),
-                proof: b"peer_update_proof".to_vec(),
-            },
+        let update_info = UpdateRecord {
+            my_signature: b"signature".to_vec(),
+            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            my_preprocess: vec![],
+            peer_preprocess: vec![],
+            my_proofs,
+            peer_proofs: Default::default(),
         };
-        let updated_index = state.store_update(my_proofs, update_info);
+        let updated_index = state.store_update(delta, update_info);
         assert_eq!(updated_index, update_count);
         update_count
     }

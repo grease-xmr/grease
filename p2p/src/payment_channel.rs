@@ -1,13 +1,13 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
-use libgrease::amount::MoneroAmount;
-use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo, UpdateInfo, UpdateProofs};
-use libgrease::monero::data_objects::{MultisigWalletData, TransactionId};
+use libgrease::amount::MoneroDelta;
+use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
+use libgrease::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
     ChannelCloseRecord, ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState,
-    LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason,
+    LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason, UpdateRecord,
 };
 use libp2p::PeerId;
 use log::*;
@@ -159,7 +159,7 @@ impl PaymentChannel {
                 LifeCycleEvent::FundingTxWatcher(data) => self.on_save_watcher(data),
                 LifeCycleEvent::KesShards(shards) => self.on_kes_shards(*shards),
                 LifeCycleEvent::KesCreated(info) => self.on_kes_created(*info),
-                LifeCycleEvent::FundingTxConfirmed(info) => self.on_funding_confirmed(info.0, info.1),
+                LifeCycleEvent::FundingTxConfirmed(info) => self.on_funding_confirmed(*info),
                 LifeCycleEvent::MyProof0Generated(proof) => self.on_my_proof0(*proof),
                 LifeCycleEvent::PeerProof0Received(proof) => self.on_peer_proof0(*proof),
                 _ => Err(LifeCycleError::InvalidState(format!(
@@ -301,9 +301,9 @@ impl PaymentChannel {
         })
     }
 
-    fn on_funding_confirmed(&mut self, tx: TransactionId, amt: MoneroAmount) -> Result<(), LifeCycleError> {
+    fn on_funding_confirmed(&mut self, tx: TransactionRecord) -> Result<(), LifeCycleError> {
         self.update_establishing(move |mut establishing| {
-            establishing.funding_tx_confirmed(tx, amt);
+            establishing.funding_tx_confirmed(tx);
             match establishing.next() {
                 Ok(established) => {
                     debug!("⚡️  Transitioned to Established state after funding tx confirmed");
@@ -317,10 +317,10 @@ impl PaymentChannel {
         })
     }
 
-    fn on_channel_update(&mut self, updates: (UpdateProofs, UpdateInfo)) -> Result<(), LifeCycleError> {
-        let (my_proofs, peer_update) = updates;
+    fn on_channel_update(&mut self, record: (MoneroDelta, UpdateRecord)) -> Result<(), LifeCycleError> {
+        let (delta, update) = record;
         self.update_open(|mut open| {
-            let n = open.store_update(my_proofs, peer_update);
+            let n = open.store_update(delta, update);
             trace!("⚡️  Channel update #{n} was successfully applied");
             Ok(open.to_channel_state())
         })
@@ -479,13 +479,15 @@ mod test {
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
     use libgrease::crypto::zk_objects::{
-        GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateInfo,
+        AdaptedSignature, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo,
         UpdateProofs,
     };
-    use libgrease::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId};
+    use libgrease::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord};
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
-    use libgrease::state_machine::{ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, NewChannelState};
+    use libgrease::state_machine::{
+        ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, NewChannelState, UpdateRecord,
+    };
     use libp2p::{Multiaddr, PeerId};
     use monero::Address;
     use std::str::FromStr;
@@ -553,12 +555,18 @@ mod test {
         channel.handle_event(event).unwrap();
         let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof0));
         channel.handle_event(event).unwrap();
-        let event = LifeCycleEvent::FundingTxConfirmed(Box::new((TransactionId::new("tx123"), 1000.into())));
+        let tx = TransactionRecord {
+            channel_name: "channel".to_string(),
+            transaction_id: TransactionId { id: "tx123".to_string() },
+            amount: MoneroAmount::from(1000),
+            serialized: b"serialized_funding_tx".to_vec(),
+        };
+        let event = LifeCycleEvent::FundingTxConfirmed(Box::new(tx));
         channel.handle_event(event).unwrap();
         let event = LifeCycleEvent::KesCreated(Box::new(KesProof { proof: vec![1, 2, 3] }));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
-        let my_proof = UpdateProofs {
+        let my_proofs = UpdateProofs {
             public_outputs: Default::default(),
             private_outputs: PrivateUpdateOutputs {
                 update_count: 1,
@@ -568,8 +576,17 @@ mod test {
             },
             proof: b"my_update_proof".to_vec(),
         };
-        let peer_proof = UpdateInfo { index: 1, delta: MoneroDelta::from(100), proof: my_proof.public_only() };
-        let event = LifeCycleEvent::ChannelUpdate(Box::new((my_proof, peer_proof)));
+        let info = UpdateRecord {
+            my_signature: b"my_signature".to_vec(),
+            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            my_preprocess: b"my_prepared_info".to_vec(),
+            peer_preprocess: b"peer_prepared_info".to_vec(),
+            my_proofs,
+            peer_proofs: Default::default(),
+        };
+        let delta = MoneroDelta::from(1000);
+        let event = LifeCycleEvent::ChannelUpdate(Box::new((delta, info)));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
         let close = ChannelCloseRecord {

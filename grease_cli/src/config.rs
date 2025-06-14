@@ -117,7 +117,7 @@ impl GlobalOptions {
 
     /// Returns the address to which channel refunds will be sent.
     pub fn refund_address(&self) -> Option<Address> {
-        self.refund_address.clone()
+        self.refund_address
     }
 
     /// Returns the optional user label configured for channels.

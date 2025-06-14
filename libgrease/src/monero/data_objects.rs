@@ -7,7 +7,6 @@ use std::str::FromStr;
 use crate::balance::Balances;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
-use crate::payment_channel::ChannelRole;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecrets {
@@ -65,21 +64,6 @@ impl Debug for MultisigKeyInfo {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub struct PartialKeyImage;
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct PartiallySignedMoneroTransaction;
-pub struct MoneroPeer;
-pub struct MultiSigSeed;
-
-#[derive(Debug, Clone, Default)]
-pub struct WalletBalance {
-    pub total: MoneroDelta,
-    pub spendable: MoneroDelta,
-    pub blocks_left: usize,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct TransactionId {
     pub id: String,
@@ -97,31 +81,9 @@ impl TransactionId {
     }
 }
 
-/// A channel update template before any proofs have been generated.
-///
-/// It is based on the current channel state, plus the delta to be applied to the merchant's balance.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ChannelSecrets {
-    /// The update counter for the channel. This is incremented every time a new update is sent. The initial balance
-    /// represents update 0.
-    pub update_count: u64,
-    /// The balances after applying the delta to the current balances
-    pub new_balances: Balances,
-    /// The change in the *Merchant's* balance
-    pub delta: MoneroDelta,
-    /// The last witness value on the L2 curve
-    pub witness: Vec<u8>,
-    /// The last statement value on the L2 curve
-    pub statement: Vec<u8>,
-    /// The equivalent secret value on Ed25519
-    pub secret: Curve25519Secret,
-    /// The last public key on the Ed25519 curve
-    pub public_key: Curve25519PublicKey,
-}
-
 /// Channel Update result record
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Updated {
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct FinalizedUpdate {
     /// The new channel balances after the update
     pub new_balances: Balances,
     /// The update count for the channel
@@ -177,23 +139,12 @@ impl Debug for MultisigWalletData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FundingTransaction {
-    pub role: ChannelRole,
-    pub transaction_id: TransactionId,
-    pub amount: MoneroAmount,
-}
-
-impl FundingTransaction {
-    pub fn new(role: ChannelRole, txid: impl Into<String>, amount: impl Into<MoneroAmount>) -> Self {
-        FundingTransaction { role, transaction_id: TransactionId::new(txid), amount: amount.into() }
-    }
-}
-
-#[derive(Debug)]
 pub struct TransactionRecord {
     pub channel_name: String,
     pub transaction_id: TransactionId,
     pub amount: MoneroAmount,
+    // The serialized WalletOutput that can be imported into MultisigWallet
+    pub serialized: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
