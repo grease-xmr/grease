@@ -210,7 +210,8 @@ event_loop!(
     Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
     Command(PrepareUpdate): PrepareUpdate => UpdatePrepared[UpdatePrepared],
     Command(CommitUpdate): CommitUpdate => UpdateCommitted[FinalizedUpdate],
-    Command(ChannelClose): ChannelClose => ChannelClose[ChannelCloseRecord]
+    Command(ChannelClose): ChannelClose => ChannelClose[ChannelCloseRecord],
+    Command(ClosingTxSent): ChannelClosed => ChannelClosed[bool]
 );
 
 impl EventLoop {

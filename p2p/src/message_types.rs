@@ -6,7 +6,7 @@ use libgrease::channel_id::ChannelId;
 use libgrease::crypto::zk_objects::{AdaptedSignature, PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
     ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
-    MultisigSplitSecretsResponse, TransactionRecord,
+    MultisigSplitSecretsResponse, TransactionId, TransactionRecord,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
@@ -39,6 +39,8 @@ pub enum GreaseRequest {
     CommitUpdate(MessageEnvelope<UpdateCommitted>),
     /// Either party can issue this request, asking for the channel to be closed co-operatively.
     ChannelClose(MessageEnvelope<ChannelCloseRecord>),
+    /// Peer is informing that the closing transaction has been sent to the network.
+    ChannelClosed(MessageEnvelope<TransactionId>),
 }
 
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
@@ -56,6 +58,7 @@ pub enum GreaseResponse {
     UpdatePrepared(Result<MessageEnvelope<UpdatePrepared>, RemoteServerError>),
     UpdateCommitted(Result<MessageEnvelope<FinalizedUpdate>, RemoteServerError>),
     ChannelClose(Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>),
+    ChannelClosed(Result<MessageEnvelope<bool>, RemoteServerError>),
     Error(String),
     /// Do not return a response to the peer at all.
     NoResponse,
@@ -101,6 +104,7 @@ impl Display for GreaseResponse {
             GreaseResponse::ChannelClose(_) => write!(f, "ChannelClose"),
             GreaseResponse::UpdatePrepared(_) => write!(f, "UpdatePrepared"),
             GreaseResponse::UpdateCommitted(_) => write!(f, "UpdateCommitted"),
+            GreaseResponse::ChannelClosed(_) => write!(f, "ChannelClosed"),
         }
     }
 }
@@ -116,6 +120,7 @@ impl GreaseRequest {
             GreaseRequest::ChannelClose(env) => env.channel_name(),
             GreaseRequest::PrepareUpdate(env) => env.channel_name(),
             GreaseRequest::CommitUpdate(env) => env.channel_name(),
+            GreaseRequest::ChannelClosed(env) => env.channel_name(),
         }
     }
 }
@@ -187,6 +192,11 @@ pub enum ClientCommand {
         peer_id: PeerId,
         envelope: MessageEnvelope<ChannelCloseRecord>,
         sender: oneshot::Sender<Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>>,
+    },
+    ClosingTxSent {
+        peer_id: PeerId,
+        envelope: MessageEnvelope<TransactionId>,
+        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
     },
     /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
     ConnectedPeers {

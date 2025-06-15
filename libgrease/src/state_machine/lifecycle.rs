@@ -155,6 +155,13 @@ impl ChannelState {
         }
     }
 
+    pub fn as_closing(&self) -> Result<&ClosingChannelState, LifeCycleError> {
+        match self {
+            ChannelState::Closing(ref state) => Ok(state),
+            _ => Err(LifeCycleError::invalid_state_for("Expected ClosingState")),
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     pub fn to_open(self) -> Result<EstablishedChannelState, (Self, LifeCycleError)> {
         match self {
@@ -264,7 +271,7 @@ pub mod test {
             joint_public_spend_key: some_pub.clone(),
             joint_private_view_key: Curve25519Secret::random(&mut rand::rng()),
             birthday: 0,
-            known_outputs: String::default(),
+            known_outputs: Default::default(),
         }
     }
 

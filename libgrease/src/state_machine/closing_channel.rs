@@ -1,11 +1,13 @@
+use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_metadata::ChannelMetadata;
+use crate::crypto::keys::{Curve25519Secret, KeyError};
 use crate::crypto::zk_objects::{GenericScalar, KesProof, Proofs0, PublicProof0, ShardInfo};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::error::LifeCycleError;
-use monero::Network;
+use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -44,6 +46,26 @@ impl ClosingChannelState {
         todo!("Implement multisig address retrieval for closing channel state")
     }
 
+    /// Returns the keys to be able to reconstruct the multisig wallet.
+    /// Warning! The result of this function contains wallet secrets!
+    ///
+    /// This function also includes all outputs from funding transactions
+    pub fn wallet_data(&self) -> MultisigWalletData {
+        let mut data = self.multisig_wallet.clone();
+        self.funding_transactions.values().for_each(|rec| {
+            data.known_outputs.push(rec.serialized.clone());
+        });
+        data
+    }
+
+    pub fn final_update(&self) -> UpdateRecord {
+        self.last_update.clone()
+    }
+
+    pub fn peer_witness(&self) -> Result<Curve25519Secret, KeyError> {
+        Curve25519Secret::from_generic_scalar(&self.peer_witness)
+    }
+
     pub fn reason(&self) -> &ChannelClosedReason {
         &self.reason
     }
@@ -51,6 +73,13 @@ impl ClosingChannelState {
     pub fn requirements_met(&self) -> bool {
         // Check if the commitment transaction is valid and if the final transaction is set
         self.final_tx.is_some()
+    }
+
+    pub fn get_closing_payments(&self) -> [(Address, MoneroAmount); 2] {
+        let balance = self.final_balances();
+        let merchant_address = self.metadata.channel_id().closing_addresses().merchant;
+        let customer_address = self.metadata.channel_id().closing_addresses().customer;
+        [(merchant_address, balance.merchant), (customer_address, balance.customer)]
     }
 
     pub fn with_final_tx(&mut self, final_tx: TransactionId) {

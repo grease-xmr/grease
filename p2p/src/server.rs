@@ -21,7 +21,7 @@ use libgrease::crypto::zk_objects::{
 };
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    TransactionRecord,
+    TransactionId, TransactionRecord,
 };
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
@@ -37,6 +37,7 @@ use rand::rng;
 use std::path::Path;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
+use wallet::utils::publish_transaction;
 use wallet::virtual_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
 use wallet::{connect_to_rpc, MultisigWallet};
 
@@ -168,6 +169,12 @@ where
     pub async fn close_channel(&self, channel: &str) -> Result<Balances, ChannelServerError> {
         self.ensure_connection(channel).await?;
         self.inner.close_channel(channel).await
+    }
+
+    pub async fn rebroadcast_closing_transaction(&self, channel: &str) -> Result<TransactionId, ChannelServerError> {
+        // TODO we don't actually need a connection here, but it's handy for testing now
+        self.ensure_connection(channel).await?;
+        self.inner.rebroadcast_closing_transaction(channel).await
     }
 
     /// Perform a channel update.
@@ -1009,8 +1016,9 @@ where
             }
         });
         trace!("Wallet reconstructed. {} output found.", wallet.outputs().len());
+        let mut rng = wallet.deterministic_rng();
         wallet
-            .prepare(payments)
+            .prepare(payments, &mut rng)
             .await
             .map_err(|e| ChannelServerError::UpdateError(UpdateError::WalletError(e.to_string())))?;
         let prepare_data = wallet.my_pre_process_data().expect("I've just generated this data, it should be present");
@@ -1277,24 +1285,37 @@ where
     async fn close_channel(&self, name: &str) -> Result<Balances, ChannelServerError> {
         info!("🔚️  Closing channel {name}...");
         let (close_info, commitment, metadata, peer) = self.get_close_data(name).await?;
-
         info!("🔚️  Requesting closing transaction info from peer for channel {name}");
         let mut client = self.network_client.clone();
         let final_balance = close_info.final_balance;
         let close_response = client.send_close_request(peer, name, close_info).await??;
         info!("🔚️  Received closing transaction info for channel {name} from peer. Verifying its authenticity.");
-        let (remote_name, close_response) = close_response.open();
+        let (remote_name, merchant_close_info) = close_response.open();
         confirm_channel_matches(&remote_name, name)?;
         // Validate the response - in particular, the witness_i should match the T_i that we have on record.
-        let peer_witness = close_response.witness;
+        let peer_witness = merchant_close_info.witness;
         self.delegate.verify_peer_witness(&peer_witness, &commitment, &metadata).await?;
 
         // Happy, so close the channel.
         info!("🔚️  Closing transaction details are VALID for channel {name}. Moving to close channel.");
-        let event = LifeCycleEvent::CloseChannel(Box::new(close_response));
+        let event = LifeCycleEvent::CloseChannel(Box::new(merchant_close_info));
         let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         channel.handle_event(event)?;
+        drop(channel);
         info!("🔚️  Channel {name} is is the closing state. Waiting for final transaction to be confirmed.");
+        let tx_hash = self.closing_transaction(name, true).await?;
+        info!("🚀️ Broadcast closing transaction for channel {name}. Transaction id: {tx_hash}");
+        let mut client = self.network_client.clone();
+        // TODO - Do we need to wait for the peer?
+        // We don't really care what the peer thinks at this point, right?
+        let response = client.notify_closing_tx(peer, name, tx_hash.clone()).await??;
+        let (remote, closed) = response.open();
+        confirm_channel_matches(&remote, name)?;
+        info!("🚀️  Received response from peer on channel {name}. Closed={closed}.");
+        let event = LifeCycleEvent::FinalTxConfirmed(Box::new(tx_hash));
+        let mut channel = self.channels.checkout(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        channel.handle_event(event)?;
+        drop(channel);
         Ok(final_balance)
     }
 
@@ -1320,24 +1341,29 @@ where
         &self,
         envelope: MessageEnvelope<ChannelCloseRecord>,
     ) -> Result<GreaseResponse, GreaseResponse> {
-        let (name, peer_close) = envelope.open();
+        let (name, customer_close_info) = envelope.open();
         info!("🔚️  Received request to close channel {name}");
-        let (close_info, commitment, metadata, _) = self
+        let (my_close_info, commitment, metadata, _) = self
             .get_close_data(&name)
             .await
             .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::internal(e.to_string()))))?;
-
+        if my_close_info.update_count != customer_close_info.update_count
+            || my_close_info.final_balance != customer_close_info.final_balance
+        {
+            return Err(GreaseResponse::ChannelClose(Err(RemoteServerError::InvalidProof(
+                "The final balance or update count does not match".to_string(),
+            ))));
+        }
         info!("🔚️  Received closing transaction info for channel {name} from peer. Verifying its authenticity.");
         // Validate the response - in particular, the witness_i should match the T_i that we have on record.
-        let peer_witness = peer_close.witness;
         self.delegate
-            .verify_peer_witness(&peer_witness, &commitment, &metadata)
+            .verify_peer_witness(&customer_close_info.witness, &commitment, &metadata)
             .await
             .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
         // Transition to closing state.
 
         info!("🔚️  Closing transaction details are VALID for {name}. Closing channel and responding to peer.");
-        let event = LifeCycleEvent::CloseChannel(Box::new(close_info.clone()));
+        let event = LifeCycleEvent::CloseChannel(Box::new(customer_close_info.clone()));
         let mut channel = self
             .channels
             .checkout(&name)
@@ -1346,9 +1372,76 @@ where
         channel
             .handle_event(event)
             .map_err(|e| GreaseResponse::ChannelClose(Err(RemoteServerError::internal(e.to_string()))))?;
-        let envelope = MessageEnvelope::new(name, close_info);
+        let envelope = MessageEnvelope::new(name, my_close_info);
         Ok(GreaseResponse::ChannelClose(Ok(envelope)))
     }
+
+    async fn respond_to_channel_closed(
+        &self,
+        envelope: MessageEnvelope<TransactionId>,
+    ) -> Result<GreaseResponse, GreaseResponse> {
+        let (name, peer_tx) = envelope.open();
+        info!("🚀️  Received notification transaction {peer_tx} has been broadcast for channel {name}.");
+        // TODO - We should now watch for the transaction to be confirmed.
+        let tx_id = self
+            .closing_transaction(&name, false)
+            .await
+            .map_err(|e| GreaseResponse::ChannelClosed(Err(RemoteServerError::internal(e.to_string()))))?;
+        let mut channel = self
+            .channels
+            .checkout(&name)
+            .await
+            .ok_or_else(|| GreaseResponse::ChannelClosed(Err(RemoteServerError::ChannelDoesNotExist)))?;
+        let tx_matches = tx_id == peer_tx;
+        let event = LifeCycleEvent::FinalTxConfirmed(Box::new(tx_id));
+        channel
+            .handle_event(event)
+            .map_err(|e| GreaseResponse::ChannelClosed(Err(RemoteServerError::internal(e.to_string()))))?;
+        let envelope = MessageEnvelope::new(name, tx_matches);
+        Ok(GreaseResponse::ChannelClosed(Ok(envelope)))
+    }
+
+    async fn closing_transaction(&self, name: &str, broadcast: bool) -> Result<TransactionId, ChannelServerError> {
+        let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
+        let state = channel.state().as_closing()?;
+        let wallet_data = state.wallet_data();
+        let unadjusted = state.get_closing_payments();
+        // TODO - A better fee estimation mechanism should be used here.
+        let fee = MoneroAmount::from_piconero(4_000_000_000);
+        trace!("Determining final outputs");
+        let payments = adapt_payments(unadjusted, fee)
+            .map_err(|_| ChannelServerError::UpdateError(UpdateError::InsufficientFunds))?;
+        trace!("Added {} outputs to transaction. {:?}", payments.len(), payments);
+        let final_update = state.final_update();
+        let offset = state.peer_witness().map_err(|e| {
+            ChannelServerError::ProtocolError(format!("Final witness is not a valid monero scalar: {e}"))
+        })?;
+        drop(channel);
+        trace!("Reconstructing wallet for closing tx.");
+        let rpc = connect_to_rpc(&self.rpc_address).await?;
+        let mut wallet = MultisigWallet::from_serializable(rpc.clone(), wallet_data.clone())
+            .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to instantiate multisig wallet: {e}")))?;
+        trace!("Reconstructed wallet for closing tx.");
+        let mut rng = wallet.deterministic_rng();
+        wallet.prepare(payments, &mut rng).await?;
+        wallet.partial_sign(&final_update.peer_preprocess)?;
+        trace!("Signed final transaction with my key.");
+        let adapted = final_update.peer_adapted_signature;
+        let ss_b = wallet.extract_true_signature(&adapted, &offset)?;
+        let closing_tx = wallet.sign(ss_b)?;
+        let tx_hash = TransactionId::new(hex::encode(closing_tx.hash()));
+        debug!("Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");
+        if broadcast {
+            debug!("Publishing closing transaction for channel {name}.");
+            publish_transaction(&rpc, &closing_tx).await?;
+        }
+        Ok(tx_hash)
+    }
+
+    pub async fn rebroadcast_closing_transaction(&self, channel: &str) -> Result<TransactionId, ChannelServerError> {
+        self.closing_transaction(channel, true).await
+    }
+
     //---------------------------------   Network request handling functions   ---------------------------------//
 
     /// Business logic handling for payment channel requests.
@@ -1411,6 +1504,9 @@ where
             GreaseRequest::ChannelClose(envelope) => {
                 self.respond_to_channel_close(envelope).await.unwrap_or_else(|early| early)
             }
+            GreaseRequest::ChannelClosed(envelope) => {
+                self.respond_to_channel_closed(envelope).await.unwrap_or_else(|early| early)
+            }
         }
     }
 }
@@ -1432,6 +1528,7 @@ struct InternalPrepareUpdate {
     pub update_count: u64,
 }
 
+/// Helper struct used to bridge rounds of the update cycle
 struct CustomerUpdate2 {
     peer: PeerId,
     my_prepare_info: Vec<u8>,

@@ -8,6 +8,7 @@ use monero_rpc::RpcError;
 use monero_serai::transaction::Transaction;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
+use rand_core::OsRng;
 use std::mem;
 use wallet::utils::{publish_transaction, scalar_from};
 use wallet::virtual_wallet::{MultisigWallet, WalletError};
@@ -112,10 +113,10 @@ async fn main() -> Result<(), WalletError> {
     let alice_wallet = MoneroAddress::from_str(Network::Testnet, ALICE_ADDRESS).unwrap();
     let payment = vec![(alice_wallet, 1_000u64)]; // Placeholder for payment, should be replaced with actual payment data
 
-    wallet_a.prepare(payment.clone()).await?;
+    wallet_a.prepare(payment.clone(), &mut OsRng).await?;
     println!("Alice prepared");
 
-    wallet_b.prepare(payment.clone()).await?;
+    wallet_b.prepare(payment.clone(), &mut OsRng).await?;
     println!("Bob prepared");
 
     info!("Preprocessing step completed for both wallets");

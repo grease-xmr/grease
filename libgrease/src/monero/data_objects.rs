@@ -102,7 +102,7 @@ pub struct MultisigWalletData {
     pub joint_private_view_key: Curve25519Secret,
     pub joint_public_spend_key: Curve25519PublicKey,
     pub birthday: u64,
-    pub known_outputs: String,
+    pub known_outputs: Vec<Vec<u8>>,
 }
 
 impl MultisigWalletData {
@@ -133,7 +133,7 @@ impl Debug for MultisigWalletData {
             self.sorted_pubkeys[1].as_hex()
         )?;
         write!(f, "birthday: {}, ", self.birthday)?;
-        write!(f, "known_outputs: {}, ", self.known_outputs)?;
+        write!(f, "known_outputs: {}, ", self.known_outputs.len())?;
         write!(f, ")")
     }
 }

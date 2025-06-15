@@ -8,7 +8,7 @@ use futures::Stream;
 use libgrease::crypto::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    TransactionRecord,
+    TransactionId, TransactionRecord,
 };
 use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::identity::Keypair;
@@ -146,6 +146,7 @@ impl Client {
     grease_request!(send_update_preparation, PrepareUpdate, PrepareUpdate, UpdatePrepared);
     grease_request!(send_update_commitment, CommitUpdate, UpdateCommitted, FinalizedUpdate);
     grease_request!(send_close_request, ChannelClose, ChannelCloseRecord, ChannelCloseRecord);
+    grease_request!(notify_closing_tx, ClosingTxSent, TransactionId, bool);
 
     pub async fn wait_for_funding_tx(&mut self, name: &str) -> Result<TransactionRecord, PeerConnectionError> {
         trace!("⚡️ Waiting for funding transaction for channel {name}");
