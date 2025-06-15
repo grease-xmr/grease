@@ -534,7 +534,7 @@ mod test {
             joint_public_spend_key: some_pub.clone(),
             joint_private_view_key: Curve25519Secret::random(&mut rand::rng()),
             birthday: 0,
-            known_outputs: "".to_string(),
+            known_outputs: Default::default(),
         };
         let event = LifeCycleEvent::MultiSigWalletCreated(Box::new(wallet));
         channel.handle_event(event).unwrap();

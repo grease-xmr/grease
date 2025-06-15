@@ -152,6 +152,10 @@ impl InteractiveApp {
             debug!("Establishing channel. Checking whether we should rescan for funding transaction..");
             self.server.rescan_for_funding(&channel).await;
         }
+        if let Some(LifecycleStage::Closing) = self.channel_status {
+            debug!("Channel is closing. Rebroadcasting closing transaction..");
+            self.server.rebroadcast_closing_transaction(&channel).await?;
+        }
         Ok("Channel {channel} selected".to_string())
     }
 

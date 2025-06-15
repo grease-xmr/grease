@@ -1,4 +1,4 @@
-use crate::crypto::zk_objects::{GenericScalar};
+use crate::crypto::zk_objects::GenericScalar;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{EdwardsPoint, Scalar};

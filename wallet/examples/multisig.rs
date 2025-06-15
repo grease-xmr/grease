@@ -2,6 +2,7 @@ use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
+use rand_core::OsRng;
 use wallet::utils::publish_transaction;
 use wallet::virtual_wallet::{signature_share_to_bytes, MultisigWallet, WalletError};
 use wallet::watch_only::WatchOnlyWallet;
@@ -80,8 +81,10 @@ async fn main() -> Result<(), WalletError> {
     )
     .await;
 
-    wallet_b.prepare(payment.clone()).await?;
-    wallet_a.prepare(payment.clone()).await?;
+    // Wallet b is not deterministic, so we won't be able to restore this one later
+    wallet_b.prepare(payment.clone(), &mut OsRng).await?;
+    let mut rng_a = wallet_a.deterministic_rng();
+    wallet_a.prepare(payment.clone(), &mut rng_a).await?;
 
     println!("Preprocessing step completed for both wallets");
 
@@ -95,19 +98,26 @@ async fn main() -> Result<(), WalletError> {
     println!("Partial Signing completed for Bob");
 
     // Create adaptor signature
-    let offset = Curve25519Secret::random(&mut rand::rng());
-    let adapted = wallet_b.adapt_signature(&offset)?;
+    let offset_b = Curve25519Secret::random(&mut rand::rng());
+    let adapted_b = wallet_b.adapt_signature(&offset_b)?;
 
     // Test signature conversion for ss_a
     let ss_a = wallet_a.my_signing_shares().unwrap();
     let ss_a_bytes = signature_share_to_bytes(&ss_a);
     let ss_a = wallet_a.bytes_to_signature_share(&ss_a_bytes)?;
 
+    // Serialize and restore the wallet.
+    let data = wallet_a.serializable();
+    let mut wallet_a = MultisigWallet::from_serializable(rpc.clone(), data)?;
+    let mut rng_a = wallet_a.deterministic_rng();
+    wallet_a.prepare(payment, &mut rng_a).await?;
+    wallet_a.partial_sign(&wallet_b_pp)?;
+
     // Alice signs with an adaptor signature
-    wallet_a.verify_adapted_signature(&adapted)?;
+    wallet_a.verify_adapted_signature(&adapted_b)?;
     println!("Adaptor signature is valid (but can't create a valid transaction yet)");
     // Recreate the original signature share
-    let ss_b = wallet_a.extract_true_signature(&adapted, &offset)?;
+    let ss_b = wallet_a.extract_true_signature(&adapted_b, &offset_b)?;
     let tx_a = wallet_a.sign(ss_b)?;
     println!("Alice's transaction signed successfully");
 

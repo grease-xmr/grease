@@ -5,7 +5,6 @@ use modular_frost::curve::{Ciphersuite, Ed25519};
 use monero_simple_request_rpc::SimpleRequestRpc;
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::mem;
 use std::path::Path;
 use zeroize::Zeroizing;
@@ -30,7 +29,7 @@ use monero_wallet::send::{
     Change, SendError, SignableTransaction, TransactionSignMachine, TransactionSignatureMachine,
 };
 use monero_wallet::{OutputWithDecoys, Scanner, ViewPair, WalletOutput};
-use rand_core::{OsRng, SeedableRng};
+use rand_core::{CryptoRng, RngCore, SeedableRng};
 use thiserror::Error;
 
 pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
@@ -139,8 +138,7 @@ impl MultisigWallet {
         let joint_public_view_key = Curve25519PublicKey::from(joint_public_view_key.0);
         let joint_public_spend_key = musig_keys.group_key();
         let joint_public_spend_key = Curve25519PublicKey::from(joint_public_spend_key.0);
-        let known_outputs =
-            hex::decode(&data.known_outputs).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
+        let known_outputs = data.known_outputs;
         let known_outputs =
             Self::read_outputs(known_outputs.as_slice()).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
         Ok(Self {
@@ -319,10 +317,28 @@ impl MultisigWallet {
         Ok(tx)
     }
 
-    pub async fn prepare(&mut self, payments: Vec<(MoneroAddress, u64)>) -> Result<(), WalletError> {
+    /// If you need to restore the wallet to an exact know last state, you should call `prepare` with the the RNG
+    /// returned by this function.
+    pub fn deterministic_rng(&self) -> ChaCha20Rng {
+        // Use the birthday as a seed for the RNG, which is unique to this wallet instance
+        let bytes = self.my_spend_key.as_scalar().as_bytes();
+        let hashed = blake2::Blake2b512::digest(bytes);
+        let mut seed = [0; 32];
+        seed.copy_from_slice(&hashed[..32]);
+        ChaCha20Rng::from_seed(seed)
+    }
+
+    /// Prepare the multisig wallet for signing a transaction. The nonce is a random value that
+    /// a. Must be get private and
+    /// b. Never be reused (unless deterministically reconstructing this wallet).
+    pub async fn prepare<R: RngCore + CryptoRng>(
+        &mut self,
+        payments: Vec<(MoneroAddress, u64)>,
+        rng: &mut R,
+    ) -> Result<(), WalletError> {
         let signable = self.pre_process(payments).await?;
         let machine = signable.multisig(self.musig_keys.clone())?;
-        let (machine, preprocess) = machine.preprocess(&mut OsRng);
+        let (machine, preprocess) = machine.preprocess(rng);
         if preprocess.len() != 1 {
             return Err(WalletError::KeyError(format!(
                 "Expected exactly one preprocess. Got {}",
@@ -457,41 +473,39 @@ impl MultisigWallet {
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<usize, std::io::Error> {
         let mut file = std::fs::File::create(path)?;
-        self.write_outputs(&mut file)
-    }
-
-    pub fn write_outputs<W: Write>(&self, writer: &mut W) -> Result<usize, std::io::Error> {
-        let mut written = 0usize;
-        for output in &self.known_outputs {
-            match output.write(writer) {
-                Ok(()) => written += 1,
-                Err(e) => {
-                    eprintln!("Failed to write output: {}", e);
-                }
-            }
-        }
-        Ok(written)
+        let result = self.known_outputs.iter().map(|output| output.write(&mut file)).collect::<Result<Vec<_>, _>>()?;
+        info!("Saved known outputs");
+        Ok(result.len())
     }
 
     pub fn load<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, std::io::Error> {
         let mut file = std::fs::File::open(path)?;
-        let new = Self::read_outputs(&mut file)?;
-        let n = new.len();
-        self.known_outputs.extend_from_slice(&new);
+        let mut n = 0;
+        while let Ok(output) = WalletOutput::read(&mut file) {
+            self.known_outputs.push(output);
+            n += 1;
+        }
         Ok(n)
     }
 
-    pub fn read_outputs<R: Read>(mut reader: R) -> Result<Vec<WalletOutput>, std::io::Error> {
-        let mut outputs = Vec::<WalletOutput>::new();
-        while let Ok(output) = WalletOutput::read(&mut reader) {
-            outputs.push(output);
-        }
-        Ok(outputs)
+    pub fn read_outputs(outputs: &[Vec<u8>]) -> Result<Vec<WalletOutput>, std::io::Error> {
+        let wallet_outputs = outputs
+            .iter()
+            .map(|output| {
+                let mut reader = output.as_slice();
+                WalletOutput::read(&mut reader)
+            })
+            .collect::<Result<Vec<WalletOutput>, _>>()?;
+        Ok(wallet_outputs)
     }
 
     pub fn serializable(&self) -> MultisigWalletData {
-        let mut buf = Vec::with_capacity(self.known_outputs.len() * size_of::<WalletOutput>());
-        self.write_outputs(&mut buf).expect("Failed to write outputs to buffer");
+        let mut known_outputs = Vec::with_capacity(self.known_outputs.len());
+        self.outputs().iter().for_each(|output| {
+            let mut buf = Vec::with_capacity(size_of::<WalletOutput>());
+            output.write(&mut buf).expect("Failed to write output to buffer");
+            known_outputs.push(buf);
+        });
         MultisigWalletData {
             my_spend_key: self.my_spend_key.clone(),
             my_public_key: self.my_public_key.clone(),
@@ -499,7 +513,7 @@ impl MultisigWallet {
             joint_private_view_key: self.joint_private_view_key.clone(),
             joint_public_spend_key: self.joint_public_spend_key.clone(),
             birthday: self.birthday,
-            known_outputs: hex::encode(&buf),
+            known_outputs,
         }
     }
 }
