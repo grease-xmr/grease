@@ -30,7 +30,8 @@ Run `localnet.sh` to create the wallets for Alice and Bob.
 
 This will 
 * Start a new tmux session called `LocalNet` and run `monerod` in it.
-* use crease-cli to generate new spend keys for Alice and Bob. It will save these keys in `alice-spend-key.txt` and `bob-spend-key.txt`.
+* use `grease-cli` to generate new spend keys for Alice and Bob. It will save these keys in `alice-spend-key.txt` 
+and `bob-spend-key.txt`.
   DO NOT USE THESE KEYS FOR REAL MAINNET TRANSACTIONS!
 * create a new wallet for Alice.
   * Paste the private key in at the command prompt when asked.
@@ -43,4 +44,4 @@ This will
 
 If all goes well, you should have a tmux session called `LocalNet` running with `monerod` and two wallets created for Alice and Bob.
 
-You can then run `grease-cli` in a seprate termainal to create and play with payment channels.
+You can then run `grease-cli` in a separate terminal to create and play with payment channels.

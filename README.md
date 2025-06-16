@@ -18,7 +18,7 @@ that can be implemented in production, but as of now, consider this a proof-of-c
 # Using the Grease CLI
 
 (You can run Grease in a local testnet. If you need help setting that up, 
-follow the [testnest setup instructions](./testnet/README.md).)
+follow the [testnet setup instructions](./testnet/README.md).)
 
 Both merchant and customer use the same command line interface (CLI) to interact with the Grease network.
 First, you need to create an identity that identifies you on the P2P network.

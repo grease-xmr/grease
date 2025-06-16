@@ -25,8 +25,8 @@ sleep 2
 
 
 # start wallet_01 (first pane in new window)
-tmux new-window -s $SN -n CustomerWallet -c $PWD -- sh -ic "monero-wallet-cli --config-file $PWD/alice-local.conf"
-tmux new-window -s $SN -n MerchantWallet -c $PWD -- sh -ic "monero-wallet-cli --config-file $PWD/bob-local.conf"
+tmux new-window -t $SN -n CustomerWallet -c $PWD -- sh -ic "monero-wallet-cli --config-file $PWD/alice-local.conf"
+tmux new-window -t $SN -n MerchantWallet -c $PWD -- sh -ic "monero-wallet-cli --config-file $PWD/bob-local.conf"
 
 # open tmux for this session
 tmux a -t $SN

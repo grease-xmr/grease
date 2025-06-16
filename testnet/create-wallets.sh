@@ -16,12 +16,12 @@ create_wallet() {
         exit 1
     fi
     echo "Creating wallet for $name..."
-    grease-cli keypair > "$name-spend-key.txt"
+    "$GREASE" keypair > "$name-spend-key.txt"
 
     echo PASTE THE FOLLOWING SPEND KEY AT THE PROMPT WHEN ASKED
     cat "$name-spend-key.txt"
 
-    monero-wallet-cli --generate-from-spend-key alice-local.bin --daemon-address=$MONEROD
+    monero-wallet-cli --generate-from-spend-key $wallet_file --daemon-address=$MONEROD
 
     echo "Wallet for $name created successfully."
     echo ""
