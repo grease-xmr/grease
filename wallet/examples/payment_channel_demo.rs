@@ -128,7 +128,7 @@ async fn main() -> Result<(), WalletError> {
         //   x="0x09d58da0c2ab2b11cc1f8579f739e7e463235185753ab5d4719e8db6aa476a23"
         //   y="0x1bc9eb7eab983bfd017433c4ed524b8bfde9db0abda7c7940e9c43822268b4ce"
 
-        let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &pubkey_peer, &private_key_peer).unwrap();
+        let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &pubkey_peer, Some(&private_key_peer)).unwrap();
 
         assert_eq!(
             fi_1.x.to_string(),
@@ -157,7 +157,7 @@ async fn main() -> Result<(), WalletError> {
         //   x="0x0ac31edd3af81f177137239a950c8f70662c4b6fbbeec57dae63bfcb61d931ee"
         //   y="0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0"
 
-        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &pubkey_kes, &private_key_kes).unwrap();
+        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &pubkey_kes, Some(&private_key_kes)).unwrap();
 
         assert_eq!(
             fi_2.x.to_string(),
@@ -476,14 +476,14 @@ async fn main() -> Result<(), WalletError> {
     info!("Partial Signing completed for Bob");
 
     let ss_a_real: Vec<modular_frost::sign::SignatureShare<ciphersuite::Ed25519>> =
-        wallet_a.my_signing_shares().unwrap();
+        vec![wallet_a.my_signing_shares().unwrap()];
     info!("Signing shares prepared for Alice: {}", ss_a_real.len());
     info!("Signing shares for Alice: {}", ss_a_real.len());
     for share in &ss_a_real {
         info!("{:?}", get_signatureshare_scalar(share));
     }
 
-    let ss_b_real: Vec<SignatureShare<Ed25519>> = wallet_b.my_signing_shares().unwrap();
+    let ss_b_real: Vec<SignatureShare<Ed25519>> = vec![wallet_b.my_signing_shares().unwrap()];
     info!("Signing shares prepared for Bob: {}", ss_b_real.len());
     info!("Signing shares for Bob: {}", ss_b_real.len());
     for share in &ss_b_real {
@@ -533,13 +533,13 @@ async fn main() -> Result<(), WalletError> {
         );
     }
 
-    let tx_a: Transaction = wallet_a.sign(ss_b_adapted)?;
+    let tx_a: Transaction = wallet_a.sign(&ss_b_adapted[0])?;
     info!("Alice's transaction signed successfully");
 
     let ss_a_adapted = adapt_shares(ss_a_encrypted, secret_a);
     info!("Bob adapted Alice's shares");
 
-    let tx_b: Transaction = wallet_b.sign(ss_a_adapted)?;
+    let tx_b: Transaction = wallet_b.sign(&ss_a_adapted[0])?;
     info!("Bob's transaction signed successfully");
 
     println!("Wallet transaction from Alice: {}", hex::encode(tx_a.hash()));
@@ -636,7 +636,7 @@ fn adapt_shares(
     //Write
     //real_shares[i] = s_adapted;
     unsafe {
-        update_signatureshare(&mut real_shares, s_adapted);
+        update_signatureshare(&mut real_shares[0], s_adapted);
     }
     real_shares
 }

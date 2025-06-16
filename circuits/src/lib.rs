@@ -3,11 +3,10 @@ use blake2::{Blake2s256, Digest};
 use curve25519_dalek::constants::X25519_BASEPOINT;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use curve25519_dalek::scalar::Scalar;
-use ff_ce::PrimeField;
-use num_bigint::{BigInt, BigUint};
-// use ciphersuite::group::ff::PrimeField;
 use ff_ce::Field;
+use ff_ce::PrimeField;
 use hex;
+use num_bigint::{BigInt, BigUint};
 use num_traits::ops::euclid::Euclid;
 use poseidon_rs::Fr;
 use rand::{CryptoRng, RngCore};
@@ -79,7 +78,7 @@ pub fn left_pad_bytes_32_vec(input: &Vec<u8>) -> [u8; 32] {
     result[offset..].copy_from_slice(input);
     result
 }
-fn right_pad_bytes_32(input: &[u8]) -> [u8; 32] {
+pub fn right_pad_bytes_32(input: &[u8]) -> [u8; 32] {
     assert!(input.len() <= 32, "Input length exceeds target length");
 
     let mut result = [0u8; 32];
@@ -114,6 +113,10 @@ pub fn get_bjjpoint_from_scalar(scalar: &BigUint) -> Point {
 
     let p = B8.mul_scalar(&scalar_i);
     p
+}
+pub fn get_bjjpoint_from_string(hex_string: &str) -> Result<Point, String> {
+    let bytes = hex::decode(hex_string).map_err(|_| "Invalid hex string")?;
+    Ok(decompress_point(left_pad_bytes_32(&bytes))?)
 }
 fn get_scalar_to_point_ed25519(scalar_big_uint: &BigUint) -> MontgomeryPoint {
     // Convert the 32-byte array to an Ed25519 Scalar
@@ -156,8 +159,13 @@ fn byte_array_to_string_array(bytes: &[u8; 32]) -> [String; 32] {
     array
 }
 
-pub fn make_keypair<R: CryptoRng + RngCore>(_rng: &mut R) -> (BigUint, babyjubjub_rs::Point) {
-    todo!();
+pub fn make_keypair<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, babyjubjub_rs::Point) {
+    let mut secret_bytes = [0u8; 32];
+    rng.fill_bytes(&mut secret_bytes);
+    let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
+    let secret_key: BigUint = secret_key.rem_euclid(&BABY_JUBJUB_ORDER);
+    let public_key: Point = get_bjjpoint_from_scalar(&secret_key);
+    (secret_key, public_key)
 }
 
 pub fn make_witness0(
