@@ -106,7 +106,7 @@ fn get_field_bytes(field: &Fr) -> [u8; 32] {
 
     bytes.try_into().unwrap()
 }
-pub fn get_bjjpoint_from_scalar(scalar: &BigUint) -> Point {
+pub fn get_scalar_to_point_bjj(scalar: &BigUint) -> Point {
     assert!(*scalar < *BABY_JUBJUB_ORDER);
 
     let scalar_i: BigInt = scalar.clone().into();
@@ -118,7 +118,7 @@ pub fn get_bjjpoint_from_string(hex_string: &str) -> Result<Point, String> {
     let bytes = hex::decode(hex_string).map_err(|_| "Invalid hex string")?;
     Ok(decompress_point(left_pad_bytes_32(&bytes))?)
 }
-fn get_scalar_to_point_ed25519(scalar_big_uint: &BigUint) -> MontgomeryPoint {
+pub fn get_scalar_to_point_ed25519(scalar_big_uint: &BigUint) -> MontgomeryPoint {
     // Convert the 32-byte array to an Ed25519 Scalar
     let scalar_bytes_be = scalar_big_uint.to_bytes_be();
     let mut scalar_bytes_le = scalar_bytes_be.clone();
@@ -159,12 +159,21 @@ fn byte_array_to_string_array(bytes: &[u8; 32]) -> [String; 32] {
     array
 }
 
-pub fn make_keypair<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, babyjubjub_rs::Point) {
+pub fn make_keypair_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, babyjubjub_rs::Point) {
     let mut secret_bytes = [0u8; 32];
     rng.fill_bytes(&mut secret_bytes);
     let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
     let secret_key: BigUint = secret_key.rem_euclid(&BABY_JUBJUB_ORDER);
-    let public_key: Point = get_bjjpoint_from_scalar(&secret_key);
+    let public_key: Point = get_scalar_to_point_bjj(&secret_key);
+    (secret_key, public_key)
+}
+
+pub fn make_keypair_ed25519_bjj_order<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
+    let mut secret_bytes = [0u8; 32];
+    rng.fill_bytes(&mut secret_bytes);
+    let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
+    let secret_key: BigUint = secret_key.rem_euclid(&BABY_JUBJUB_ORDER);
+    let public_key = get_scalar_to_point_ed25519(&secret_key);
     (secret_key, public_key)
 }
 
@@ -255,7 +264,7 @@ pub fn encrypt_message_ecdh(
     pubkey: &babyjubjub_rs::Point,
     private_key: Option<&BigUint>,
 ) -> Result<(babyjubjub_rs::Point, BigUint), BBError> {
-    let R = B8.mul_scalar(&r.clone().into());
+    let r_g = B8.mul_scalar(&r.clone().into());
     let r_p = pubkey.mul_scalar(&r.clone().into());
 
     // Input byte array
@@ -282,7 +291,7 @@ pub fn encrypt_message_ecdh(
     let cipher: BigUint = message + &shared_secret;
     let cipher: BigUint = cipher.rem_euclid(&BABY_JUBJUB_ORDER);
 
-    let fi = R;
+    let fi = r_g;
     let enc = cipher;
 
     if let Some(private_key) = private_key {

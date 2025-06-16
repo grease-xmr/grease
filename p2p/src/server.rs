@@ -1105,7 +1105,7 @@ where
         let public_update_proof = my_proofs.public_only();
         let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i)
             .map_err(|e| UpdateError::WalletError(format!("Could not extract adaptor. {e}")))?;
-        let my_adapted_signature = wallet.adapt_signature(&witness)?;
+        let my_adapted_signature = wallet.adapt_signature(&witness, &my_proofs.public_outputs.S_current)?;
         let commited_update = UpdateCommitted { public_update_proof, adapted_signature: my_adapted_signature.clone() };
         let mut client = self.network_client.clone();
         debug!("💸️  Sending update {} proofs to merchant for channel {name}", info.update_count);
@@ -1232,7 +1232,7 @@ where
         let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i).map_err(|e| {
             GreaseResponse::UpdatePrepared(Err(RemoteServerError::internal(format!("Couldn't extract witness: {e}"))))
         })?;
-        let adapted_sig = wallet.adapt_signature(&witness).map_err(|e| {
+        let my_adapted_sig = wallet.adapt_signature(&witness, &my_proofs.public_outputs.S_current).map_err(|e| {
             GreaseResponse::UpdatePrepared(Err(RemoteServerError::internal(format!(
                 "Could not create adapted signature: {e}"
             ))))
@@ -1247,7 +1247,7 @@ where
             my_proofs,
             peer_preprocess: customer_info.prepare_info_customer,
             my_signature,
-            my_adapted_signature: adapted_sig.clone(),
+            my_adapted_signature: my_adapted_sig.clone(),
         };
         pending.merchant_round1 = Some(round1);
         self.updates_in_progress.add(&name, pending).await;
@@ -1256,7 +1256,7 @@ where
             delta,
             prepare_info_merchant: prep_info.prepare_data,
             update_proof: customer_proofs,
-            adapted_sig,
+            adapted_sig: my_adapted_sig,
         };
         let envelope = MessageEnvelope::new(name, response);
         Ok(GreaseResponse::UpdatePrepared(Ok(envelope)))

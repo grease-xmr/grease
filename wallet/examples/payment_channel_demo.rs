@@ -121,7 +121,7 @@ async fn main() -> Result<(), WalletError> {
         //         "1529458aa75b635e1f96ece9c2ef9aa44cb019f519a979cd85fce0080b8e2417",
         //         "033da4d76cfae27f8360bd4681609681fdcb09ece4ead5c88113c143a9a20c69");
         let private_key_peer: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
-        let pubkey_peer = get_bjjpoint_from_scalar(&private_key_peer);
+        let pubkey_peer = get_scalar_to_point_bjj(&private_key_peer);
 
         // enc_1 = "1220122097491108282229984040904504012545109624322527294624787674340936491877"
         // [fi_1]
@@ -150,7 +150,7 @@ async fn main() -> Result<(), WalletError> {
         //   x="0x12f87860325f2ba2d84d9332a0bedc25edd93736776e818d8993a1da678958bf"
         //   y="0x105900362a575a29943602c90d432768f271ffb8f06af513dcd81d05c3a2c4a3"
         let private_key_kes: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
-        let pubkey_kes = get_bjjpoint_from_scalar(&private_key_kes);
+        let pubkey_kes = get_scalar_to_point_bjj(&private_key_kes);
 
         // enc_2 = "321084871571726505169933431313947177118001726846734186078876149279016535274"
         // [fi_2]

@@ -27,6 +27,8 @@ pub struct NoirDelegate {
 
 impl Default for NoirDelegate {
     fn default() -> Self {
+        #[cfg(not(debug_assertions))]
+        todo!();
         Self {
             #[cfg(debug_assertions)]
             dummy: DummyDelegate::default(),
@@ -230,7 +232,7 @@ impl Updater for NoirDelegate {
 
         let witness_im1 = witness.into();
 
-        let t_im1 = get_bjjpoint_from_scalar(&witness_im1);
+        let t_im1 = get_scalar_to_point_bjj(&witness_im1);
 
         let (witness_i, t_i, s_i) = make_vcof(&witness_im1)?;
 
@@ -362,7 +364,10 @@ impl Updater for NoirDelegate {
         _proof: &PublicUpdateProof,
         _sig: &AdaptedSignature,
     ) -> Result<(), DelegateError> {
-        info!("Dummy delegate: Verifying adapted signature");
+        info!("NoirDelegate: Verifying adapted signature");
+
+        todo!();
+
         Ok(())
     }
 }
@@ -418,6 +423,8 @@ impl FundChannel for NoirDelegate {
         public_spend_key: Curve25519PublicKey,
         birthday: Option<u64>,
     ) {
+        #[cfg(not(debug_assertions))]
+        todo!();
         #[cfg(debug_assertions)]
         self.dummy.register_watcher(name, client, private_view_key, public_spend_key, birthday).await
     }
@@ -430,6 +437,8 @@ impl ChannelClosure for NoirDelegate {
         _c: &GenericPoint,
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
+        #[cfg(not(debug_assertions))]
+        todo!();
         #[cfg(debug_assertions)]
         self.dummy.verify_peer_witness(_w, _c, metadata).await
     }

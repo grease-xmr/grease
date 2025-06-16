@@ -3,6 +3,9 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use hex::FromHexError;
+use num_bigint::BigUint;
+use num_traits::ops::bytes;
+use num_traits::ToBytes;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -59,6 +62,14 @@ impl Curve25519Secret {
     pub fn from_generic_scalar(generic: &GenericScalar) -> Result<Self, KeyError> {
         let scalar = Scalar::from_canonical_bytes(generic.0).into_option().ok_or(KeyError::NonCanonicalScalar)?;
         Ok(Self::from(scalar))
+    }
+
+    pub fn from_big_uint(scalar: &BigUint) -> Result<Self, KeyError> {
+        // let scalar = Scalar::from_canonical_bytes(generic.0).into_option().ok_or(KeyError::NonCanonicalScalar)?;
+        let scalar_bytes = scalar.to_le_bytes();
+        let scalar_bytes = circuits::right_pad_bytes_32(&scalar_bytes);
+        let s = Zeroizing::new(Scalar::from_bytes_mod_order(scalar_bytes.into()));
+        Ok(Self(s))
     }
 }
 

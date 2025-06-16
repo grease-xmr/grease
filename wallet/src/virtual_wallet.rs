@@ -10,8 +10,10 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 use libgrease::amount::MoneroAmount;
+use libgrease::crypto::keys::KeyError;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::AdaptedSignature;
+use libgrease::crypto::zk_objects::GenericPoint;
 use libgrease::monero::data_objects::MultisigWalletData;
 use log::*;
 use modular_frost::dkg::musig::musig;
@@ -50,6 +52,12 @@ pub enum WalletError {
     DeserializeError(String),
     #[error("Error signing transaction: {0}")]
     SigningError(String),
+}
+
+impl From<KeyError> for WalletError {
+    fn from(value: KeyError) -> Self {
+        WalletError::KeyError(value.to_string())
+    }
 }
 
 pub struct MultisigWallet {
@@ -396,13 +404,17 @@ impl MultisigWallet {
         self.shared_spend_key.clone()
     }
 
-    pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptedSignature, WalletError> {
+    pub fn adapt_signature(
+        &self,
+        witness: &Curve25519Secret,
+        statement: &GenericPoint,
+    ) -> Result<AdaptedSignature, WalletError> {
         let real_sig = self
             .my_signing_shares()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
         let real_sig = signature_share_to_secret(real_sig);
         let adapted = real_sig.as_scalar() + witness.as_scalar();
-        Ok(AdaptedSignature(Curve25519Secret::from(adapted)))
+        Ok(AdaptedSignature::new(&Curve25519Secret::from(adapted), statement))
     }
 
     pub fn bytes_to_signature_share(&self, bytes: &[u8]) -> Result<SignatureShare<Ed25519>, WalletError> {

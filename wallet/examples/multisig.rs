@@ -98,8 +98,11 @@ async fn main() -> Result<(), WalletError> {
     println!("Partial Signing completed for Bob");
 
     // Create adaptor signature
-    let offset_b = Curve25519Secret::random(&mut rand::rng());
-    let adapted_b = wallet_b.adapt_signature(&offset_b)?;
+    let mut rng = &mut rand::rng();
+    let (offset_b, statement_b) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+    let offset_b = Curve25519Secret::from_generic_scalar(&offset_b.into())?;
+
+    let adapted_b = wallet_b.adapt_signature(&offset_b, &statement_b.into())?;
 
     // Test signature conversion for ss_a
     let ss_a = wallet_a.my_signing_shares().unwrap();

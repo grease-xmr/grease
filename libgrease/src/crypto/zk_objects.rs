@@ -16,11 +16,18 @@ pub struct GenericScalar(
 );
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AdaptedSignature(pub Curve25519Secret);
+
+pub struct AdaptedSignature {
+    pub adapted_signature: Curve25519Secret,
+    pub statement: GenericPoint,
+}
 
 impl AdaptedSignature {
+    pub fn new(adapted_signature: &Curve25519Secret, statement: &GenericPoint) -> AdaptedSignature {
+        AdaptedSignature { adapted_signature: adapted_signature.clone(), statement: statement.clone() }
+    }
     pub fn as_scalar(&self) -> &Scalar {
-        self.0.as_scalar()
+        self.adapted_signature.as_scalar()
     }
 }
 

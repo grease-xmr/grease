@@ -504,9 +504,9 @@ mod test {
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state<R: CryptoRng + RngCore>(rng: &mut R) -> NewChannelState {
-        let (private_key_self, public_key_self) = make_keypair(rng);
-        let (_, public_key_peer) = make_keypair(rng);
-        let (_, public_key_kes) = make_keypair(rng);
+        let (private_key_self, public_key_self) = make_keypair_bjj(rng);
+        let (_, public_key_peer) = make_keypair_bjj(rng);
+        let (_, public_key_kes) = make_keypair_bjj(rng);
         let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
         let nonce_peer = BigUint::from_bytes_be(&random_251_bits(rng));
 
@@ -598,10 +598,17 @@ mod test {
             },
             proof: b"my_update_proof".to_vec(),
         };
+
+        let mut rng = &mut rand::rng();
+        let (offset_self, statement_self) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+        let offset_self = Curve25519Secret::from_generic_scalar(&offset_self.into()).unwrap();
+        let (offset_peer, statement_peer) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+        let offset_peer = Curve25519Secret::from_generic_scalar(&offset_peer.into()).unwrap();
+
         let info = UpdateRecord {
             my_signature: b"my_signature".to_vec(),
-            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
-            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            my_adapted_signature: AdaptedSignature::new(&offset_self, &statement_self.into()),
+            peer_adapted_signature: AdaptedSignature::new(&offset_peer, &statement_peer.into()),
             my_preprocess: b"my_prepared_info".to_vec(),
             peer_preprocess: b"peer_prepared_info".to_vec(),
             my_proofs,
