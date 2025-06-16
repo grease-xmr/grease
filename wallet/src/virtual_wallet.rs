@@ -431,12 +431,12 @@ impl MultisigWallet {
         Ok(sig)
     }
 
-    pub fn sign(&mut self, peer_share: SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
+    pub fn sign(&mut self, peer_share: &SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
         if self.final_signer.is_none() || self.shared_spend_key.is_none() {
             return Err(WalletError::KeyError("Final signer or shares not initialized".into()));
         }
         let machine = self.final_signer.take().unwrap();
-        let shares = self.assign_shares(vec![peer_share]);
+        let shares = self.assign_shares(vec![peer_share.clone()]);
         let tx = machine.complete(shares)?;
         debug!("Final signing completed");
         Ok(tx)

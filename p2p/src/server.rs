@@ -1471,7 +1471,7 @@ where
         trace!("Signed final transaction with my key.");
         let adapted = final_update.peer_adapted_signature;
         let ss_b = wallet.extract_true_signature(&adapted, &offset)?;
-        let closing_tx = wallet.sign(ss_b)?;
+        let closing_tx = wallet.sign(&ss_b)?;
         let tx_hash = TransactionId::new(hex::encode(closing_tx.hash()));
         debug!("Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");
         if broadcast {

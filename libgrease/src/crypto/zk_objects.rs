@@ -1,5 +1,6 @@
 use crate::crypto::keys::Curve25519Secret;
 use crate::monero::data_objects::MultisigSplitSecrets;
+use circuits::*;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 use curve25519_dalek::Scalar;
 use hex::FromHexError;
@@ -33,7 +34,7 @@ impl Into<GenericScalar> for BigUint {
     fn into(self) -> GenericScalar {
         let mut g = [0u8; 32];
 
-        g.copy_from_slice(&self.to_bytes_le());
+        g.copy_from_slice(&right_pad_bytes_32(&self.to_bytes_le()));
 
         GenericScalar { 0: g }
     }
