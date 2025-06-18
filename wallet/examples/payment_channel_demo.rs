@@ -255,7 +255,23 @@ async fn main() -> Result<(), WalletError> {
         .unwrap();
 
         //Verify
-        let _verification = bb_verify_init(&proof_init).unwrap();
+        let public_outputs = PublicInit::new(
+            &t_0,
+            &c_1,
+            &fi_1,
+            &enc_1,
+            &fi_2,
+            &enc_2,
+            &s_0,
+            &challenge_bytes,
+            &response_baby_jub_jub,
+            &response_ed25519,
+            &r1,
+            &r2,
+        );
+
+        let verification = bb_verify_init(&public_outputs, &proof_init).unwrap();
+        assert!(verification);
 
         //witness_i = "1012694528770316483559205215366203370757356884565651608309268621249697619247"
         // [T_i]
@@ -354,7 +370,19 @@ async fn main() -> Result<(), WalletError> {
         .unwrap();
 
         //Verify
-        let _verification = bb_verify_update(&proof_update).unwrap();
+        let public_outputs = crate::PublicUpdate::new(
+            &t_0,
+            &t_1,
+            &s_1,
+            &challenge_bytes,
+            &response_div_baby_jub_jub,
+            &response_div_ed25519,
+            &r1_1,
+            &r2_1,
+        );
+
+        let verification = bb_verify_update(&public_outputs, &proof_update).unwrap();
+        assert!(verification);
 
         println!("Success!");
     }

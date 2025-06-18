@@ -26,6 +26,10 @@ pub enum DelegateError {
     String(String),
     #[error("NIZK DLEQ failed to verify")]
     DLEQVerify,
+    #[error("Prover failed to verify its own proof")]
+    SelfVerify,
+    #[error("Failed to verify peer proof")]
+    Verify,
 
     #[cfg(debug_assertions)]
     #[error("Feature is not implemented")]

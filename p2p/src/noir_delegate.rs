@@ -147,7 +147,25 @@ impl GreaseInitializer for NoirDelegate {
         )?;
 
         //Verify
-        let _verification = bb_verify_init(&proof_init)?;
+        let public = PublicInit::new(
+            &t_0,
+            &c_1,
+            &fi_1,
+            &enc_1,
+            &fi_2,
+            &enc_2,
+            &s_0,
+            &challenge_bytes,
+            &response_baby_jub_jub,
+            &response_ed25519,
+            &r1,
+            &r2,
+        );
+
+        let verification = bb_verify_init(&public, &proof_init)?;
+        if !verification {
+            return Err(DelegateError::SelfVerify);
+        }
 
         let p = Proofs0 {
             public_input: input_public.clone(),
@@ -186,7 +204,25 @@ impl GreaseInitializer for NoirDelegate {
         info!("NoirDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
 
         //Verify SNARKs
-        let _verification = bb_verify_init(&proof.proofs)?;
+        let public = PublicInit::new(
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.T_0)?,
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.c_1)?,
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.phi_1)?,
+            &proof.public_outputs.enc_1.into(),
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.phi_2)?,
+            &proof.public_outputs.enc_2.into(),
+            &proof.public_outputs.S_0.into(),
+            &proof.public_outputs.c.into(),
+            &proof.public_outputs.rho_bjj.into(),
+            &proof.public_outputs.rho_ed.into(),
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.R1)?,
+            &proof.public_outputs.R2.into(),
+        );
+
+        let verification = bb_verify_init(&public, &proof.proofs)?;
+        if !verification {
+            return Err(DelegateError::Verify);
+        }
 
         //Verify DLEQ
         let t_0: babyjubjub_rs::Point =
@@ -291,7 +327,21 @@ impl Updater for NoirDelegate {
         )?;
 
         //Verify
-        let _verification = bb_verify_update(&proof_update)?;
+        let public = PublicUpdate::new(
+            &t_im1,
+            &t_i,
+            &s_i,
+            &challenge_bytes,
+            &response_div_baby_jub_jub,
+            &response_div_ed25519,
+            &r1,
+            &r2,
+        );
+
+        let verification = bb_verify_update(&public, &proof_update)?;
+        if !verification {
+            return Err(DelegateError::SelfVerify);
+        }
 
         let p = UpdateProofs {
             public_outputs: PublicUpdateOutputs {
@@ -326,7 +376,21 @@ impl Updater for NoirDelegate {
         info!("NoirDelegate: Verifying update proofs for {}", metadata.channel_id().name());
 
         //Verify SNARKs
-        let _verification = bb_verify_update(&proof.proof)?;
+        let public = PublicUpdate::new(
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.T_prev)?,
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.T_current)?,
+            &proof.public_outputs.S_current.into(),
+            &proof.public_outputs.challenge.into(),
+            &proof.public_outputs.rho_bjj.into(),
+            &proof.public_outputs.rho_ed.into(),
+            &babyjubjub_rs::Point::try_from(&proof.public_outputs.R_bjj)?,
+            &proof.public_outputs.R_ed.into(),
+        );
+
+        let verification = bb_verify_update(&public, &proof.proof)?;
+        if !verification {
+            return Err(DelegateError::Verify);
+        }
 
         //Verify DLEQ
         let t_i: babyjubjub_rs::Point =

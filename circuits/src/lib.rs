@@ -850,6 +850,7 @@ pub fn bb_prove_init(
     witness_config_file.close()?;
 
     //bb prove
+    //TODO: Embed the Grease.json file
     let args: Vec<&str> = vec!["prove", "-b", "./target/Grease.json", "-w", &witness_binary_file_path, "-v", "-o", "-"];
     let proof: Vec<u8> = match call_shell(Shell::Bb, &args) {
         Ok((stdout, _stderr)) => stdout,
@@ -864,6 +865,17 @@ pub fn bb_prove_init(
 
     Ok(proof)
 }
+
+// /**
+//  * @description
+//  * The representation of a proof
+//  * */
+// export type ProofData = {
+//   /** @description Public inputs of a proof */
+//   publicInputs: string[];
+//   /** @description An byte array representing the proof */
+//   proof: Uint8Array;
+// };
 
 pub fn bb_verify(proof: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> {
     // Create a named temporary file
@@ -890,7 +902,10 @@ pub fn bb_verify(proof: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> 
     ret
 }
 
-pub fn bb_verify_init(proof: &Vec<u8>) -> Result<bool, BBError> {
+pub fn bb_verify_init(_public: &PublicInit, proof: &Vec<u8>) -> Result<bool, BBError> {
+    //TODO: Verify public parameters
+
+    //TODO: Embed the vk.key file
     bb_verify(proof, "./target/vk/vk.key")
 }
 
@@ -957,6 +972,7 @@ pub fn bb_prove_update(
     witness_config_file.close()?;
 
     //bb prove
+    //TODO: Embed the GreaseUpdate.json file
     let args: Vec<&str> =
         vec!["prove", "-b", "./target/GreaseUpdate.json", "-w", &witness_binary_file_path, "-v", "-o", "-"];
     let proof = match call_shell(Shell::Bb, &args) {
@@ -973,7 +989,124 @@ pub fn bb_prove_update(
     Ok(proof)
 }
 
-pub fn bb_verify_update(proof: &Vec<u8>) -> Result<bool, BBError> {
+/// The outputs of the Commitment0 proofs that must be shared with the peer.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone)]
+pub struct PublicInit {
+    /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
+    pub T_0: Point,
+    /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
+    pub c_1: Point,
+    /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
+    pub phi_1: Point,
+    /// **χ₁** - The encrypted value of σ₁.
+    pub enc_1: BigUint,
+    /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
+    pub phi_2: Point,
+    /// **χ₂** - The encrypted value of σ₂ (enc₂).
+    pub enc_2: BigUint,
+    /// **S₀** - The public key/curve point on Ed25519 for ω₀.
+    pub S_0: MontgomeryPoint,
+    /// **c** - The Fiat–Shamir heuristic challenge (challenge_bytes).
+    pub c: BigUint,
+    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (response_BabyJubJub).
+    pub rho_bjj: BigUint,
+    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (response_div_ed25519).
+    pub rho_ed: BigUint,
+    /// **R_BabyJubjub** - The ... on the Baby Jubjub curve (R1).
+    pub R1: Point,
+    /// **R_Ed25519** - The ... on the Ed25519 curve (R2).
+    pub R2: MontgomeryPoint,
+}
+
+#[allow(non_snake_case)]
+impl PublicInit {
+    pub fn new(
+        T_0: &Point,
+        c_1: &Point,
+        phi_1: &Point,
+        enc_1: &BigUint,
+        phi_2: &Point,
+        enc_2: &BigUint,
+        S_0: &MontgomeryPoint,
+        challenge_bytes: &[u8; 32],
+        rho_bjj: &BigUint,
+        rho_ed: &BigUint,
+        R1: &Point,
+        R2: &MontgomeryPoint,
+    ) -> Self {
+        let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
+
+        PublicInit {
+            T_0: T_0.clone(),
+            c_1: c_1.clone(),
+            phi_1: phi_1.clone(),
+            enc_1: enc_1.clone(),
+            phi_2: phi_2.clone(),
+            enc_2: enc_2.clone(),
+            S_0: S_0.clone(),
+            c: challenge,
+            rho_bjj: rho_bjj.clone(),
+            rho_ed: rho_ed.clone(),
+            R1: R1.clone(),
+            R2: R2.clone(),
+        }
+    }
+}
+
+/// Struct holding the public outputs from a ZK update proof.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone)]
+pub struct PublicUpdate {
+    /// **Τ_(i-1)** - The public key/curve point on Baby Jubjub for ω_(i-1).
+    pub T_prev: Point,
+    /// **Τ_i** - The public key/curve point on Baby Jubjub for ω_i.
+    pub T_current: Point,
+    /// **S_i** - The public key/curve point on Ed25519 for ω_i.
+    pub S_current: MontgomeryPoint,
+    /// **C** - The Fiat–Shamir heuristic challenge (`challenge_bytes`).
+    pub challenge: BigUint,
+    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`).
+    pub rho_bjj: BigUint,
+    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`).
+    pub rho_ed: BigUint,
+    /// **R_BabyJubjub** - DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`).
+    pub R_bjj: Point,
+    /// **R_Ed25519** - DLEQ commitment 2, which is a public key/curve point on Ed25519 (`R_2`).
+    pub R_ed: MontgomeryPoint,
+}
+
+#[allow(non_snake_case)]
+impl PublicUpdate {
+    pub fn new(
+        T_prev: &Point,
+        T_current: &Point,
+        S_current: &MontgomeryPoint,
+        challenge_bytes: &[u8; 32],
+        rho_bjj: &BigUint,
+        rho_ed: &BigUint,
+        R_bjj: &Point,
+        R_ed: &MontgomeryPoint,
+    ) -> Self {
+        let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
+
+        PublicUpdate {
+            T_prev: T_prev.clone(),
+            T_current: T_current.clone(),
+            S_current: S_current.clone(),
+            challenge: challenge,
+            rho_bjj: rho_bjj.clone(),
+            rho_ed: rho_ed.clone(),
+            R_bjj: R_bjj.clone(),
+            R_ed: R_ed.clone(),
+        }
+    }
+}
+
+pub fn bb_verify_update(_public: &PublicUpdate, proof: &Vec<u8>) -> Result<bool, BBError> {
+    //TODO: Verify public parameters
+
+    //TODO: Embed the vk.key file
     bb_verify(proof, "./target/vk/vkUpdate.key")
 }
 
@@ -1149,7 +1282,7 @@ mod test {
             let nonce_peer: BigUint = crate::make_scalar_bjj(rng);
             let blinding = crate::make_scalar_bjj(rng);
 
-            let (witness_0, t_0, _) = crate::make_witness0(&nonce_peer, &blinding).unwrap();
+            let (witness_0, t_0, s_0) = crate::make_witness0(&nonce_peer, &blinding).unwrap();
 
             let a_1 = crate::make_scalar_bjj(rng);
             let (c_1, share_1, share_2) = crate::feldman_secret_share_2_of_2(&witness_0, &a_1).unwrap();
@@ -1168,8 +1301,8 @@ mod test {
                 challenge_bytes,
                 response_baby_jub_jub,
                 response_ed25519,
-                _r1,
-                _r2,
+                r1,
+                r2,
                 response_div_baby_jub_jub,
                 response_div_ed25519,
             ) = crate::generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
@@ -1201,12 +1334,25 @@ mod test {
             .unwrap();
 
             //Verify
-            let verification = crate::bb_verify_init(&proof_init).unwrap();
+            let public = crate::PublicInit::new(
+                &t_0,
+                &c_1,
+                &fi_1,
+                &enc_1,
+                &fi_2,
+                &enc_2,
+                &s_0,
+                &challenge_bytes,
+                &response_baby_jub_jub,
+                &response_ed25519,
+                &r1,
+                &r2,
+            );
+            let verification = crate::bb_verify_init(&public, &proof_init).unwrap();
             assert!(verification);
         }
     }
 
-    // #[ignore]
     #[test]
     fn test_bb_prove_update() {
         let mut rng = &mut rand::rng();
@@ -1215,15 +1361,15 @@ mod test {
         let blinding = crate::make_scalar_bjj(rng);
 
         let (witness_im1, t_im1, _) = crate::make_witness0(&nonce_peer, &blinding).unwrap();
-        let (witness_i, t_i, _) = crate::make_vcof(&witness_im1).unwrap();
+        let (witness_i, t_i, s_i) = crate::make_vcof(&witness_im1).unwrap();
 
         let blinding_dleq: BigUint = crate::make_scalar_bjj(&mut rng);
         let (
             challenge_bytes,
             response_baby_jub_jub,
             response_ed25519,
-            _r1,
-            _r2,
+            r1,
+            r2,
             response_div_baby_jub_jub,
             response_div_ed25519,
         ) = crate::generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
@@ -1244,7 +1390,17 @@ mod test {
         .unwrap();
 
         //Verify
-        let verification = crate::bb_verify_update(&proof_update).unwrap();
+        let public = crate::PublicUpdate::new(
+            &t_im1,
+            &t_i,
+            &s_i,
+            &challenge_bytes,
+            &response_div_baby_jub_jub,
+            &response_div_ed25519,
+            &r1,
+            &r2,
+        );
+        let verification = crate::bb_verify_update(&public, &proof_update).unwrap();
         assert!(verification);
     }
 }
