@@ -344,7 +344,7 @@ pub fn random_251_bits<R: CryptoRng + RngCore>(rng: &mut R) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rng.fill_bytes(&mut bytes);
 
-    //The 251 bytes are in little endian format, so snip the top 5 bits from the last byte
+    //The 251 bits are in little endian format, so snip the top 5 bits from the last byte
     bytes[31] = 0x1F & bytes[31];
 
     bytes

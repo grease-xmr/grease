@@ -140,10 +140,26 @@ fn multiply_point_by_scalar_ed25519(point: &MontgomeryPoint, scalar_big_uint: &B
     let point2: MontgomeryPoint = scalar * point;
     point2
 }
-fn subtract_montgomery_points(point1: MontgomeryPoint, point2: MontgomeryPoint, sign: u8) -> Option<MontgomeryPoint> {
+enum MontgomeryPointSigns {
+    PP,
+    PN,
+    NP,
+    NN,
+}
+fn subtract_montgomery_points(
+    point1: MontgomeryPoint,
+    point2: MontgomeryPoint,
+    sign: MontgomeryPointSigns,
+) -> Option<MontgomeryPoint> {
     // Convert both MontgomeryPoints to EdwardsPoints
-    let edwards1 = point1.to_edwards(sign)?;
-    let edwards2 = point2.to_edwards(sign)?;
+    let edwards1 = match sign {
+        MontgomeryPointSigns::PP | MontgomeryPointSigns::PN => point1.to_edwards(0u8)?,
+        MontgomeryPointSigns::NP | MontgomeryPointSigns::NN => point1.to_edwards(1u8)?,
+    };
+    let edwards2 = match sign {
+        MontgomeryPointSigns::PP | MontgomeryPointSigns::NP => point2.to_edwards(0u8)?,
+        MontgomeryPointSigns::PN | MontgomeryPointSigns::NN => point2.to_edwards(1u8)?,
+    };
 
     // Subtract EdwardsPoints
     let result_edwards = edwards1 - edwards2;
@@ -157,6 +173,14 @@ fn byte_array_to_string_array(bytes: &[u8; 32]) -> [String; 32] {
         array[i] = bytes[i].to_string();
     }
     array
+}
+
+pub fn make_scalar_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> BigUint {
+    let mut secret_bytes = [0u8; 32];
+    rng.fill_bytes(&mut secret_bytes);
+    let scalar: BigUint = BigUint::from_bytes_be(&secret_bytes);
+    let scalar: BigUint = scalar.rem_euclid(&BABY_JUBJUB_ORDER);
+    scalar
 }
 
 pub fn make_keypair_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, babyjubjub_rs::Point) {
@@ -468,8 +492,24 @@ pub fn generate_dleqproof_simple(
         let challenge_ed25519 = challenge_bigint.rem_euclid(&ED25519_ORDER);
         let c_s = multiply_point_by_scalar_ed25519(&s, &challenge_ed25519);
 
-        let r2_calc = subtract_montgomery_points(c_s, response_ed25519_g2, 0u8).unwrap();
-        assert_eq!(r2_calc, r2);
+        let mut count_match = 0u8;
+        let r2_calc_pp = subtract_montgomery_points(c_s, response_ed25519_g2, MontgomeryPointSigns::PP).unwrap();
+        if r2_calc_pp == r2 {
+            count_match += 1;
+        }
+        let r2_calc_pn = subtract_montgomery_points(c_s, response_ed25519_g2, MontgomeryPointSigns::PN).unwrap();
+        if r2_calc_pn == r2 {
+            count_match += 1;
+        }
+        let r2_calc_np = subtract_montgomery_points(c_s, response_ed25519_g2, MontgomeryPointSigns::NP).unwrap();
+        if r2_calc_np == r2 {
+            count_match += 1;
+        }
+        let r2_calc_nn = subtract_montgomery_points(c_s, response_ed25519_g2, MontgomeryPointSigns::NN).unwrap();
+        if r2_calc_nn == r2 {
+            count_match += 1;
+        }
+        assert!(count_match > 0u8);
     }
 
     Ok((
@@ -518,7 +558,9 @@ pub fn verify_dleq_simple(
     let mut challenge_bytes_calc = [0u8; 32];
     challenge_bytes_calc.copy_from_slice(&challenge_hash);
 
-    assert_eq!(challenge_bytes_calc, *challenge_bytes);
+    if challenge_bytes_calc != *challenge_bytes {
+        return Ok(false);
+    }
 
     //Verify: r.G == c.x.G - (c*x-r).G => R == c.T - z.G
     //        R1 == challenge_BabyJubJub.T - response_BabyJubJub_g1.G
@@ -528,8 +570,12 @@ pub fn verify_dleq_simple(
 
     let r1_calc =
         challenge_baby_jub_jub_t.projective().add(&point_negate(response_baby_jub_jub_g1).projective()).affine();
-    assert_eq!(r1.x, r1_calc.x);
-    assert_eq!(r1.y, r1_calc.y);
+    if r1.x != r1_calc.x {
+        return Ok(false);
+    }
+    if r1.y != r1_calc.y {
+        return Ok(false);
+    }
 
     //Verify: r.G == c.x.G - (c*x-r).G => R == c.T - z.G
     //        R2 == challenge_ed25519.S - response_ed25519.G
@@ -537,10 +583,29 @@ pub fn verify_dleq_simple(
     let challenge_ed25519: BigUint = challenge_bigint.rem_euclid(&ED25519_ORDER);
     let challenge_ed25519_s: MontgomeryPoint = multiply_point_by_scalar_ed25519(&s, &challenge_ed25519);
 
-    let r2_calc = subtract_montgomery_points(challenge_ed25519_s, response_ed25519_g2, 0u8).unwrap();
-    assert_eq!(*r2, r2_calc);
+    let mut count_match = 0u8;
+    let r2_calc_pp =
+        subtract_montgomery_points(challenge_ed25519_s, response_ed25519_g2, MontgomeryPointSigns::PP).unwrap();
+    if r2_calc_pp == *r2 {
+        count_match += 1;
+    }
+    let r2_calc_pn =
+        subtract_montgomery_points(challenge_ed25519_s, response_ed25519_g2, MontgomeryPointSigns::PN).unwrap();
+    if r2_calc_pn == *r2 {
+        count_match += 1;
+    }
+    let r2_calc_np =
+        subtract_montgomery_points(challenge_ed25519_s, response_ed25519_g2, MontgomeryPointSigns::NP).unwrap();
+    if r2_calc_np == *r2 {
+        count_match += 1;
+    }
+    let r2_calc_nn =
+        subtract_montgomery_points(challenge_ed25519_s, response_ed25519_g2, MontgomeryPointSigns::NN).unwrap();
+    if r2_calc_nn == *r2 {
+        count_match += 1;
+    }
 
-    return Ok(true);
+    return Ok(count_match > 0u8);
 }
 
 enum Shell {
@@ -554,12 +619,7 @@ fn call_shell(shell: Shell, args: &[&str]) -> io::Result<(Vec<u8>, String)> {
         Shell::Nargo => "nargo",
     };
     // Spawn the bash command with the provided arguments
-    let mut command = Command::new(program)
-        .current_dir("./circuits")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut command = Command::new(program).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
     // Get stdout and stderr handles
     let stdout =
@@ -580,7 +640,7 @@ fn call_shell(shell: Shell, args: &[&str]) -> io::Result<(Vec<u8>, String)> {
     if !status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            format!("Script failed with status: {}", status),
+            format!("Script failed with status: {}", status,),
         ));
     }
 
@@ -659,46 +719,48 @@ fn get_point_config_baby_jubjub(point: &Point) -> PointConfig {
     PointConfig { x: x_str.to_string(), y: y_str.to_string() }
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 struct InitConfig {
     a_1: String,
     blinding: String,
-    blinding_dleq: String,
+    blinding_DLEQ: String,
     challenge_bytes: [String; 32],
     enc_1: String,
     enc_2: String,
     nonce_peer: String,
     r_1: String,
     r_2: String,
-    response_div_baby_jub_jub: [String; 32],
+    response_div_BabyJubJub: [String; 32],
     response_div_ed25519: [String; 32],
-    response_baby_jub_jub: String,
+    response_BabyJubJub: String,
     response_ed25519: [String; 32],
     share_1: String,
     share_2: String,
     witness_0: String,
 
-    t_0: PointConfig,
+    T_0: PointConfig,
     c_1: PointConfig,
     fi_1: PointConfig,
     fi_2: PointConfig,
-    pubkey_kes: PointConfig,
+    pubkey_KES: PointConfig,
     pubkey_peer: PointConfig,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize)]
 struct UpdateConfig {
-    blinding_dleq: String,
+    blinding_DLEQ: String,
     challenge_bytes: [String; 32],
-    response_div_baby_jub_jub: [String; 32],
+    response_div_BabyJubJub: [String; 32],
     response_div_ed25519: [String; 32],
-    response_baby_jub_jub: String,
+    response_BabyJubJub: String,
     response_ed25519: [String; 32],
     witness_i: String,
     witness_im1: String,
 
-    t_i: PointConfig,
-    t_im1: PointConfig,
+    T_i: PointConfig,
+    T_im1: PointConfig,
 }
 
 pub fn bb_prove_init(
@@ -729,26 +791,26 @@ pub fn bb_prove_init(
     let config = InitConfig {
         a_1: a_1.to_string(),
         blinding: blinding.to_string(),
-        blinding_dleq: blinding_dleq.to_string(),
+        blinding_DLEQ: blinding_dleq.to_string(),
         challenge_bytes: byte_array_to_string_array(&challenge_bytes),
         enc_1: enc_1.to_string(),
         enc_2: enc_2.to_string(),
         nonce_peer: nonce_peer.to_string(),
         r_1: r_1.to_string(),
         r_2: r_2.to_string(),
-        response_div_baby_jub_jub: byte_array_to_string_array(&response_div_baby_jub_jub),
+        response_div_BabyJubJub: byte_array_to_string_array(&response_div_baby_jub_jub),
         response_div_ed25519: byte_array_to_string_array(&response_div_ed25519),
-        response_baby_jub_jub: response_baby_jub_jub.to_string(),
+        response_BabyJubJub: response_baby_jub_jub.to_string(),
         response_ed25519: byte_array_to_string_array(&response_ed25519),
         share_1: share_1.to_string(),
         share_2: share_2.to_string(),
         witness_0: witness_0.to_string(),
 
-        t_0: get_point_config_baby_jubjub(t_0),
+        T_0: get_point_config_baby_jubjub(t_0),
         c_1: get_point_config_baby_jubjub(c_1),
         fi_1: get_point_config_baby_jubjub(fi_1),
         fi_2: get_point_config_baby_jubjub(fi_2),
-        pubkey_kes: get_point_config_baby_jubjub(pubkey_kes),
+        pubkey_KES: get_point_config_baby_jubjub(pubkey_kes),
         pubkey_peer: get_point_config_baby_jubjub(pubkey_peer),
     };
 
@@ -846,17 +908,17 @@ pub fn bb_prove_update(
     t_im1: &Point,
 ) -> Result<Vec<u8>, BBError> {
     let config = UpdateConfig {
-        blinding_dleq: blinding_dleq.to_string(),
+        blinding_DLEQ: blinding_dleq.to_string(),
         challenge_bytes: byte_array_to_string_array(&challenge_bytes),
-        response_div_baby_jub_jub: byte_array_to_string_array(&response_div_baby_jub_jub),
+        response_div_BabyJubJub: byte_array_to_string_array(&response_div_baby_jub_jub),
         response_div_ed25519: byte_array_to_string_array(&response_div_ed25519),
-        response_baby_jub_jub: response_baby_jub_jub.to_string(),
+        response_BabyJubJub: response_baby_jub_jub.to_string(),
         response_ed25519: byte_array_to_string_array(&response_ed25519),
         witness_i: witness_i.to_string(),
         witness_im1: witness_im1.to_string(),
 
-        t_i: get_point_config_baby_jubjub(t_i),
-        t_im1: get_point_config_baby_jubjub(t_im1),
+        T_i: get_point_config_baby_jubjub(t_i),
+        T_im1: get_point_config_baby_jubjub(t_im1),
     };
 
     // Serialize to TOML string
@@ -880,7 +942,7 @@ pub fn bb_prove_update(
         "GreaseUpdate",
         &witness_binary_file_path,
     ];
-    let _: String = match call_shell(Shell::Nargo, &args) {
+    let _ = match call_shell(Shell::Nargo, &args) {
         Ok((stdout, _stderr)) => match str::from_utf8(&stdout) {
             Ok(v) => v.to_string(),
             Err(e) => return Err(format!("Invalid UTF-8 sequence: {}", e).into()),
@@ -913,4 +975,276 @@ pub fn bb_prove_update(
 
 pub fn bb_verify_update(proof: &Vec<u8>) -> Result<bool, BBError> {
     bb_verify(proof, "./target/vk/vkUpdate.key")
+}
+
+//TESTS
+
+#[cfg(test)]
+mod test {
+    use num_bigint::BigUint;
+
+    #[test]
+    fn test_generate_dleqproof_simple() {
+        let mut rng = &mut rand::rng();
+
+        for _i in 0..100 {
+            let nonce_peer = crate::make_scalar_bjj(rng);
+            let blinding = crate::make_scalar_bjj(rng);
+
+            let (witness_i, t_i, s_i) = crate::make_witness0(&nonce_peer, &blinding).unwrap();
+
+            let blinding_dleq: BigUint = crate::make_scalar_bjj(&mut rng);
+            let (
+                challenge_bytes,
+                response_baby_jub_jub,
+                response_ed25519,
+                r1,
+                r2,
+                _response_div_baby_jub_jub,
+                _response_div_ed25519,
+            ) = crate::generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_i,
+                &challenge_bytes,
+                &response_baby_jub_jub,
+                &response_ed25519,
+                &r1,
+                &r2,
+            )
+            .unwrap();
+            assert!(res);
+        }
+    }
+
+    #[test]
+    fn test_not_verify_dleq_simple() {
+        let mut rng = &mut rand::rng();
+
+        for _i in 0..100 {
+            let nonce_peer_i = crate::make_scalar_bjj(rng);
+            let blinding_i = crate::make_scalar_bjj(rng);
+
+            let (witness_i, t_i, s_i) = crate::make_witness0(&nonce_peer_i, &blinding_i).unwrap();
+
+            let blinding_dleq_i: BigUint = crate::make_scalar_bjj(&mut rng);
+            let (
+                challenge_bytes_i,
+                response_baby_jub_jub_i,
+                response_ed25519_i,
+                r1_i,
+                r2_i,
+                _response_div_baby_jub_jub,
+                _response_div_ed25519,
+            ) = crate::generate_dleqproof_simple(&witness_i, &blinding_dleq_i).unwrap();
+
+            let nonce_peer_j = crate::make_scalar_bjj(rng);
+            let blinding_j = crate::make_scalar_bjj(rng);
+
+            let (witness_j, t_j, s_j) = crate::make_witness0(&nonce_peer_j, &blinding_j).unwrap();
+
+            let blinding_dleq_j: BigUint = crate::make_scalar_bjj(&mut rng);
+            let (
+                challenge_bytes_j,
+                response_baby_jub_jub_j,
+                response_ed25519_j,
+                r1_j,
+                r2_j,
+                _response_div_baby_jub_jub,
+                _response_div_ed25519,
+            ) = crate::generate_dleqproof_simple(&witness_j, &blinding_dleq_j).unwrap();
+
+            let res = crate::verify_dleq_simple(
+                &t_j,
+                &s_i,
+                &challenge_bytes_i,
+                &response_baby_jub_jub_i,
+                &response_ed25519_i,
+                &r1_i,
+                &r2_i,
+            )
+            .unwrap();
+            assert!(!res);
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_j,
+                &challenge_bytes_i,
+                &response_baby_jub_jub_i,
+                &response_ed25519_i,
+                &r1_i,
+                &r2_i,
+            )
+            .unwrap();
+            assert!(!res);
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_i,
+                &challenge_bytes_j,
+                &response_baby_jub_jub_i,
+                &response_ed25519_i,
+                &r1_i,
+                &r2_i,
+            )
+            .unwrap();
+            assert!(!res);
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_i,
+                &challenge_bytes_i,
+                &response_baby_jub_jub_j,
+                &response_ed25519_i,
+                &r1_i,
+                &r2_i,
+            )
+            .unwrap();
+            assert!(!res);
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_i,
+                &challenge_bytes_i,
+                &response_baby_jub_jub_i,
+                &response_ed25519_j,
+                &r1_i,
+                &r2_i,
+            )
+            .unwrap();
+            assert!(!res);
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_i,
+                &challenge_bytes_i,
+                &response_baby_jub_jub_i,
+                &response_ed25519_i,
+                &r1_j,
+                &r2_i,
+            )
+            .unwrap();
+            assert!(!res);
+
+            let res = crate::verify_dleq_simple(
+                &t_i,
+                &s_i,
+                &challenge_bytes_i,
+                &response_baby_jub_jub_i,
+                &response_ed25519_i,
+                &r1_i,
+                &r2_j,
+            )
+            .unwrap();
+            assert!(!res);
+        }
+    }
+
+    #[test]
+    fn test_bb_prove_init() {
+        let rng = &mut rand::rng();
+
+        {
+            let nonce_peer: BigUint = crate::make_scalar_bjj(rng);
+            let blinding = crate::make_scalar_bjj(rng);
+
+            let (witness_0, t_0, _) = crate::make_witness0(&nonce_peer, &blinding).unwrap();
+
+            let a_1 = crate::make_scalar_bjj(rng);
+            let (c_1, share_1, share_2) = crate::feldman_secret_share_2_of_2(&witness_0, &a_1).unwrap();
+
+            let r_1 = crate::make_scalar_bjj(rng);
+            let (_, pubkey_peer) = crate::make_keypair_bjj(rng);
+            let (fi_1, enc_1) = crate::encrypt_message_ecdh(&share_1, &r_1, &pubkey_peer, None).unwrap();
+
+            let r_2 = crate::make_scalar_bjj(rng);
+            let (_, pubkey_kes) = crate::make_keypair_bjj(rng);
+            let (fi_2, enc_2) = crate::encrypt_message_ecdh(&share_2, &r_2, &pubkey_kes, None).unwrap();
+
+            let blinding_dleq = crate::make_scalar_bjj(rng);
+
+            let (
+                challenge_bytes,
+                response_baby_jub_jub,
+                response_ed25519,
+                _r1,
+                _r2,
+                response_div_baby_jub_jub,
+                response_div_ed25519,
+            ) = crate::generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
+
+            let proof_init = crate::bb_prove_init(
+                &a_1,
+                &blinding,
+                &blinding_dleq,
+                &challenge_bytes,
+                &enc_1,
+                &enc_2,
+                &nonce_peer,
+                &r_1,
+                &r_2,
+                &crate::left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+                &crate::left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+                &response_baby_jub_jub,
+                &crate::left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
+                &share_1,
+                &share_2,
+                &witness_0,
+                &t_0,
+                &c_1,
+                &fi_1,
+                &fi_2,
+                &pubkey_kes,
+                &pubkey_peer,
+            )
+            .unwrap();
+
+            //Verify
+            let verification = crate::bb_verify_init(&proof_init).unwrap();
+            assert!(verification);
+        }
+    }
+
+    // #[ignore]
+    #[test]
+    fn test_bb_prove_update() {
+        let mut rng = &mut rand::rng();
+
+        let nonce_peer = crate::make_scalar_bjj(rng);
+        let blinding = crate::make_scalar_bjj(rng);
+
+        let (witness_im1, t_im1, _) = crate::make_witness0(&nonce_peer, &blinding).unwrap();
+        let (witness_i, t_i, _) = crate::make_vcof(&witness_im1).unwrap();
+
+        let blinding_dleq: BigUint = crate::make_scalar_bjj(&mut rng);
+        let (
+            challenge_bytes,
+            response_baby_jub_jub,
+            response_ed25519,
+            _r1,
+            _r2,
+            response_div_baby_jub_jub,
+            response_div_ed25519,
+        ) = crate::generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
+
+        //Prove
+        let proof_update = crate::bb_prove_update(
+            &blinding_dleq,
+            &challenge_bytes,
+            &crate::left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            &crate::left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+            &response_baby_jub_jub,
+            &crate::left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
+            &witness_i,
+            &witness_im1,
+            &t_i,
+            &t_im1,
+        )
+        .unwrap();
+
+        //Verify
+        let verification = crate::bb_verify_update(&proof_update).unwrap();
+        assert!(verification);
+    }
 }

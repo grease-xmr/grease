@@ -4,7 +4,6 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use hex::FromHexError;
 use num_bigint::BigUint;
-use num_traits::ops::bytes;
 use num_traits::ToBytes;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
