@@ -1,0 +1,10 @@
+identities_file: /home/code/.grease/identities.yml
+preferred_identity: Alice
+server_address: /ip4/127.0.0.1/tcp/40012
+kes_public_key: 61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016
+user_label: test_customer
+initial_secret: c4a4f0ca41e18eaad9d8bd2cdf496ec3d3cdbe912d450dd3091695683e1ead0c
+channel_storage_directory: customer_channels
+refund_address: 43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK
+
+# Public Key: e83f2f8a82995e038ffd358ae1b16d8dbb4ec0460b8b0ab6456a9493702cf88d

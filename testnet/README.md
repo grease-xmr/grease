@@ -35,7 +35,7 @@ and `bob-spend-key.txt`.
   DO NOT USE THESE KEYS FOR REAL MAINNET TRANSACTIONS!
 * create a new wallet for Alice.
   * Paste the private key in at the command prompt when asked.
-  * You can leave the wallet pasword empty.
+  * You can leave the wallet password empty.
   * Confirm the empty password.
   * Select 1 for English.
   * Say "N" when asked to background mine.
@@ -44,4 +44,21 @@ and `bob-spend-key.txt`.
 
 If all goes well, you should have a tmux session called `LocalNet` running with `monerod` and two wallets created for Alice and Bob.
 
-You can then run `grease-cli` in a separate terminal to create and play with payment channels.
+### Run Grease CLI
+
+You will run `grease-cli` in a separate terminal to create and play with payment channels. You need one terminal for 
+Alice and one for Bob.
+
+You can use the configuration files (`identities.yml`, `merchant.yml` and `customer.yml`) in this folder as 
+templates to configure `grease-cli` for Alice and Bob respectively. Copy the files over to `~/.grease` and edit the 
+ip address and refund address to match the wallets you created in the first step.
+
+For Bob (merchant):
+```bash
+grease-cli -c ~/.grease/merchant.yml serve
+```
+
+For Alice (customer):
+```bash
+grease-cli -c ~/.grease/customer.yml serve
+```
