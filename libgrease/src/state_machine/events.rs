@@ -1,5 +1,6 @@
 use crate::amount::MoneroDelta;
-use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
+use crate::crypto::zk_objects::PeerProof0;
+use crate::crypto::zk_objects::{KesProof, Proofs0, ShardInfo};
 use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::closing_channel::ChannelCloseRecord;
 use crate::state_machine::new_channel::RejectNewChannelReason;
@@ -16,7 +17,7 @@ pub enum LifeCycleEvent {
     MultiSigWalletCreated(Box<MultisigWalletData>),
     FundingTxWatcher(Vec<u8>),
     MyProof0Generated(Box<Proofs0>),
-    PeerProof0Received(Box<PublicProof0>),
+    PeerProof0Received(Box<PeerProof0>),
     KesShards(Box<ShardInfo>),
     KesCreated(Box<KesProof>),
     FundingTxConfirmed(Box<TransactionRecord>),

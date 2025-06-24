@@ -98,8 +98,11 @@ async fn main() -> Result<(), WalletError> {
     println!("Partial Signing completed for Bob");
 
     // Create adaptor signature
-    let offset_b = Curve25519Secret::random(&mut rand::rng());
-    let adapted_b = wallet_b.adapt_signature(&offset_b)?;
+    let mut rng = &mut rand::rng();
+    let (offset_b, statement_b) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+    let offset_b = Curve25519Secret::from_generic_scalar(&offset_b.into())?;
+
+    let adapted_b = wallet_b.adapt_signature(&offset_b, &statement_b.into())?;
 
     // Test signature conversion for ss_a
     let ss_a = wallet_a.my_signing_shares().unwrap();
@@ -118,10 +121,10 @@ async fn main() -> Result<(), WalletError> {
     println!("Adaptor signature is valid (but can't create a valid transaction yet)");
     // Recreate the original signature share
     let ss_b = wallet_a.extract_true_signature(&adapted_b, &offset_b)?;
-    let tx_a = wallet_a.sign(ss_b)?;
+    let tx_a = wallet_a.sign(&ss_b)?;
     println!("Alice's transaction signed successfully");
 
-    let tx_b = wallet_b.sign(ss_a)?;
+    let tx_b = wallet_b.sign(&ss_a)?;
     println!("Bob's transaction signed successfully");
 
     println!("Wallet transaction from Alice: {}", hex::encode(tx_a.hash()));

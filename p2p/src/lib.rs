@@ -6,6 +6,7 @@ mod identity;
 mod key_manager;
 pub mod message_types;
 mod network_client;
+pub mod noir_delegate;
 mod payment_channel;
 mod pending_updates;
 mod server;
