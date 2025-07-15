@@ -17,8 +17,8 @@ impl GreaseWorld {
     pub async fn start_node(&mut self) {
         if self.monero_node.is_none() {
             let _ = env_logger::try_init().ok();
-            info!("Loading env vars from .env.cucumber.env");
-            dotenvy::from_filename_override(".env.cucumber.env").ok();
+            info!("Loading env vars from .env.cucumber");
+            dotenvy::from_filename_override(".env.cucumber").ok();
             info!("Starting monerod...");
             let config = MoneroNodeConfig::from_env();
             let monero_node = MoneroNode::start(config).await;

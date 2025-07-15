@@ -17,7 +17,7 @@ async fn stop_node(world: &mut GreaseWorld) {
     let result = rpc.post("stop_daemon", vec![]).await.expect("Failed to stop the Monero node");
     let msg = String::from_utf8(result).unwrap_or_else(|_| "unknown response".to_string());
     println!("Stop daemon response: {msg}");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
     match world.node_status().await {
         NodeStatus::Exited(s) => assert!(s.success()),
         _ => panic!("Node is still running after stop command"),

@@ -10,8 +10,9 @@ use tokio::select;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, RwLock};
 
-const LOCALNET_CONF: [&str; 12] = [
+const LOCALNET_CONF: [&str; 13] = [
     "--regtest",
+    "--non-interactive",
     "--no-igd",
     "--offline",
     "--hide-my-port",
