@@ -22,6 +22,7 @@ venv.bak/
 /libgrease/test_data/
 circuits/node_modules/
 demo_wallet.bin
+e2e/data
 
 # testnet files
 /testnet/*.log

@@ -5,6 +5,7 @@ members = [
     "grease_cli",
     "p2p",
     "wallet",
+    "e2e",
 ]
 
 [workspace.dependencies]
