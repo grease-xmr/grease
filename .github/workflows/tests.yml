@@ -28,5 +28,38 @@ jobs:
           components: clippy, rustfmt
 
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo test --all-features --workspace --exclude e2e
 
+  cucumber:
+    name: Cucumber end-to-end tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Download and extract Monerod
+        run: |
+          curl -L https://downloads.getmonero.org/cli/monero-linux-x64-v0.18.4.0.tar.bz2 -o monero.tar.bz2
+          tar -xjf monero.tar.bz2 --strip-components=1 -C /tmp
+
+      - name: Copy Monerod to /usr/bin
+        run: sudo cp /tmp/monerod /usr/bin/monerod
+
+      - name: Run cucumber tests
+        # The -c1 is important because the tests always try and bind to the same port
+        run: cargo test -p e2e --test cucumber_tests -- -c1

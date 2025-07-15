@@ -1,0 +1,41 @@
+[package]
+name = "e2e"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+tokio = { workspace = true, features = ["full"]}
+
+[dev-dependencies]
+
+libgrease = { workspace = true }
+
+dotenvy = "0.15.0"
+env_logger = "0.11.3"
+cucumber = { version = "0.21.1", features = ["libtest"] }
+futures-util = "0.3.30"
+
+[dependencies.monero-simple-request-rpc]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+
+[dependencies.monero-rpc]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+
+[dependencies.monero-address]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+commit = "205da3fd3872c6bebaa10be9740928276376e3b4"
+branch = "next"
+
+[[test]]
+name = "cucumber_tests" # this should be the same as the filename of your test target
+harness = false  # allows Cucumber to print output instead of libtest
