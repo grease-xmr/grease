@@ -61,5 +61,7 @@ jobs:
         run: sudo cp /tmp/monerod /usr/bin/monerod
 
       - name: Run cucumber tests
+        env:
+          RUST_LOG: info,grease-p2p=debug,e2e=debug,libgrease=debug
         # The -c1 is important because the tests always try and bind to the same port
         run: cargo test --release -p e2e --test cucumber_tests -- -c1
