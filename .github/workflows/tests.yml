@@ -62,4 +62,4 @@ jobs:
 
       - name: Run cucumber tests
         # The -c1 is important because the tests always try and bind to the same port
-        run: cargo test -p e2e --test cucumber_tests -- -c1
+        run: cargo test --release -p e2e --test cucumber_tests -- -c1
