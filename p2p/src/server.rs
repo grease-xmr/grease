@@ -791,7 +791,7 @@ where
         let channel_name = name.to_string();
         self.delegate
             .register_watcher(channel_name, client.clone(), private_view_key, public_spend_key, birthday)
-            .await;
+            .await?;
         let channels = self.channels.clone();
         let name = name.to_string();
         tokio::spawn(async move {

@@ -1,22 +1,26 @@
 use cucumber::World;
-use e2e::{MoneroNode, MoneroNodeConfig, NodeStatus};
-use log::info;
+use e2e::user::{create_users, User};
+use e2e::{GreaseInfra, MoneroNode, MoneroNodeConfig, NodeStatus, MONEROD_RPC};
+use log::*;
+use monero_address::MoneroAddress;
+use std::collections::HashMap;
 
 #[derive(Debug, World)]
 pub struct GreaseWorld {
     pub monero_node: Option<MoneroNode>,
+    pub users: HashMap<String, User>,
+    pub servers: HashMap<String, GreaseInfra>,
 }
 
 impl Default for GreaseWorld {
     fn default() -> Self {
-        Self { monero_node: None }
+        Self { monero_node: None, users: create_users(), servers: HashMap::new() }
     }
 }
 
 impl GreaseWorld {
     pub async fn start_node(&mut self) {
         if self.monero_node.is_none() {
-            let _ = env_logger::try_init().ok();
             info!("Loading env vars from .env.cucumber");
             dotenvy::from_filename_override(".env.cucumber").ok();
             info!("Starting monerod...");
@@ -35,6 +39,22 @@ impl GreaseWorld {
             None => NodeStatus::NotRunning,
         }
     }
-}
 
-impl GreaseWorld {}
+    pub fn address_for(&self, user: &str) -> Option<MoneroAddress> {
+        self.users.get(user).map(|u| u.address().clone())
+    }
+
+    pub async fn start_client(&mut self, client_name: &str) {
+        info!("Starting client: {}", client_name);
+        let user = self.users.get(client_name).expect("User not found in the world");
+        let config = user.config.clone();
+        let address = config.server_address.clone().expect("Server address is not set in user config");
+        debug!("{client_name} config: {config:?}");
+        let id = user.identity.clone();
+        let mut server = GreaseInfra::new(id, config, MONEROD_RPC).expect("Failed to create Grease server");
+        info!("Starting server...");
+        server.server.start_listening(address).await.unwrap();
+        self.servers.insert(client_name.to_string(), server);
+        info!("Client {} started successfully", client_name);
+    }
+}

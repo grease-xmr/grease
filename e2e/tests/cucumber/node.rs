@@ -1,4 +1,3 @@
-use crate::cucumber::wallet::get_address_for;
 use crate::cucumber::GreaseWorld;
 use cucumber::{given, then, when};
 use e2e::NodeStatus;
@@ -35,7 +34,7 @@ async fn kill_node(world: &mut GreaseWorld) {
 
 #[when(expr = "{word} mines {int} blocks")]
 async fn mine_blocks(world: &mut GreaseWorld, who: String, count: usize) {
-    let address = get_address_for(&who);
+    let address = world.address_for(&who).expect("Unknown user");
     let rpc = get_rpc_client(world).await;
     let (blocks, last_block) = rpc.generate_blocks(&address, count).await.expect("Failed to mine blocks");
     println!("Mined {} blocks. Last block: {}", blocks.len(), last_block);

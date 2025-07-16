@@ -10,6 +10,8 @@ use tokio::select;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, RwLock};
 
+pub const MONEROD_RPC: &str = "http://127.0.0.1:27000";
+
 const LOCALNET_CONF: [&str; 13] = [
     "--regtest",
     "--non-interactive",
@@ -93,7 +95,7 @@ impl MoneroNode {
 
     /// Return an RPC client instance for this node
     pub async fn rpc_client(&self) -> Result<SimpleRequestRpc, RpcError> {
-        let rpc = SimpleRequestRpc::new("http://127.0.0.1:27000".into()).await?;
+        let rpc = SimpleRequestRpc::new(MONEROD_RPC.into()).await?;
         Ok(rpc)
     }
 

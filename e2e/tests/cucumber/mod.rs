@@ -1,3 +1,4 @@
+mod channel;
 mod node;
 pub mod wallet;
 mod world;

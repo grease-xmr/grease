@@ -33,7 +33,7 @@ pub struct InteractiveApp {
     breadcrumbs: Vec<&'static Menu>,
     current_channel: Option<String>,
     channel_status: Option<LifecycleStage>,
-    server: NetworkServer<DummyDelegate>,
+    server: MoneroNetworkServer,
 }
 
 impl InteractiveApp {

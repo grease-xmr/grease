@@ -20,6 +20,12 @@ use wallet::{connect_to_rpc, Rpc};
 #[error("Delegate error: {0}")]
 pub struct DelegateError(pub String);
 
+impl From<&str> for DelegateError {
+    fn from(s: &str) -> Self {
+        DelegateError(s.to_string())
+    }
+}
+
 //---------------------------------   Verify Channel Proposals    ------------------------------------------------------
 
 pub trait ProposalVerifier {
@@ -57,7 +63,7 @@ pub trait FundChannel {
         private_view_key: Curve25519Secret,
         public_spend_key: Curve25519PublicKey,
         birthday: Option<u64>,
-    ) -> impl Future<Output = ()> + Send;
+    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
 //------------------------------   Witness0 generation and verification  -----------------------------------------------
@@ -162,6 +168,12 @@ impl Default for DummyDelegate {
     }
 }
 
+impl DummyDelegate {
+    pub fn new(rpc_address: String) -> Self {
+        Self { rpc_address }
+    }
+}
+
 impl ProposalVerifier for DummyDelegate {
     async fn verify_proposal(&self, data: &NewChannelProposal) -> Result<(), InvalidProposal> {
         info!("DummyDelegate: Verifying proposal. {data:?}");
@@ -246,16 +258,19 @@ impl FundChannel for DummyDelegate {
         private_view_key: Curve25519Secret,
         public_spend_key: Curve25519PublicKey,
         birthday: Option<u64>,
-    ) {
-        info!(" Registering transaction watcher for channel {name}");
-        let rpc = connect_to_rpc(&self.rpc_address).await.expect("rpc connect error");
-        let height = rpc.get_height().await.expect("Failed to get blockchain height") as u64;
+    ) -> Result<(), DelegateError> {
+        info!(
+            "Registering transaction watcher for channel {name} at address: {}",
+            self.rpc_address
+        );
+        let rpc = connect_to_rpc(&self.rpc_address).await.map_err(|e| DelegateError(e.to_string()))?;
+        let height = rpc.get_height().await.map_err(|e| DelegateError(e.to_string()))? as u64;
         let mut wallet = WatchOnlyWallet::new(rpc, private_view_key, public_spend_key, birthday)
-            .expect("Failed to create watch-only wallet");
+            .map_err(|e| DelegateError(e.to_string()))?;
         info!("Watch-only wallet created with birthday {birthday:?}. Current height is {height}");
         let mut interval = tokio::time::interval(Duration::from_millis(5000));
         let mut client = client.clone();
-        let _handle = tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut start_height = birthday.map(|b| height.min(b)).unwrap_or(height);
             loop {
                 interval.tick().await;
@@ -279,6 +294,7 @@ impl FundChannel for DummyDelegate {
                 warn!("Failed to notify tx mined block: {:?}", e);
             });
         });
+        Ok(())
     }
 }
 
