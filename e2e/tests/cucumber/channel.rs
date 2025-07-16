@@ -6,9 +6,9 @@ use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
 use log::*;
 
-#[given(expr = "{word} runs the grease client")]
-async fn start_client(world: &mut GreaseWorld, client_name: String) {
-    world.start_client(&client_name).await;
+#[given(expr = "{word} runs the grease server")]
+async fn start_server(world: &mut GreaseWorld, client_name: String) {
+    world.start_server(&client_name).await;
 }
 
 #[when(expr = "{word} initiates a new channel with {word}")]

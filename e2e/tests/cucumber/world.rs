@@ -44,7 +44,7 @@ impl GreaseWorld {
         self.users.get(user).map(|u| u.address().clone())
     }
 
-    pub async fn start_client(&mut self, client_name: &str) {
+    pub async fn start_server(&mut self, client_name: &str) {
         info!("Starting client: {}", client_name);
         let user = self.users.get(client_name).expect("User not found in the world");
         let config = user.config.clone();

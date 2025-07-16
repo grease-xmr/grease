@@ -3,8 +3,8 @@ Feature: Grease happy path
   
   Background:
     Given a Monero regtest network
-    Given Alice runs the grease client
-    Given Bob runs the grease client
+    Given Alice runs the grease server
+    Given Bob runs the grease server
     # Mine 60 blocks to get enough decoys
     When Alice mines 60 blocks
 
