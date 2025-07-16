@@ -65,7 +65,7 @@ pub enum IdCommand {
     },
 }
 
-#[derive(Default, Debug, Deserialize, Serialize)]
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct GlobalOptions {
     /// The path to the configuration file. If not set, defaults to `$HOME/.grease/config.yml`.
     pub base_path: Option<PathBuf>,
