@@ -2,8 +2,10 @@ use crate::MONEROD_RPC;
 use grease_cli::config::GlobalOptions;
 use grease_cli::id_management::LocalIdentitySet;
 use grease_p2p::ConversationIdentity;
+use hex::FromHexError;
 use libgrease::crypto::hashes::{Blake512, HashToScalar};
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::crypto::zk_objects::GenericPoint;
 use log::*;
 use monero::util::address::Address as MoneroAddressUtil;
 use monero_address::{AddressType, MoneroAddress, Network};
@@ -46,7 +48,7 @@ impl User {
     }
 }
 
-pub fn create_user(name: &str, spend_key: &str, port: u16) -> User {
+pub fn create_user(name: &str, spend_key: &str, port: u16) -> Result<User, FromHexError> {
     let (secret_key, public_key) = Curve25519PublicKey::keypair_from_hex(spend_key).unwrap();
     let mut config = GlobalOptions::default();
     let lower_name = name.to_lowercase();
@@ -60,7 +62,7 @@ pub fn create_user(name: &str, spend_key: &str, port: u16) -> User {
     // The default identity to use when creating new channels.
     config.preferred_identity = Some(name.to_string());
     // The public key of the Key Escrow Service (KES).
-    config.kes_public_key = Some(KES_PUBKEY.to_string());
+    config.kes_public_key = Some(GenericPoint::from_hex(KES_PUBKEY)?);
     // A name, or label that will be inserted into every channel you are part of.
     config.user_label = Some(format!("{lower_name}-channel"));
     // The folder where channels are stored.
@@ -74,15 +76,15 @@ pub fn create_user(name: &str, spend_key: &str, port: u16) -> User {
     let addr = MoneroAddressUtil::from_str(&user.address().to_string()).expect("could not parse address");
     info!("Created user {name} with address {addr}");
     user.config.refund_address = Some(addr);
-    user
+    Ok(user)
 }
 
-pub fn create_users() -> HashMap<String, User> {
+pub fn create_users() -> Result<HashMap<String, User>, FromHexError> {
     let alice = create_user(
         "Alice",
         "8eb8a1fd0f2c42fa7508a8883addb0860a0c5e44c1c14605abb385375c533609",
         24010,
-    );
-    let bob = create_user("Bob", "73ee459dd8a774afdbffafe6879ebc3b925fb23ceec9ac631f4ae02acff05f07", 25010);
-    HashMap::from_iter([("Alice".to_string(), alice), ("Bob".to_string(), bob)])
+    )?;
+    let bob = create_user("Bob", "73ee459dd8a774afdbffafe6879ebc3b925fb23ceec9ac631f4ae02acff05f07", 25010)?;
+    Ok(HashMap::from_iter([("Alice".to_string(), alice), ("Bob".to_string(), bob)]))
 }
