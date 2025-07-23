@@ -1,7 +1,7 @@
 use blake2::Digest;
 use dalek_ff_group::dalek::constants::ED25519_BASEPOINT_POINT;
 use dalek_ff_group::{dalek::Scalar as DScalar, EdwardsPoint, Scalar};
-use modular_frost::curve::{Ciphersuite, Ed25519};
+use modular_frost::curve::Ed25519;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::mem;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-use crate::common::{create_change, create_signable_tx, view_key, MINIMUM_FEE};
+use crate::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::errors::WalletError;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
@@ -21,16 +21,15 @@ use modular_frost::dkg::DkgError;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
 use modular_frost::{Participant, ThresholdKeys};
 use monero::{Address as UAddress, AddressType as UAddressType};
-use monero_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
+use monero_rpc::{Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
 use monero_serai::ringct::clsag::ClsagAddendum;
-use monero_serai::ringct::RctType;
 use monero_serai::transaction::Transaction;
-use monero_wallet::address::{AddressType, MoneroAddress, Network, SubaddressIndex};
+use monero_wallet::address::{AddressType, MoneroAddress, Network};
 use monero_wallet::send::{
-    Change, SendError, SignableTransaction, TransactionSignMachine, TransactionSignatureMachine,
+    SignableTransaction, TransactionSignMachine, TransactionSignatureMachine,
 };
-use monero_wallet::{OutputWithDecoys, Scanner, ViewPair, WalletOutput};
+use monero_wallet::{Scanner, ViewPair, WalletOutput};
 use rand_core::{CryptoRng, RngCore, SeedableRng};
 
 pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;

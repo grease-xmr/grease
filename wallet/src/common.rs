@@ -1,8 +1,6 @@
 use crate::errors::WalletError;
 use crate::{DScalar, MoneroAddress, SubaddressIndex};
 use ciphersuite::{Ciphersuite, Ed25519};
-use dalek_ff_group::dalek::EdwardsPoint;
-use dalek_ff_group::Scalar;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use log::debug;
 use monero_rpc::{FeeRate, Rpc, RpcError};
