@@ -37,9 +37,8 @@ use rand::rng;
 use std::path::Path;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
-use wallet::utils::publish_transaction;
-use wallet::virtual_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
-use wallet::{connect_to_rpc, MultisigWallet};
+use wallet::multisig_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
+use wallet::{connect_to_rpc, publish_transaction, MultisigWallet};
 
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
 

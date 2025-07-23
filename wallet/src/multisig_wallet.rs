@@ -9,6 +9,8 @@ use std::mem;
 use std::path::Path;
 use zeroize::Zeroizing;
 
+use crate::common::{create_change, create_signable_tx, view_key, MINIMUM_FEE};
+use crate::errors::WalletError;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::AdaptedSignature;
@@ -17,7 +19,7 @@ use log::*;
 use modular_frost::dkg::musig::musig;
 use modular_frost::dkg::DkgError;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
-use modular_frost::{FrostError, Participant, ThresholdKeys};
+use modular_frost::{Participant, ThresholdKeys};
 use monero::{Address as UAddress, AddressType as UAddressType};
 use monero_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
@@ -30,27 +32,8 @@ use monero_wallet::send::{
 };
 use monero_wallet::{OutputWithDecoys, Scanner, ViewPair, WalletOutput};
 use rand_core::{CryptoRng, RngCore, SeedableRng};
-use thiserror::Error;
 
 pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
-
-#[derive(Debug, Clone, Error)]
-pub enum WalletError {
-    #[error("RPC Error: {0}")]
-    RpcError(#[from] RpcError),
-    #[error("Key Error: {0}")]
-    KeyError(String),
-    #[error("Not enough funds in wallet, or blockchain needs to be scanned")]
-    InsufficientFunds,
-    #[error("Transaction creation error: {0}")]
-    SendError(#[from] SendError),
-    #[error("Multisig protocol error: {0}")]
-    FrostError(#[from] FrostError),
-    #[error("Error deserializing: {0}")]
-    DeserializeError(String),
-    #[error("Error signing transaction: {0}")]
-    SigningError(String),
-}
 
 pub struct MultisigWallet {
     rpc: SimpleRequestRpc,
@@ -252,75 +235,23 @@ impl MultisigWallet {
         &self.joint_private_view_key
     }
 
-    pub fn get_change_output(&self) -> Result<Change, WalletError> {
-        let key = self.joint_public_spend_key();
-        let vk = view_key(key, 0);
-        let pair = ViewPair::new(key.as_point(), vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
-        let index = SubaddressIndex::new(0, 1).expect("not to fail with valid hardcoded params");
-        Ok(Change::new(pair, Some(index)))
-    }
-
-    async fn pre_process(&self, payments: Vec<(MoneroAddress, u64)>) -> Result<SignableTransaction, WalletError> {
-        const MAX_OUTPUTS: usize = 16;
-        const MINIMUM_FEE: u64 = 1_500_000;
-        // max payments must take change into account
-        if payments.len() + 1 > MAX_OUTPUTS {
-            return Err(WalletError::SendError(SendError::TooManyOutputs));
-        }
-        if self.known_outputs.is_empty() {
-            return Err(WalletError::SendError(SendError::NoInputs));
-        }
-        let fee_rate = FeeRate::new(MINIMUM_FEE, 1000)?;
-        // Get reference block
-        let refblock_height = self.get_height().await? as usize - 1;
-        let block = self.rpc.get_block_by_number(refblock_height).await?;
-
-        // Determine the RCT proofs to make based off the hard fork
-        let (rct_type, ring_len) = match block.header.hardfork_version {
-            14 => (RctType::ClsagBulletproof, 10),
-            15 | 16 => (RctType::ClsagBulletproofPlus, 16),
-            _ => return Err(WalletError::SendError(SendError::UnsupportedRctType)),
-        };
-
+    async fn pre_process<R: Send + Sync + RngCore + CryptoRng>(
+        &self,
+        payments: Vec<(MoneroAddress, u64)>,
+        rng: &mut R,
+    ) -> Result<SignableTransaction, WalletError> {
+        let rpc = self.rpc();
+        let change = create_change(self.joint_public_spend_key())?;
         let spend_total = MINIMUM_FEE + payments.iter().map(|(_, amount)| *amount).sum::<u64>();
-
         // If this returns, there is guaranteed to be at least one input
         let inputs = self.find_spendable_outputs(spend_total)?;
-
-        // We need a unique ID to distinguish this transaction from another transaction with an identical
-        // set of payments (as our Eventualities only match over the payments). The output's ID is
-        // guaranteed to be unique, making it satisfactory
-        let id = inputs.first().unwrap().key().compress().to_bytes();
-
-        // We need a deterministic RNG here with *some* seed. The unique ID means we don't pick some static seed
-        // It is a public value, yet that's fine as this is assumed fully transparent.
-        let mut rng = ChaCha20Rng::from_seed(id);
-        let mut inputs_actual = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            inputs_actual.push(
-                OutputWithDecoys::fingerprintable_deterministic_new(
-                    &mut rng,
-                    &self.rpc,
-                    ring_len,
-                    refblock_height,
-                    input.clone(),
-                )
-                .await?,
-            );
-        }
-        let inputs = inputs_actual;
-        // Create the change output.
-        let change = self.get_change_output()?;
-
-        let id = Zeroizing::new(id);
-        let tx = SignableTransaction::new(rct_type, id, inputs, payments, change, vec![], fee_rate)?;
-        Ok(tx)
+        create_signable_tx(rpc, rng, inputs, payments, change, vec![]).await
     }
 
-    /// If you need to restore the wallet to an exact know last state, you should call `prepare` with the the RNG
+    /// If you need to restore the wallet to an exact know last state, you should call `prepare` with the RNG
     /// returned by this function.
     pub fn deterministic_rng(&self) -> ChaCha20Rng {
-        // Use the birthday as a seed for the RNG, which is unique to this wallet instance
+        // Use the spend key as a seed for the RNG, which is unique to this wallet instance
         let bytes = self.my_spend_key.as_scalar().as_bytes();
         let hashed = blake2::Blake2b512::digest(bytes);
         let mut seed = [0; 32];
@@ -331,12 +262,12 @@ impl MultisigWallet {
     /// Prepare the multisig wallet for signing a transaction. The nonce is a random value that
     /// a. Must be get private and
     /// b. Never be reused (unless deterministically reconstructing this wallet).
-    pub async fn prepare<R: RngCore + CryptoRng>(
+    pub async fn prepare<R: Send + Sync + RngCore + CryptoRng>(
         &mut self,
         payments: Vec<(MoneroAddress, u64)>,
         rng: &mut R,
     ) -> Result<(), WalletError> {
-        let signable = self.pre_process(payments).await?;
+        let signable = self.pre_process(payments, rng).await?;
         let machine = signable.multisig(self.musig_keys.clone())?;
         let (machine, preprocess) = machine.preprocess(rng);
         if preprocess.len() != 1 {
@@ -604,12 +535,4 @@ fn musig_dh_viewkey(secret: &Curve25519Secret, other_key: &Curve25519PublicKey) 
     let private_view_key = Scalar(DScalar::from_bytes_mod_order_wide(&bytes));
     let public_view_key = EdwardsPoint(private_view_key.0 * ED25519_BASEPOINT_POINT);
     (Zeroizing::new(private_view_key), public_view_key)
-}
-
-fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<DScalar> {
-    let mut data = [0u8; 32 + 8];
-    data[..32].copy_from_slice(spend_key.as_compressed().as_bytes());
-    data[32..].copy_from_slice(&index.to_le_bytes());
-    let k = Ed25519::hash_to_F(b"GreaseMultisig", &data);
-    Zeroizing::new(k.0)
 }
