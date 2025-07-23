@@ -2,11 +2,12 @@ use crate::user::User;
 use grease_cli::config::GlobalOptions;
 use grease_p2p::delegates::DummyDelegate;
 use grease_p2p::message_types::NewChannelProposal;
-use grease_p2p::{ConversationIdentity, NetworkServer, PaymentChannels};
+use grease_p2p::{ConversationIdentity, EventHandlerOptions, NetworkServer, PaymentChannels};
 use libgrease::balance::Balances;
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::ChannelSeedBuilder;
 use std::fmt::Debug;
+use std::time::Duration;
 
 pub struct GreaseInfra {
     pub server: NetworkServer<DummyDelegate>,
@@ -22,7 +23,8 @@ impl GreaseInfra {
     pub fn new(id: ConversationIdentity, config: GlobalOptions, monerod_rpc: &str) -> Result<Self, anyhow::Error> {
         let delegate = DummyDelegate::new(monerod_rpc.to_string());
         let channels = PaymentChannels::load(config.channel_directory())?;
-        let server = NetworkServer::new(id, channels, monerod_rpc, delegate)?;
+        let options = EventHandlerOptions { tx_poll_interval: Duration::from_millis(10) };
+        let server = NetworkServer::new(id, channels, monerod_rpc, delegate, options)?;
         Ok(Self { server })
     }
 }

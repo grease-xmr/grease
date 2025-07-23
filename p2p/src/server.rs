@@ -35,6 +35,7 @@ use log::*;
 use monero::Network;
 use rand::rng;
 use std::path::Path;
+use std::time::Duration;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
 use wallet::multisig_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
@@ -58,13 +59,14 @@ where
         channels: PaymentChannels,
         rpc_address: impl Into<String>,
         delegate: D,
+        options: EventHandlerOptions,
     ) -> Result<Self, PeerConnectionError> {
         let keypair = id.keypair().clone();
         // Create a new network client and event loop.
         let (network_client, mut network_events, network_event_loop) = new_network(keypair)?;
         // Spawn the network task for it to run in the background.
         let event_loop_handle = tokio::spawn(network_event_loop.run());
-        let inner = InnerEventHandler::new(network_client, channels, delegate, rpc_address.into());
+        let inner = InnerEventHandler::new(network_client, channels, delegate, rpc_address.into(), options);
         let inner_clone = inner.clone();
         let event_handler_handle = tokio::spawn(async move {
             while let Some(ev) = network_events.next().await {
@@ -197,10 +199,23 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct EventHandlerOptions {
+    /// The frequency at which the event handler polls for watching for funding transactions.
+    pub tx_poll_interval: Duration,
+}
+
+impl Default for EventHandlerOptions {
+    fn default() -> Self {
+        Self { tx_poll_interval: Duration::from_secs(5) }
+    }
+}
+
 pub struct InnerEventHandler<D>
 where
     D: GreaseChannelDelegate,
 {
+    options: EventHandlerOptions,
     network_client: Client,
     rpc_address: String,
     channels: PaymentChannels,
@@ -219,6 +234,7 @@ where
             channels: self.channels.clone(),
             delegate: self.delegate.clone(),
             updates_in_progress: self.updates_in_progress.clone(),
+            options: self.options.clone(),
         }
     }
 }
@@ -227,9 +243,15 @@ impl<D> InnerEventHandler<D>
 where
     D: GreaseChannelDelegate,
 {
-    fn new(client: Client, channels: PaymentChannels, delegate: D, rpc_address: String) -> Self {
+    fn new(
+        client: Client,
+        channels: PaymentChannels,
+        delegate: D,
+        rpc_address: String,
+        options: EventHandlerOptions,
+    ) -> Self {
         let updates_in_progress = PendingUpdates::default();
-        Self { network_client: client, channels, delegate, rpc_address, updates_in_progress }
+        Self { network_client: client, channels, delegate, rpc_address, updates_in_progress, options }
     }
 
     async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
@@ -788,8 +810,16 @@ where
     ) -> Result<(), ChannelServerError> {
         let mut client = self.network_client.clone();
         let channel_name = name.to_string();
+        let poll_interval = self.options.tx_poll_interval;
         self.delegate
-            .register_watcher(channel_name, client.clone(), private_view_key, public_spend_key, birthday)
+            .register_watcher(
+                channel_name,
+                client.clone(),
+                private_view_key,
+                public_spend_key,
+                birthday,
+                poll_interval,
+            )
             .await?;
         let channels = self.channels.clone();
         let name = name.to_string();

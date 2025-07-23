@@ -8,6 +8,7 @@ edition = "2021"
 libgrease = { workspace = true }
 grease-cli = { version = "0.1", path = "../grease_cli" }
 grease-p2p = { workspace = true }
+wallet = { workspace = true }
 
 anyhow = { workspace = true }
 log = { workspace = true }

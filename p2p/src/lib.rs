@@ -17,4 +17,4 @@ pub use key_manager::KeyManager;
 pub use message_types::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnectionEvent};
 pub use network_client::{new_network, Client, PeerConnection};
 pub use payment_channel::{OutOfBandMerchantInfo, PaymentChannel, PaymentChannels};
-pub use server::{NetworkServer, WritableState};
+pub use server::{EventHandlerOptions, NetworkServer, WritableState};

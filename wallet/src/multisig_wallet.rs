@@ -26,9 +26,7 @@ use monero_serai::block::Block;
 use monero_serai::ringct::clsag::ClsagAddendum;
 use monero_serai::transaction::Transaction;
 use monero_wallet::address::{AddressType, MoneroAddress, Network};
-use monero_wallet::send::{
-    SignableTransaction, TransactionSignMachine, TransactionSignatureMachine,
-};
+use monero_wallet::send::{SignableTransaction, TransactionSignMachine, TransactionSignatureMachine};
 use monero_wallet::{Scanner, ViewPair, WalletOutput};
 use rand_core::{CryptoRng, RngCore, SeedableRng};
 

@@ -38,6 +38,7 @@ pub async fn scan_wallet(
     let mut scanned = 0u64;
     let mut found = 0usize;
     let mut result = Vec::new();
+    debug!("Scanning wallet from {start} to {height}");
     for block_num in start..height {
         let block = rpc.get_block_by_number(block_num as usize).await?;
         let scannable = rpc.get_scannable_block(block).await?;

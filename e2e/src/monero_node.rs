@@ -24,7 +24,7 @@ const LOCALNET_CONF: [&str; 13] = [
     "--rpc-bind-port=27000",
     "--allow-local-ip",
     "--rpc-ssl=disabled",
-    "--fixed-difficulty=10",
+    "--fixed-difficulty=1",
     "--disable-rpc-ban",
 ];
 

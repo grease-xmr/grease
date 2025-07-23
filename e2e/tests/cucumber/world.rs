@@ -10,11 +10,12 @@ pub struct GreaseWorld {
     pub monero_node: Option<MoneroNode>,
     pub users: HashMap<String, User>,
     pub servers: HashMap<String, GreaseInfra>,
+    pub current_channel: Option<String>,
 }
 
 impl Default for GreaseWorld {
     fn default() -> Self {
-        Self { monero_node: None, users: create_users(), servers: HashMap::new() }
+        Self { monero_node: None, users: create_users(), servers: HashMap::new(), current_channel: None }
     }
 }
 

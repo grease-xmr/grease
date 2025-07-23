@@ -13,6 +13,7 @@ use monero_wallet::WalletOutput;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
+#[derive(Debug, Clone)]
 pub struct MoneroWallet {
     private_spend_key: Curve25519Secret,
     inner: WatchOnlyWallet,
@@ -62,6 +63,10 @@ impl MoneroWallet {
         self.inner.outputs()
     }
 
+    pub fn remove_outputs(&mut self, outputs: Vec<WalletOutput>) {
+        self.inner.remove_outputs(outputs);
+    }
+
     pub fn rpc(&self) -> &SimpleRequestRpc {
         self.inner.rpc()
     }
@@ -75,12 +80,13 @@ impl MoneroWallet {
             info!("No outputs found in the wallet, scanning the blockchain. This may take a while.");
             self.scan(None, None).await?;
         }
-        let output = self.inner.find_spendable_outputs(amount)?;
-        let signable = create_signable_tx(self.rpc(), &mut rng, output, payments, change, vec![]).await?;
+        let outputs = self.inner.find_spendable_outputs(amount)?;
+        let signable = create_signable_tx(self.rpc(), &mut rng, outputs.clone(), payments, change, vec![]).await?;
         let tx = signable.sign(&mut rng, self.private_spend_key.as_zscalar())?;
         let hash = tx.hash();
         debug!("Signable transaction successfully created. {amount} to {to}");
         self.rpc().publish_transaction(&tx).await?;
+        self.remove_outputs(outputs);
         debug!(
             "Transaction {} successfully published to network: {amount} to {to}",
             hex::encode(&hash)

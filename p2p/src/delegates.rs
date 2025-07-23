@@ -63,6 +63,7 @@ pub trait FundChannel {
         private_view_key: Curve25519Secret,
         public_spend_key: Curve25519PublicKey,
         birthday: Option<u64>,
+        poll_interval: Duration,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
@@ -258,6 +259,7 @@ impl FundChannel for DummyDelegate {
         private_view_key: Curve25519Secret,
         public_spend_key: Curve25519PublicKey,
         birthday: Option<u64>,
+        poll_interval: Duration,
     ) -> Result<(), DelegateError> {
         info!(
             "Registering transaction watcher for channel {name} at address: {}",
@@ -268,9 +270,9 @@ impl FundChannel for DummyDelegate {
         let mut wallet = WatchOnlyWallet::new(rpc, private_view_key, public_spend_key, birthday)
             .map_err(|e| DelegateError(e.to_string()))?;
         info!("Watch-only wallet created with birthday {birthday:?}. Current height is {height}");
-        let mut interval = tokio::time::interval(Duration::from_millis(5000));
+        let mut interval = tokio::time::interval(poll_interval);
         let mut client = client.clone();
-        let handle = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             let mut start_height = birthday.map(|b| height.min(b)).unwrap_or(height);
             loop {
                 interval.tick().await;
