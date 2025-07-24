@@ -159,7 +159,6 @@ impl EstablishingState {
             peer_proof0: self.peer_proof0.unwrap(),
             kes_proof: self.kes_proof.unwrap(),
             current_update: None,
-            update_count: 0,
         };
         Ok(open_channel)
     }

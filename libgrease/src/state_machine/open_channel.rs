@@ -58,7 +58,6 @@ pub struct EstablishedChannelState {
     pub peer_proof0: PublicProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) current_update: Option<UpdateRecord>,
-    pub(crate) update_count: u64,
 }
 
 impl Debug for EstablishedChannelState {
@@ -66,7 +65,7 @@ impl Debug for EstablishedChannelState {
         write!(
             f,
             "EstablishedChannelState({} updates, role: {}, channel_id: {})",
-            self.update_count,
+            self.metadata.update_count(),
             self.metadata.role(),
             self.metadata.channel_id().name(),
         )
@@ -79,7 +78,7 @@ impl EstablishedChannelState {
     }
 
     pub fn update_count(&self) -> u64 {
-        self.update_count
+        self.metadata.update_count()
     }
 
     /// Returns the current witness for the channel. If no updates have been made, it returns the initial witness.
@@ -127,16 +126,15 @@ impl EstablishedChannelState {
     pub fn get_close_record(&self) -> ChannelCloseRecord {
         ChannelCloseRecord {
             final_balance: self.metadata.balances(),
-            update_count: self.update_count,
+            update_count: self.metadata.update_count(),
             witness: self.current_witness(),
         }
     }
 
     pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord) -> u64 {
         self.metadata.apply_delta(delta);
-        self.update_count = update.my_proofs.private_outputs.update_count;
         self.current_update = Some(update);
-        self.update_count
+        self.update_count()
     }
 
     fn finalize_with_no_updates(&mut self) {
@@ -165,7 +163,7 @@ impl EstablishedChannelState {
         if final_balance != close_record.final_balance {
             return Err((self, LifeCycleError::mismatch("closing balances")));
         }
-        if self.update_count != close_record.update_count {
+        if self.update_count() != close_record.update_count {
             return Err((self, LifeCycleError::mismatch("update counts")));
         }
         let name = self.metadata.channel_id().name();
@@ -173,7 +171,7 @@ impl EstablishedChannelState {
             "Initiating channel close on {name}. Final balance: {} / {}",
             final_balance.merchant, final_balance.customer
         );
-        if self.update_count == 0 {
+        if self.update_count() == 0 {
             Self::finalize_with_no_updates(&mut self);
         }
         let closing_state = ClosingChannelState {
@@ -187,7 +185,6 @@ impl EstablishedChannelState {
             peer_proof0: self.peer_proof0,
             kes_proof: self.kes_proof,
             last_update: self.current_update.unwrap(),
-            update_count: self.update_count,
             final_tx: None,
         };
         Ok(closing_state)

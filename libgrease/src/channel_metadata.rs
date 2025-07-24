@@ -17,6 +17,8 @@ pub struct ChannelMetadata {
     role: ChannelRole,
     /// The amount of money in the channel. For initial balances, see `channel_id.initial_balances()`
     current_balances: Balances,
+    /// The number of updates that have been made to this channel
+    update_count: u64,
     /// The channel ID
     channel_id: ChannelId,
     /// The KES identifier.
@@ -25,7 +27,14 @@ pub struct ChannelMetadata {
 
 impl ChannelMetadata {
     pub fn new(network: Network, role: ChannelRole, channel_id: ChannelId, kes_public_key: String) -> Self {
-        Self { network, role, current_balances: channel_id.initial_balance(), channel_id, kes_public_key }
+        Self {
+            network,
+            role,
+            current_balances: channel_id.initial_balance(),
+            channel_id,
+            kes_public_key,
+            update_count: 0,
+        }
     }
 
     pub fn channel_id(&self) -> &ChannelId {
@@ -40,6 +49,10 @@ impl ChannelMetadata {
         self.current_balances
     }
 
+    pub fn update_count(&self) -> u64 {
+        self.update_count
+    }
+
     pub fn network(&self) -> Network {
         self.network
     }
@@ -52,6 +65,7 @@ impl ChannelMetadata {
         match self.current_balances.apply_delta(delta) {
             Some(new_balances) => {
                 self.current_balances = new_balances;
+                self.update_count += 1;
                 true
             }
             None => false,
