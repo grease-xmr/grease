@@ -2,7 +2,7 @@ use crate::errors::WalletError;
 use crate::{DScalar, MoneroAddress, SubaddressIndex};
 use ciphersuite::{Ciphersuite, Ed25519};
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use log::debug;
+use log::*;
 use monero_rpc::{FeeRate, Rpc, RpcError};
 use monero_serai::ringct::RctType;
 use monero_serai::transaction::Transaction;
@@ -55,7 +55,7 @@ pub async fn scan_wallet(
     Ok((result, start + scanned))
 }
 
-pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Result<(), RpcError> {
+pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Result<(), WalletError> {
     #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct SendRawResponse {
@@ -79,8 +79,34 @@ pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Re
         )
         .await?;
 
-    println!("{res:?}");
-
+    if res.double_spend {
+        return Err(WalletError::DoubleSpend);
+    }
+    if res.fee_too_low {
+        return Err(WalletError::FeeTooLow);
+    }
+    if res.invalid_input {
+        return Err(WalletError::InvalidInput);
+    }
+    if res.invalid_output {
+        return Err(WalletError::InvalidOutput);
+    }
+    if res.low_mixin {
+        return Err(WalletError::LowMixin);
+    }
+    if res.not_relayed {
+        return Err(WalletError::NotRelayed);
+    }
+    if res.overspend {
+        return Err(WalletError::Overspend);
+    }
+    if res.too_big {
+        return Err(WalletError::TooBig);
+    }
+    if res.too_few_outputs {
+        return Err(WalletError::TooFewOutputs);
+    }
+    info!("Transaction published successfully");
     Ok(())
 }
 

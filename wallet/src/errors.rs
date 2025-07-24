@@ -21,4 +21,22 @@ pub enum WalletError {
     SigningError(String),
     #[error("An internal error occurred: {0}")]
     InternalError(String),
+    #[error("Transaction was invalid due to Double Spend")]
+    DoubleSpend,
+    #[error("Transaction was invalid due to Fee Too Low")]
+    FeeTooLow,
+    #[error("Transaction was invalid due to Invalid Input")]
+    InvalidInput,
+    #[error("Transaction was invalid due to Invalid Output")]
+    InvalidOutput,
+    #[error("Transaction was invalid due to Low Mixin")]
+    LowMixin,
+    #[error("Transaction was invalid due to Not Relayed")]
+    NotRelayed,
+    #[error("Transaction was invalid due to overspend")]
+    Overspend,
+    #[error("Transaction was invalid due to Too Big")]
+    TooBig,
+    #[error("Transaction was invalid due to Too Few Outputs")]
+    TooFewOutputs,
 }
