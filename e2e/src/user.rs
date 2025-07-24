@@ -1,19 +1,23 @@
+use crate::MONEROD_RPC;
 use grease_cli::config::GlobalOptions;
 use grease_cli::id_management::LocalIdentitySet;
 use grease_p2p::ConversationIdentity;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::crypto::hashes::{Blake512, HashToScalar};
+use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use log::*;
 use monero::util::address::Address as MoneroAddressUtil;
-use monero_address::{MoneroAddress, Network};
+use monero_address::{AddressType, MoneroAddress, Network};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use wallet::connect_to_rpc;
+use wallet::wallet::MoneroWallet;
 
 pub const KES_PUBKEY: &str = "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46";
 
 #[derive(Debug, Clone)]
 pub struct User {
     pub name: String,
-    pub address: MoneroAddress,
     pub secret_key: Curve25519Secret,
     pub public_key: Curve25519PublicKey,
     pub config: GlobalOptions,
@@ -21,14 +25,29 @@ pub struct User {
 }
 
 impl User {
-    pub fn address(&self) -> &MoneroAddress {
-        &self.address
+    pub fn address(&self) -> MoneroAddress {
+        let view_key = self.private_view_key();
+        let view = Curve25519PublicKey::from_secret(&view_key).as_point();
+        let spend = self.public_key.as_point();
+        MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend, view)
+    }
+
+    pub fn private_view_key(&self) -> Curve25519Secret {
+        let bytes = self.secret_key.as_scalar().as_bytes();
+        let mut hasher = Blake512 {};
+        let s = hasher.hash_to_scalar(bytes);
+        Curve25519Secret::from(s)
+    }
+
+    pub async fn wallet(&self) -> MoneroWallet {
+        let rpc = connect_to_rpc(MONEROD_RPC).await.expect("could not create RPC client");
+        MoneroWallet::new(rpc, self.secret_key.clone(), self.private_view_key(), None)
+            .expect("could not create Monero wallet")
     }
 }
 
-pub fn create_user(name: &str, address: &str, secret: &str, port: u16) -> User {
-    let (secret_key, public_key) = Curve25519PublicKey::keypair_from_hex(secret).unwrap();
-    let monero_address = MoneroAddress::from_str(Network::Mainnet, address).unwrap();
+pub fn create_user(name: &str, spend_key: &str, port: u16) -> User {
+    let (secret_key, public_key) = Curve25519PublicKey::keypair_from_hex(spend_key).unwrap();
     let mut config = GlobalOptions::default();
     let lower_name = name.to_lowercase();
     // The path to the configuration file.
@@ -47,25 +66,23 @@ pub fn create_user(name: &str, address: &str, secret: &str, port: u16) -> User {
     // The folder where channels are stored.
     config.channel_storage_directory = Some(PathBuf::from("channels"));
     // The address of the wallet that will receive funds on channel closures.
-    config.refund_address = Some(MoneroAddressUtil::from_str(address).unwrap());
+    config.refund_address = None;
     // The address other parties can use to contact this identity on the internet.
     let addr = format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap();
     config.server_address = Some(addr);
-    User { name: name.to_string(), address: monero_address, secret_key, public_key, config, identity }
+    let mut user = User { name: name.to_string(), secret_key, public_key, config, identity };
+    let addr = MoneroAddressUtil::from_str(&user.address().to_string()).expect("could not parse address");
+    info!("Created user {name} with address {addr}");
+    user.config.refund_address = Some(addr);
+    user
 }
 
 pub fn create_users() -> HashMap<String, User> {
     let alice = create_user(
         "Alice",
-        "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK",
         "8eb8a1fd0f2c42fa7508a8883addb0860a0c5e44c1c14605abb385375c533609",
         24010,
     );
-    let bob = create_user(
-        "Bob",
-        "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3",
-        "73ee459dd8a774afdbffafe6879ebc3b925fb23ceec9ac631f4ae02acff05f07",
-        25010,
-    );
+    let bob = create_user("Bob", "73ee459dd8a774afdbffafe6879ebc3b925fb23ceec9ac631f4ae02acff05f07", 25010);
     HashMap::from_iter([("Alice".to_string(), alice), ("Bob".to_string(), bob)])
 }

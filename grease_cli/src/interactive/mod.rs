@@ -1,5 +1,5 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::{ConversationIdentity, NetworkServer, OutOfBandMerchantInfo, PaymentChannels};
+use grease_p2p::{ConversationIdentity, EventHandlerOptions, NetworkServer, OutOfBandMerchantInfo, PaymentChannels};
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -47,7 +47,8 @@ impl InteractiveApp {
         let identity = assign_identity(&id_path, config.preferred_identity.as_ref())?;
         let delegate = DummyDelegate::default();
         let channels = PaymentChannels::load(config.channel_directory())?;
-        let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate)?;
+        let options = EventHandlerOptions::default();
+        let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate, options)?;
         let app =
             Self { identity, current_menu, breadcrumbs, config, current_channel: None, channel_status: None, server };
         Ok(app)

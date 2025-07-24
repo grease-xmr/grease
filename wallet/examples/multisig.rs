@@ -3,8 +3,9 @@ use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use rand_core::OsRng;
-use wallet::utils::publish_transaction;
-use wallet::virtual_wallet::{signature_share_to_bytes, MultisigWallet, WalletError};
+use wallet::errors::WalletError;
+use wallet::multisig_wallet::{signature_share_to_bytes, MultisigWallet};
+use wallet::publish_transaction;
 use wallet::watch_only::WatchOnlyWallet;
 
 #[tokio::main]

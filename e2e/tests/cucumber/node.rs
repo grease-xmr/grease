@@ -10,6 +10,11 @@ async fn new_node(world: &mut GreaseWorld) {
     world.start_node().await;
 }
 
+#[when(expr = "we wait {int} ms")]
+async fn wait(_world: &mut GreaseWorld, delay: u64) {
+    tokio::time::sleep(Duration::from_millis(delay)).await;
+}
+
 #[when(expr = "I stop the node")]
 async fn stop_node(world: &mut GreaseWorld) {
     let rpc = get_rpc_client(world).await;

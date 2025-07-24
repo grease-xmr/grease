@@ -10,8 +10,10 @@ use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use rand_core::OsRng;
 use std::mem;
-use wallet::utils::{publish_transaction, scalar_from};
-use wallet::virtual_wallet::{MultisigWallet, WalletError};
+use wallet::errors::WalletError;
+use wallet::multisig_wallet::MultisigWallet;
+use wallet::publish_transaction;
+use wallet::utils::scalar_from;
 
 #[tokio::main]
 async fn main() -> Result<(), WalletError> {

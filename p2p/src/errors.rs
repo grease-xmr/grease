@@ -9,7 +9,8 @@ use libp2p::{noise, TransportError};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use thiserror::Error;
-use wallet::{RpcError, WalletError};
+use wallet::errors::WalletError;
+use wallet::RpcError;
 
 #[derive(Error, Debug)]
 pub enum PeerConnectionError {

@@ -1074,6 +1074,7 @@ dependencies = [
  "monero-rpc",
  "monero-simple-request-rpc",
  "tokio",
+ "wallet",
 ]
 
 [[package]]

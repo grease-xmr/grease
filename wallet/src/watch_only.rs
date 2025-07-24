@@ -1,10 +1,13 @@
-use crate::{AddressType, MoneroAddress, Network, WalletError};
+use crate::common::scan_wallet;
+use crate::errors::WalletError;
+use crate::{AddressType, MoneroAddress, Network};
+use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use log::*;
-use monero_rpc::{Rpc, RpcError, ScannableBlock};
+use log::debug;
+use monero_rpc::{Rpc, RpcError};
 use monero_serai::block::Block;
 use monero_simple_request_rpc::SimpleRequestRpc;
-use monero_wallet::{Scanner, ViewPair, WalletOutput};
+use monero_wallet::WalletOutput;
 
 #[derive(Clone, Debug)]
 pub struct WatchOnlyWallet {
@@ -12,7 +15,20 @@ pub struct WatchOnlyWallet {
     private_view_key: Curve25519Secret,
     public_spend_key: Curve25519PublicKey,
     birthday: u64,
+    next_scan_start: Option<u64>,
     known_outputs: Vec<WalletOutput>,
+}
+
+impl WatchOnlyWallet {
+    pub(crate) fn remove_outputs(&mut self, spent: Vec<WalletOutput>) {
+        debug!("removing {} spent outputs from wallet", spent.len());
+        spent.iter().for_each(|stxo| {
+            if let Some(i) = self.known_outputs.iter().position(|o| o == stxo) {
+                debug!("Removing spent output {} from wallet", stxo.index_on_blockchain());
+                self.known_outputs.swap_remove(i);
+            }
+        })
+    }
 }
 
 impl WatchOnlyWallet {
@@ -26,6 +42,7 @@ impl WatchOnlyWallet {
             rpc,
             private_view_key,
             public_spend_key,
+            next_scan_start: birthday,
             birthday: birthday.unwrap_or_default(),
             known_outputs: Vec::new(),
         })
@@ -57,35 +74,29 @@ impl WatchOnlyWallet {
         self.rpc.get_block_by_number(block_num as usize).await
     }
 
-    async fn get_scannable_block(&self, block: Block) -> Result<ScannableBlock, RpcError> {
-        self.rpc.get_scannable_block(block).await
+    pub fn find_spendable_outputs(&self, min_amount: MoneroAmount) -> Result<Vec<WalletOutput>, WalletError> {
+        if self.known_outputs.is_empty() {
+            return Err(WalletError::InsufficientFunds);
+        }
+        let mut result = Vec::new();
+        let mut total = 0;
+        for output in &self.known_outputs {
+            result.push(output.clone());
+            total += output.commitment().amount;
+            if total >= min_amount.to_piconero() {
+                return Ok(result);
+            }
+        }
+        Err(WalletError::InsufficientFunds)
     }
 
     pub async fn scan(&mut self, start: Option<u64>, end: Option<u64>) -> Result<usize, RpcError> {
-        let k = self.private_view_key.as_zscalar().clone();
-        let p = self.public_spend_key.as_point();
-        let pair = ViewPair::new(p, k).map_err(|e| RpcError::InternalError(e.to_string()))?;
-        let mut scanner = Scanner::new(pair);
-        let height = match end {
-            Some(h) => h,
-            None => self.get_height().await?,
-        };
-        let mut scanned = 0usize;
-        let mut found = 0usize;
-        let start = start.unwrap_or(self.birthday);
-        for block_num in start..height {
-            let block = self.get_block_by_number(block_num).await?;
-            let scannable = self.get_scannable_block(block).await?;
-            let outputs = scanner.scan(scannable).map_err(|e| RpcError::InternalError(e.to_string()))?;
-            scanned += 1;
-            let outputs = outputs.ignore_additional_timelock();
-            if !outputs.is_empty() {
-                debug!("Scanned {} outputs for block {block_num}", outputs.len());
-                found += outputs.len();
-                self.known_outputs.extend(outputs);
-            }
-        }
-        debug!("Scanned {scanned} blocks. {found} outputs found");
+        let start = start.unwrap_or(self.next_scan_start.unwrap_or(self.birthday));
+        let (outputs, next_start) =
+            scan_wallet(&self.rpc, start, end, &self.public_spend_key, &self.private_view_key).await?;
+        let found = outputs.len();
+        self.known_outputs.extend(outputs);
+        self.next_scan_start = Some(next_start);
         Ok(found)
     }
 
