@@ -30,7 +30,6 @@ pub struct ClosingChannelState {
     pub(crate) peer_proof0: PublicProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) last_update: UpdateRecord,
-    pub(crate) update_count: u64,
     pub(crate) final_tx: Option<TransactionId>,
 }
 

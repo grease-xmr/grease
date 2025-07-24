@@ -111,6 +111,10 @@ where
         self.inner.get_channel_metadata(name).await
     }
 
+    pub async fn transaction_count(&self, name: &str) -> Option<u64> {
+        self.inner.get_transaction_count(name).await
+    }
+
     pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
         self.inner.channels.save_channels(path).await
     }
@@ -163,6 +167,14 @@ where
     /// Refer to [`Self::update_balance`] for more details on the update process.
     pub async fn pay(&self, channel: &str, amount: MoneroAmount) -> Result<FinalizedUpdate, ChannelServerError> {
         let delta = MoneroDelta::from(amount);
+        self.update_balance(channel, delta).await
+    }
+
+    /// A convenience function for [`Self::update_balance`] that refunds the given amount from merchant to customer.
+    ///
+    /// Refer to [`Self::update_balance`] for more details on the update process.
+    pub async fn refund(&self, channel: &str, amount: MoneroAmount) -> Result<FinalizedUpdate, ChannelServerError> {
+        let delta = -MoneroDelta::from(amount);
         self.update_balance(channel, delta).await
     }
 
@@ -930,6 +942,20 @@ where
     async fn get_channel_metadata(&self, channel_name: &str) -> Option<ChannelMetadata> {
         let lock = self.channels.peek(channel_name).await?;
         Some(lock.state().metadata().clone())
+    }
+
+    /// Returns the transaction count the given channel name, if the channel exists. If the channel is not found,
+    /// `None` is returned.
+    async fn get_transaction_count(&self, channel_name: &str) -> Option<u64> {
+        let lock = self.channels.peek(channel_name).await?;
+        let count = match lock.state() {
+            ChannelState::New(_) => 0,
+            ChannelState::Establishing(_) => 0,
+            ChannelState::Open(s) => s.update_count(),
+            ChannelState::Closing(s) => s.metadata().update_count(),
+            ChannelState::Closed(s) => s.metadata().update_count(),
+        };
+        Some(count)
     }
 
     /// Submit a funding transaction receipt directly to the request handler.
