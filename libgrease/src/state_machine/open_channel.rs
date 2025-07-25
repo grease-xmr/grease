@@ -18,7 +18,7 @@ use crate::monero::data_objects::{MultisigWalletData, TransactionId, Transaction
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;
-use log::info;
+use log::*;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -168,8 +168,8 @@ impl EstablishedChannelState {
         }
         let name = self.metadata.channel_id().name();
         info!(
-            "Initiating channel close on {name}. Final balance: {} / {}",
-            final_balance.merchant, final_balance.customer
+            "{}: Initiating channel close on {name}. Final balances: Merchant={} / Customer={}",
+            self.metadata.role(), final_balance.merchant, final_balance.customer
         );
         if self.update_count() == 0 {
             Self::finalize_with_no_updates(&mut self);

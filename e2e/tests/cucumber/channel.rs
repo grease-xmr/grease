@@ -138,6 +138,9 @@ async fn transaction_count(world: &mut GreaseWorld, count: u64) {
 async fn close_channel(world: &mut GreaseWorld, user: String) {
     let server = world.servers.get(&user).expect("Server not found in the world");
     let channel = world.current_channel.clone().expect("There is no current channel");
+    let metadata = server.server.channel_metadata(&channel).await.expect("Failed to get channel metadata");
+    info!("{user} ({}) initiating channel close", metadata.role());
+    debug!("Channel metadata: {metadata:?}");
     let final_balances = server.server.close_channel(&channel).await.expect("Failed to close channel");
     info!("Channel {channel} closed by {user}\nFinal balances: {final_balances:?}");
 }

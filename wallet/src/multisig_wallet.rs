@@ -448,7 +448,7 @@ impl MultisigWallet {
 
 /// Converts a vector of payments from the state machine into one that can be used by the wallet.
 /// Also accounts for fees.
-pub fn adapt_payments(
+pub fn translate_payments(
     unadjusted: [(UAddress, MoneroAmount); 2],
     fee: MoneroAmount,
 ) -> Result<Vec<(MoneroAddress, u64)>, WalletError> {

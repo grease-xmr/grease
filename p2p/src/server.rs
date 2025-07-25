@@ -38,7 +38,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
-use wallet::multisig_wallet::{adapt_payments, signature_share_to_bytes, signature_share_to_secret};
+use wallet::multisig_wallet::{translate_payments, signature_share_to_bytes, signature_share_to_secret};
 use wallet::{connect_to_rpc, publish_transaction, MultisigWallet};
 
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
@@ -181,7 +181,16 @@ where
     /// Start the co-operative close process for a channel.
     pub async fn close_channel(&self, channel: &str) -> Result<Balances, ChannelServerError> {
         self.ensure_connection(channel).await?;
-        self.inner.close_channel(channel).await
+        match self.inner.close_channel(channel).await {
+            Ok(balances) => {
+                info!("Channel {channel} closed successfully. Balances: {:?}", balances);
+                Ok(balances)
+            }
+            Err(err) => {
+                warn!("Failed to close channel {channel}: {err}");
+                Err(err)
+            }
+        }
     }
 
     pub async fn rebroadcast_closing_transaction(&self, channel: &str) -> Result<TransactionId, ChannelServerError> {
@@ -1057,7 +1066,7 @@ where
         drop(channel);
         // TODO - A better fee estimation mechanism should be used here.
         let fee = MoneroAmount::from_piconero(4_000_000_000);
-        let payments = adapt_payments(unadjusted, fee)
+        let payments = translate_payments(unadjusted, fee)
             .map_err(|_| ChannelServerError::UpdateError(UpdateError::InsufficientFunds))?;
         trace!("Added {} outputs to transaction. {:?}", payments.len(), payments);
         let rpc = connect_to_rpc(&self.rpc_address).await?;
@@ -1461,33 +1470,36 @@ where
         let state = channel.state().as_closing()?;
         let wallet_data = state.wallet_data();
         let unadjusted = state.get_closing_payments();
+        let role = state.role();
+        trace!("{role}: Final (unadjusted) payments: Merchant [{}]={}, Customer [{}]={}",
+            unadjusted[0].0, unadjusted[0].1, unadjusted[1].0, unadjusted[1].1);
         // TODO - A better fee estimation mechanism should be used here.
         let fee = MoneroAmount::from_piconero(4_000_000_000);
-        trace!("Determining final outputs");
-        let payments = adapt_payments(unadjusted, fee)
+        trace!("{role}: Determining final outputs");
+        let payments = translate_payments(unadjusted, fee)
             .map_err(|_| ChannelServerError::UpdateError(UpdateError::InsufficientFunds))?;
-        trace!("Added {} outputs to transaction. {:?}", payments.len(), payments);
+        trace!("{role}: Added {} outputs to transaction. {:?}", payments.len(), payments);
         let final_update = state.final_update();
         let offset = state.peer_witness().map_err(|e| {
             ChannelServerError::ProtocolError(format!("Final witness is not a valid monero scalar: {e}"))
         })?;
         drop(channel);
-        trace!("Reconstructing wallet for closing tx.");
+        trace!("{role}: Reconstructing wallet for closing tx.");
         let rpc = connect_to_rpc(&self.rpc_address).await?;
         let mut wallet = MultisigWallet::from_serializable(rpc.clone(), wallet_data.clone())
             .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to instantiate multisig wallet: {e}")))?;
-        trace!("Reconstructed wallet for closing tx.");
+        trace!("{role}: Reconstructed wallet for closing tx.");
         let mut rng = wallet.deterministic_rng();
         wallet.prepare(payments, &mut rng).await?;
         wallet.partial_sign(&final_update.peer_preprocess)?;
-        trace!("Signed final transaction with my key.");
+        trace!("{role}: Signed final transaction with my key.");
         let adapted = final_update.peer_adapted_signature;
         let ss_b = wallet.extract_true_signature(&adapted, &offset)?;
         let closing_tx = wallet.sign(ss_b)?;
         let tx_hash = TransactionId::new(hex::encode(closing_tx.hash()));
-        debug!("Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");
+        debug!("{role}: Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");
         if broadcast {
-            debug!("Publishing closing transaction for channel {name}.");
+            debug!("{role}: Publishing closing transaction for channel {name}.");
             publish_transaction(&rpc, &closing_tx).await?;
         }
         Ok(tx_hash)
