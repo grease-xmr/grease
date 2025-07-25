@@ -1,20 +1,22 @@
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use log::*;
 use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
-use rand_core::OsRng;
 use wallet::errors::WalletError;
-use wallet::multisig_wallet::{signature_share_to_bytes, MultisigWallet};
+use wallet::multisig_wallet::MultisigWallet;
 use wallet::publish_transaction;
 use wallet::watch_only::WatchOnlyWallet;
 
+/// To run this example, you need a Regtest Monero node running on localhost:25070.
+/// AND you need to have transferred at least 1 XMR to the address in `ALICE`.
 #[tokio::main]
 async fn main() -> Result<(), WalletError> {
     env_logger::try_init().unwrap_or_else(|_| {
         eprintln!("Failed to initialize logger, using default settings");
     });
     const ALICE: &str =
-        "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
+        "44m9bCMPn4piJQS2gfXzTnBySotvXwFmLBGVhS6kUrN48e2Ya9heHoNVg6D9EJQgxnL4k97s5pEbcPvNEe5uW3or4UTr8wn";
 
     // Alice generates a keypair
     let (k_a, p_a) =
@@ -82,43 +84,52 @@ async fn main() -> Result<(), WalletError> {
     )
     .await;
 
-    // Wallet b is not deterministic, so we won't be able to restore this one later
-    wallet_b.prepare(payment.clone(), &mut OsRng).await?;
     let mut rng_a = wallet_a.deterministic_rng();
+    let mut rng_b = wallet_b.deterministic_rng();
     wallet_a.prepare(payment.clone(), &mut rng_a).await?;
+    wallet_b.prepare(payment.clone(), &mut rng_b).await?;
+    debug!("RNG A seed: {}", hex::encode(rng_a.get_seed()));
+    debug!("RNG B seed: {}", hex::encode(rng_b.get_seed()));
 
     println!("Preprocessing step completed for both wallets");
 
     let wallet_a_pp = wallet_a.my_pre_process_data().unwrap();
     let wallet_b_pp = wallet_b.my_pre_process_data().unwrap();
 
+    info!("Partially signing ALICE's wallet with Bob's pre-process data");
     wallet_a.partial_sign(&wallet_b_pp)?;
-    println!("Partial Signing completed for Alice");
+    println!("Partial Signing completed for Alice\n");
 
+    info!("Partially signing BOB's wallet with Bob's pre-process data");
     wallet_b.partial_sign(&wallet_a_pp)?;
-    println!("Partial Signing completed for Bob");
+    println!("Partial Signing completed for Bob\n");
 
+    // Serialize and restore the wallet.
+    info!("Se- and Deserializing Alice's wallet");
+    let data = wallet_a.serializable();
+    let mut wallet_a = MultisigWallet::from_serializable(rpc.clone(), data)?;
+    let mut rng_a = wallet_a.deterministic_rng();
+    debug!("RNG seed: {}", hex::encode(rng_a.get_seed()));
+    wallet_a.prepare(payment, &mut rng_a).await?;
+    wallet_a.partial_sign(&wallet_b_pp)?;
+    info!("Restored Alice's wallet\n");
+
+    info!("Creating adaptor signatures for Alice and Bob");
     // Create adaptor signature
     let offset_b = Curve25519Secret::random(&mut rand::rng());
     let adapted_b = wallet_b.adapt_signature(&offset_b)?;
 
-    // Test signature conversion for ss_a
-    let ss_a = wallet_a.my_signing_shares().unwrap();
-    let ss_a_bytes = signature_share_to_bytes(&ss_a);
-    let ss_a = wallet_a.bytes_to_signature_share(&ss_a_bytes)?;
-
-    // Serialize and restore the wallet.
-    let data = wallet_a.serializable();
-    let mut wallet_a = MultisigWallet::from_serializable(rpc.clone(), data)?;
-    let mut rng_a = wallet_a.deterministic_rng();
-    wallet_a.prepare(payment, &mut rng_a).await?;
-    wallet_a.partial_sign(&wallet_b_pp)?;
+    let offset_a = Curve25519Secret::random(&mut rand::rng());
+    let adapted_a = wallet_a.adapt_signature(&offset_a)?;
 
     // Alice signs with an adaptor signature
+    wallet_b.verify_adapted_signature(&adapted_a)?;
     wallet_a.verify_adapted_signature(&adapted_b)?;
     println!("Adaptor signature is valid (but can't create a valid transaction yet)");
     // Recreate the original signature share
+    let ss_a = wallet_b.extract_true_signature(&adapted_a, &offset_a)?;
     let ss_b = wallet_a.extract_true_signature(&adapted_b, &offset_b)?;
+
     let tx_a = wallet_a.sign(ss_b)?;
     println!("Alice's transaction signed successfully");
 

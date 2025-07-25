@@ -37,7 +37,7 @@ async fn kill_node(world: &mut GreaseWorld) {
     }
 }
 
-#[when(expr = "{word} mines {int} blocks")]
+#[when(expr = "{word} mines {int} block(s)")]
 async fn mine_blocks(world: &mut GreaseWorld, who: String, count: usize) {
     let address = world.address_for(&who).expect("Unknown user");
     let rpc = get_rpc_client(world).await;
