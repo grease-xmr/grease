@@ -5,7 +5,6 @@ use e2e::create_channel_proposal;
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
 use log::*;
-use monero::Denomination::Monero;
 use monero_address::{MoneroAddress, Network};
 
 #[given(expr = "{word} runs the grease server")]
@@ -133,4 +132,12 @@ async fn transaction_count(world: &mut GreaseWorld, count: u64) {
         update_count, count,
         "Expected transaction count to be {count}, but got {update_count}"
     );
+}
+
+#[when(expr = "{word} closes the channel")]
+async fn close_channel(world: &mut GreaseWorld, user: String) {
+    let server = world.servers.get(&user).expect("Server not found in the world");
+    let channel = world.current_channel.clone().expect("There is no current channel");
+    let final_balances = server.server.close_channel(&channel).await.expect("Failed to close channel");
+    info!("Channel {channel} closed by {user}\nFinal balances: {final_balances:?}");
 }

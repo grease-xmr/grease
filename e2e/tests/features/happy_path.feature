@@ -26,3 +26,7 @@ Feature: Grease happy path
       | customer_balance  |  0.15  |
       | merchant_balance  |  1.1  |
     And the transaction count is 11
+    When Bob closes the channel
+    When Alice mines 1 block
+    Then Bob receives ~1.1 XMR
+    And Alice receives ~0.15 XMR
