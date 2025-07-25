@@ -132,11 +132,11 @@ async fn main() -> Result<(), WalletError> {
     wallet_b.partial_sign(&pp_a)?;
     info!("Partial Signing completed for Bob");
 
-    let ss_a_real = wallet_a.my_signing_shares().unwrap();
+    let ss_a_real = wallet_a.my_signing_share().unwrap();
 
     println!("{:?}", get_signatureshare_scalar(&ss_a_real));
 
-    let ss_b_real = wallet_b.my_signing_shares().unwrap();
+    let ss_b_real = wallet_b.my_signing_share().unwrap();
 
     let ss_a_encrypted = make_adapted_shares(&ss_a_real, secret_a);
     match wallet_b.sign(ss_a_encrypted.clone()) {

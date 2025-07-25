@@ -38,7 +38,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
-use wallet::multisig_wallet::{translate_payments, signature_share_to_bytes, signature_share_to_secret};
+use wallet::multisig_wallet::{signature_share_to_bytes, signature_share_to_secret, translate_payments};
 use wallet::{connect_to_rpc, publish_transaction, MultisigWallet};
 
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
@@ -1068,7 +1068,6 @@ where
         let fee = MoneroAmount::from_piconero(4_000_000_000);
         let payments = translate_payments(unadjusted, fee)
             .map_err(|_| ChannelServerError::UpdateError(UpdateError::InsufficientFunds))?;
-        trace!("Added {} outputs to transaction. {:?}", payments.len(), payments);
         let rpc = connect_to_rpc(&self.rpc_address).await?;
         let mut wallet = MultisigWallet::from_serializable(rpc, wallet_data.clone())
             .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to instantiate multisig wallet: {e}")))?;
@@ -1119,7 +1118,7 @@ where
         trace!("💸️  Adapted signature ok");
         wallet.partial_sign(&merchant_info.prepare_info_merchant)?;
         let secret = wallet
-            .my_signing_shares()
+            .my_signing_share()
             .ok_or_else(|| UpdateError::WalletError(format!("No signing shares found for {name}")))?;
         let my_signature = signature_share_to_bytes(&secret);
         let my_proofs = self.generate_next_witness(name, info.delta).await?;
@@ -1258,7 +1257,7 @@ where
                 "Could not create adapted signature: {e}"
             ))))
         })?;
-        let my_signature = wallet.my_signing_shares().ok_or_else(|| {
+        let my_signature = wallet.my_signing_share().ok_or_else(|| {
             GreaseResponse::UpdatePrepared(Err(RemoteServerError::internal("Signature not available")))
         })?;
         let my_signature = signature_share_to_secret(my_signature);
@@ -1471,8 +1470,13 @@ where
         let wallet_data = state.wallet_data();
         let unadjusted = state.get_closing_payments();
         let role = state.role();
-        trace!("{role}: Final (unadjusted) payments: Merchant [{}]={}, Customer [{}]={}",
-            unadjusted[0].0, unadjusted[0].1, unadjusted[1].0, unadjusted[1].1);
+        trace!(
+            "{role}: Final (unadjusted) payments: Merchant [{}]={}, Customer [{}]={}",
+            unadjusted[0].0,
+            unadjusted[0].1,
+            unadjusted[1].0,
+            unadjusted[1].1
+        );
         // TODO - A better fee estimation mechanism should be used here.
         let fee = MoneroAmount::from_piconero(4_000_000_000);
         trace!("{role}: Determining final outputs");

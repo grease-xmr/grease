@@ -21,12 +21,15 @@ Feature: Grease happy path
     Then the channel balance is
       | customer_balance  |  1.15  |
       | merchant_balance  |  0.1  |
-#    When Alice pays 0.1 XMR to Bob 10 times
-#    Then the channel balance is
-#      | customer_balance  |  0.15  |
-#      | merchant_balance  |  1.1  |
-#    And the transaction count is 11
+    When Alice pays 0.1 XMR to Bob 10 times
+    Then the channel balance is
+      | customer_balance  |  0.15  |
+      | merchant_balance  |  1.1  |
+    And the transaction count is 11
     When Alice closes the channel
     When Alice mines 1 block
-    Then Bob receives ~1.1 XMR
+    And we wait 100 ms
+    Then Alice sees the channel status as closed
+    And Bob sees the channel status as closed
+    And Bob receives ~1.1 XMR
     And Alice receives ~0.15 XMR

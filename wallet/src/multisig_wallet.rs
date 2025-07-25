@@ -249,7 +249,7 @@ impl MultisigWallet {
     /// returned by this function.
     pub fn deterministic_rng(&self) -> ChaCha20Rng {
         // Use the spend key as a seed for the RNG, which is unique to this wallet instance
-        let bytes = self.my_spend_key.as_scalar().as_bytes();
+        let bytes = self.joint_private_view_key.as_scalar().as_bytes();
         let hashed = blake2::Blake2b512::digest(bytes);
         let mut seed = [0; 32];
         seed.copy_from_slice(&hashed[..32]);
@@ -273,7 +273,6 @@ impl MultisigWallet {
                 preprocess.len()
             )));
         }
-        debug!("Pre-processing complete with: {} commitments", preprocess.len());
         self.preprocess_data = Some(preprocess);
         self.sign_machine = Some(machine);
         Ok(())
@@ -281,12 +280,9 @@ impl MultisigWallet {
 
     pub fn my_pre_process_data(&self) -> Option<Vec<u8>> {
         self.preprocess_data.as_ref().and_then(|v| {
-            trace!("** Pre-allocate: Preprocess has {} elements", v.len());
             v.first().map(|pp| {
                 let mut buf = Vec::with_capacity(160);
                 pp.write(&mut buf).unwrap();
-                trace!("** Pre-allocate: Preprocess data length: {}", buf.len());
-                trace!("buf_before: {}", hex::encode(&buf));
                 buf
             })
         })
@@ -301,7 +297,6 @@ impl MultisigWallet {
         let preprocess = machine
             .read_preprocess(&mut data.as_slice())
             .map_err(|e| WalletError::SigningError(format!("Invalid preprocess data: {e}")))?;
-        trace!("Deserialized preprocess data: {} elements", preprocess.len());
         let commitments = self.assign_commitments(preprocess);
         let (tx_machine, mut shares) = machine.sign(commitments, &[])?;
         if shares.len() != 1 {
@@ -320,13 +315,13 @@ impl MultisigWallet {
         Ok(())
     }
 
-    pub fn my_signing_shares(&self) -> Option<SignatureShare<Ed25519>> {
+    pub fn my_signing_share(&self) -> Option<SignatureShare<Ed25519>> {
         self.shared_spend_key.clone()
     }
 
     pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptedSignature, WalletError> {
         let real_sig = self
-            .my_signing_shares()
+            .my_signing_share()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
         let real_sig = signature_share_to_secret(real_sig);
         let adapted = real_sig.as_scalar() + witness.as_scalar();
@@ -382,8 +377,7 @@ impl MultisigWallet {
     fn assign_commitments(&self, peer_data: Vec<MoneroPreprocess>) -> HashMap<Participant, Vec<MoneroPreprocess>> {
         let mut commitments = HashMap::new();
         let (me, them) = self.participants();
-        debug!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
-        //commitments.insert(me, self.preprocess_data.clone().expect("We should have preprocess data"));
+        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
         commitments.insert(them, peer_data);
         commitments
     }
@@ -394,7 +388,7 @@ impl MultisigWallet {
     ) -> HashMap<Participant, Vec<SignatureShare<Ed25519>>> {
         let mut shares = HashMap::new();
         let (me, them) = self.participants();
-        debug!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
+        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
         shares.insert(them, peer_shares);
         shares
     }

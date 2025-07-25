@@ -169,7 +169,9 @@ impl EstablishedChannelState {
         let name = self.metadata.channel_id().name();
         info!(
             "{}: Initiating channel close on {name}. Final balances: Merchant={} / Customer={}",
-            self.metadata.role(), final_balance.merchant, final_balance.customer
+            self.metadata.role(),
+            final_balance.merchant,
+            final_balance.customer
         );
         if self.update_count() == 0 {
             Self::finalize_with_no_updates(&mut self);
