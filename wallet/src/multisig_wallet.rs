@@ -12,7 +12,6 @@ use zeroize::Zeroizing;
 use crate::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::errors::WalletError;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::keys::KeyError;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::AdaptedSignature;
 use libgrease::crypto::zk_objects::GenericPoint;

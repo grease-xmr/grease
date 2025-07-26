@@ -595,12 +595,12 @@ fn get_signatureshare_scalar(share: &SignatureShare<Ed25519>) -> Scalar {
     s
 }
 unsafe fn update_signatureshare(original: &mut SignatureShare<Ed25519>, new_value: Scalar) {
-    // Ensure the types are compatible for transmute
+    // Safety: This function transmutes between SignatureShare<Ed25519> and Scalar.
+    // The caller must ensure that:
+    // 1. The types have the same size and alignment (checked by assertions)
+    // 2. The Scalar value represents a valid SignatureShare<Ed25519>    // Ensure the types are compatible for transmute
     assert_eq!(mem::size_of::<SignatureShare<Ed25519>>(), mem::size_of::<Scalar>());
     assert_eq!(mem::align_of::<SignatureShare<Ed25519>>(), mem::align_of::<Scalar>());
-
-    // // Transmute the new value into the memory of the original
-    // *original = mem::transmute(new_value);
 
     // Transmute the Scalar to SignatureShare<Ed25519>
     let new_struct: SignatureShare<Ed25519> = mem::transmute_copy(&new_value);

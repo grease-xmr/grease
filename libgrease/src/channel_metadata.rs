@@ -49,9 +49,13 @@ impl ChannelMetadata {
     ) -> Self {
         Self {
             network,
+
             role,
+
             current_balances: channel_id.initial_balance(),
+
             channel_id,
+
             kes_public_key,
             update_count: 0,
             public_key_self,

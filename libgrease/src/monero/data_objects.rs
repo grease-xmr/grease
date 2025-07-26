@@ -32,8 +32,8 @@ pub struct ConfirmMsAddress {
 }
 
 impl ConfirmMsAddress {
-    pub fn new(address: &String) -> ConfirmMsAddress {
-        ConfirmMsAddress { address: address.clone() }
+    pub fn new(address: String) -> ConfirmMsAddress {
+        Self { address }
     }
 }
 

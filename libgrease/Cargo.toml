@@ -19,7 +19,7 @@ log = "0.4.27"
 ron = {  workspace = true }
 serde = { version = "1.0.219", features = ["derive"] }
 zeroize = {  workspace = true }
-num-bigint = "0.4"
+num-bigint = "0.4.3"
 num-traits = "0.2"
 babyjubjub-rs = "0.0.11"
 circuits = { workspace = true }

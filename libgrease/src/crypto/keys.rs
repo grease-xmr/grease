@@ -64,7 +64,10 @@ impl Curve25519Secret {
     }
 
     pub fn from_big_uint(scalar: &BigUint) -> Result<Self, KeyError> {
-        // let scalar = Scalar::from_canonical_bytes(generic.0).into_option().ok_or(KeyError::NonCanonicalScalar)?;
+        // Validate input size to prevent potential issues
+        if scalar.bits() > 256 {
+            return Err(KeyError::InvalidStringLength);
+        }
         let scalar_bytes = scalar.to_le_bytes();
         let scalar_bytes = circuits::right_pad_bytes_32(&scalar_bytes);
         let s = Zeroizing::new(Scalar::from_bytes_mod_order(scalar_bytes.into()));

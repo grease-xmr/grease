@@ -500,8 +500,9 @@ impl ChannelClosure for NoirDelegate {
         _c: &GenericPoint,
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
+        //TODO: Implement
         #[cfg(not(debug_assertions))]
-        todo!();
+        return Err(DelegateError::TODO());
         #[cfg(debug_assertions)]
         self.dummy.verify_peer_witness(_w, _c, metadata).await
     }

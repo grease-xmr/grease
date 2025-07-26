@@ -364,7 +364,7 @@ where
         debug!("👛️ Wallet shards are valid and are stored for channel {name}");
         // 2.3. Verify the wallet address with the peer.
         let address = wallet.address();
-        let confirmation = ConfirmMsAddress::new(&address.to_string());
+        let confirmation = ConfirmMsAddress::new(address.to_string());
         debug!("👛️ Verifying wallet address with peer for channel {name}. Address: {address}");
         let confirmed = self.customer_verify_wallet_address_and_get_nonce(peer_id, &name, confirmation).await?;
         if !confirmed.confirmed {
@@ -665,8 +665,6 @@ where
         kes_pubkey: &GenericPoint,
         peer: &Curve25519PublicKey,
     ) -> Result<MultisigSplitSecrets, ChannelServerError> {
-        // let kes = GenericPoint::from_hex(kes_pubkey)
-        //     .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
         let split_secrets = self.delegate.split_secret_share(secret, kes_pubkey, peer)?;
         Ok(split_secrets)
     }
@@ -687,8 +685,6 @@ where
         let (remote_channel, shards_for_customer) = env.open();
         confirm_channel_matches(&remote_channel, name)?;
         info!("🔐️ Verifying KES proofs for channel {name}.");
-        // let pubkey = GenericPoint::from_hex(kes_public_key)
-        //     .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
         self.delegate
             .verify_kes_proofs(
                 name.to_string(),
@@ -782,11 +778,6 @@ where
         info!("🔐️ Establishing KES.");
         // Remember, `my_shards` are the shards FOR ME. So the customer's KES-encrypted secret is in
         // `my_shards.kes_shard`.
-        // let kes = GenericPoint::from_hex(&kes_pubkey).map_err(|e| {
-        //     GreaseResponse::MsSplitSecretExchange(Err(RemoteServerError::InternalError(format!(
-        //         "Failed to derive KES public key: {e}."
-        //     ))))
-        // })?;
         let proof = self
             .delegate
             .create_kes_proofs(

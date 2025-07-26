@@ -50,25 +50,27 @@ pub enum BBError {
     String(String),
 }
 
-impl Into<BBError> for std::string::String {
-    fn into(self) -> BBError {
-        BBError::String(self)
-    }
-}
-
 impl Into<BBError> for &str {
     fn into(self) -> BBError {
         BBError::String(self.to_string())
     }
 }
 
-fn left_pad_bytes_32(input: &[u8]) -> [u8; 32] {
-    assert!(input.len() <= 32, "Input length exceeds target length");
+impl From<std::string::String> for BBError {
+    fn from(value: std::string::String) -> Self {
+        BBError::String(value)
+    }
+}
+
+fn left_pad_bytes_32(input: &[u8]) -> Result<[u8; 32], String> {
+    if input.len() > 32 {
+        return Err("Input length exceeds target length".to_string());
+    }
 
     let mut result = [0u8; 32];
     let offset = 32 - input.len();
     result[offset..].copy_from_slice(input);
-    result
+    Ok(result)
 }
 pub fn left_pad_bytes_32_vec(input: &Vec<u8>) -> [u8; 32] {
     assert!(input.len() <= 32, "Input length exceeds target length");
@@ -96,7 +98,7 @@ fn get_field_bytes(field: &Fr) -> [u8; 32] {
     //Fr(0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0)
     let field_object: String = field.to_string();
     assert!(
-        field_object.len() != 72,
+        field_object.len() == 70,
         "get_field_bytes: field is not correctly self-describing"
     );
 
@@ -116,7 +118,7 @@ pub fn get_scalar_to_point_bjj(scalar: &BigUint) -> Point {
 }
 pub fn get_bjjpoint_from_string(hex_string: &str) -> Result<Point, String> {
     let bytes = hex::decode(hex_string).map_err(|_| "Invalid hex string")?;
-    Ok(decompress_point(left_pad_bytes_32(&bytes))?)
+    Ok(decompress_point(left_pad_bytes_32(&bytes)?)?)
 }
 pub fn get_scalar_to_point_ed25519(scalar_big_uint: &BigUint) -> MontgomeryPoint {
     // Convert the 32-byte array to an Ed25519 Scalar
@@ -214,8 +216,8 @@ pub fn make_witness0(
     let blinding_bytes = blinding.to_bytes_be();
     let mut result = Vec::with_capacity(96);
     result.extend_from_slice(&header);
-    result.extend_from_slice(&left_pad_bytes_32(&nonce_peer_bytes));
-    result.extend_from_slice(&left_pad_bytes_32(&blinding_bytes));
+    result.extend_from_slice(&left_pad_bytes_32(&nonce_peer_bytes)?);
+    result.extend_from_slice(&left_pad_bytes_32(&blinding_bytes)?);
 
     // Create a BLAKE2s hasher instance
     let mut hasher = Blake2s256::new();
@@ -295,8 +297,8 @@ pub fn encrypt_message_ecdh(
     let r_p_x_bytes = get_field_bytes(&r_p.x);
     let r_p_y_bytes = get_field_bytes(&r_p.y);
     let mut result = Vec::with_capacity(64);
-    result.extend_from_slice(&left_pad_bytes_32(&r_p_x_bytes));
-    result.extend_from_slice(&left_pad_bytes_32(&r_p_y_bytes));
+    result.extend_from_slice(&left_pad_bytes_32(&r_p_x_bytes)?);
+    result.extend_from_slice(&left_pad_bytes_32(&r_p_y_bytes)?);
 
     // Create a BLAKE2s hasher instance
     let mut hasher = Blake2s256::new();
@@ -330,8 +332,8 @@ pub fn encrypt_message_ecdh(
         let fi_s_x_bytes = get_field_bytes(&fi_s.x);
         let fi_s_y_bytes = get_field_bytes(&fi_s.y);
         let mut result = Vec::with_capacity(64);
-        result.extend_from_slice(&left_pad_bytes_32(&fi_s_x_bytes));
-        result.extend_from_slice(&left_pad_bytes_32(&fi_s_y_bytes));
+        result.extend_from_slice(&left_pad_bytes_32(&fi_s_x_bytes)?);
+        result.extend_from_slice(&left_pad_bytes_32(&fi_s_y_bytes)?);
 
         // Create a BLAKE2s hasher instance
         let mut hasher = Blake2s256::new();
@@ -364,7 +366,7 @@ pub fn make_vcof(witness_im1: &BigUint) -> Result<(BigUint, babyjubjub_rs::Point
     let witness_im1_bytes = witness_im1.to_bytes_be();
     let mut result = Vec::with_capacity(64);
     result.extend_from_slice(&header);
-    result.extend_from_slice(&left_pad_bytes_32(&witness_im1_bytes));
+    result.extend_from_slice(&left_pad_bytes_32(&witness_im1_bytes)?);
 
     // Create a BLAKE2s hasher instance
     let mut hasher = Blake2s256::new();
@@ -618,6 +620,15 @@ fn call_shell(shell: Shell, args: &[&str]) -> io::Result<(Vec<u8>, String)> {
         Shell::Bb => "bb",
         Shell::Nargo => "nargo",
     };
+
+    // Validate command exists
+    if !std::process::Command::new("which").arg(program).status()?.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} command not found", program),
+        ));
+    }
+
     // Spawn the bash command with the provided arguments
     let mut command = Command::new(program).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
@@ -709,11 +720,11 @@ struct PointConfig {
 fn get_point_config_baby_jubjub(point: &Point) -> PointConfig {
     //Fr(0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0)
     let x: String = point.x.to_string();
-    assert!(x.len() != 72, "get_field_bytes: field is not correctly self-describing");
+    assert!(x.len() == 70, "get_field_bytes: field is not correctly self-describing");
     let x_str = &x[3..69];
 
     let y: String = point.y.to_string();
-    assert!(y.len() != 72, "get_field_bytes: field is not correctly self-describing");
+    assert!(y.len() == 70, "get_field_bytes: field is not correctly self-describing");
     let y_str = &y[3..69];
 
     PointConfig { x: x_str.to_string(), y: y_str.to_string() }

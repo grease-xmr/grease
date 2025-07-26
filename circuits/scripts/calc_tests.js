@@ -273,17 +273,21 @@ const byteArray_VerifyWitness0 = Buffer.from([
 const hash_VerifyWitness0 = blake.blake2sHex(byteArray_VerifyWitness0);
 const hashBig_VerifyWitness0 = BigInt('0x' + hash_VerifyWitness0); // Convert hex to BigInt
 
-let witness_0 = hashBig_VerifyWitness0 % BABY_JUBJUB_ORDER;
+var witness_0 = hashBig_VerifyWitness0 % BABY_JUBJUB_ORDER;
+if (witness_0 == 0) witness_0 = BABY_JUBJUB_ORDER;
 let T_0 = mulPointEscalar(Base8, witness_0);
 
 //FeldmanSecretShare_2_of_2
 const c_1 = mulPointEscalar(Base8, a_1);
-const share_1 = (BABY_JUBJUB_ORDER - witness_0 + BABY_JUBJUB_ORDER - a_1) % BABY_JUBJUB_ORDER;
+var share_1 = (BABY_JUBJUB_ORDER - witness_0 + BABY_JUBJUB_ORDER - a_1) % BABY_JUBJUB_ORDER;
+if (share_1 == 0) share_1 = BABY_JUBJUB_ORDER;
 if (share_1 <= 0n) throw new Error('share_1 must be positive');
 const share_2 = ((2n * witness_0) + a_1) % BABY_JUBJUB_ORDER;
+if (share_2 == 0) share_2 = BABY_JUBJUB_ORDER;
 if (share_2 <= 0n) throw new Error('share_2 must be positive');
 //Verify reconstruction
 const witness_0_calc = (share_1 + share_2) % BABY_JUBJUB_ORDER;
+if (witness_0_calc == 0) witness_0_calc = BABY_JUBJUB_ORDER;
 if (witness_0_calc != witness_0) throw new Error('witness_0_calc != witness_0');
 //Verify peer verification
 const peer_v_RHS = negatePoint(addPoint(T_0, c_1));
@@ -306,8 +310,10 @@ const byteArray_1 = Buffer.from([
 ]);
 const hash_1 = blake.blake2sHex(byteArray_1);
 const hash_1Big = BigInt('0x' + hash_1); // Convert hex to BigInt
-const shared_secret_1 = hash_1Big % BABY_JUBJUB_ORDER;
-const cipher_1 = (share_1 + shared_secret_1) % BABY_JUBJUB_ORDER;
+var shared_secret_1 = hash_1Big % BABY_JUBJUB_ORDER;
+if (shared_secret_1 == 0) shared_secret_1 = BABY_JUBJUB_ORDER;
+var cipher_1 = (share_1 + shared_secret_1) % BABY_JUBJUB_ORDER;
+if (cipher_1 == 0) cipher_1 = BABY_JUBJUB_ORDER;
 const fi_1 = ephemeral_1;
 const enc_1 = cipher_1;
 //Verify
@@ -320,9 +326,10 @@ const byteArray_1_calc = Buffer.from([
 ]);
 const hash_1_calc = blake.blake2sHex(byteArray_1_calc);
 const hash_1Big_calc = BigInt('0x' + hash_1_calc); // Convert hex to BigInt
-const shared_secret_1_calc = hash_1Big_calc % BABY_JUBJUB_ORDER;
+var shared_secret_1_calc = hash_1Big_calc % BABY_JUBJUB_ORDER;
+if (shared_secret_1_calc == 0) shared_secret_1_calc = BABY_JUBJUB_ORDER;
 var share_1_calc = (enc_1 - shared_secret_1_calc) % BABY_JUBJUB_ORDER;
-if (share_1_calc < 0n) {
+if (share_1_calc <= 0n) {
   share_1_calc += BABY_JUBJUB_ORDER;
 }
 if (share_1_calc != share_1) throw new Error('share_1_calc != share_1');
@@ -337,7 +344,9 @@ const byteArray_2 = Buffer.from([
 const hash_2 = blake.blake2sHex(byteArray_2);
 const hash_2Big = BigInt('0x' + hash_2); // Convert hex to BigInt
 const shared_secret_2 = hash_2Big % BABY_JUBJUB_ORDER;
+if (shared_secret_2 == 0) shared_secret_2 = BABY_JUBJUB_ORDER;
 const cipher_2 = (share_2 + shared_secret_2) % BABY_JUBJUB_ORDER;
+if (cipher_2 == 0) cipher_2 = BABY_JUBJUB_ORDER;
 const fi_2 = ephemeral_2;
 const enc_2 = cipher_2;
 //Verify
@@ -351,8 +360,9 @@ const byteArray_2_calc = Buffer.from([
 const hash_2_calc = blake.blake2sHex(byteArray_2_calc);
 const hash_2Big_calc = BigInt('0x' + hash_2_calc); // Convert hex to BigInt
 const shared_secret_2_calc = hash_2Big_calc % BABY_JUBJUB_ORDER;
+if (shared_secret_2_calc == 0) shared_secret_2_calc = BABY_JUBJUB_ORDER;
 var share_2_calc = (enc_2 - shared_secret_2_calc) % BABY_JUBJUB_ORDER;
-if (share_2_calc < 0n) {
+if (share_2_calc <= 0n) {
   share_2_calc += BABY_JUBJUB_ORDER;
 }
 if (share_2_calc != share_2) throw new Error('share_2_calc != share_2');
@@ -419,6 +429,7 @@ const byteArray = Buffer.from([
 const hash = blake.blake2sHex(byteArray);
 const hashBig = BigInt('0x' + hash); // Convert hex to BigInt
 const witness_1 = hashBig % BABY_JUBJUB_ORDER;
+if (witness_1 == 0) witness_1 = BABY_JUBJUB_ORDER;
 
 const proof_Update = generateDLEQProof_simple(witness_1, blinding_DLEQ_Update);
 
