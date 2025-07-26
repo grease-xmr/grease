@@ -20,11 +20,13 @@ global generator: Curve<BabyJubJubParams> = BabyJubJub::from((BASE8[0], BASE8[1]
 
 // Baby Jubjub curve order [251 bit value]
 pub global BABY_JUBJUB_ORDER: Field = 2736030358979909402780800718157159386076813972158567259200215660948447373041;
+pub global BABY_JUBJUB_ORDER_PLUS_ONE: Field = BABY_JUBJUB_ORDER + 1;
 
 /// Creates a Baby Jubjub point from a scalar, specifically a Baby Jubjub public key from a secret scalar.
 pub fn field_scalar_to_point(value: Field) -> edwards::Curve<BabyJubJubParams> {
-    // Ensure value < l.
-    assert_lt(value, BABY_JUBJUB_ORDER);
+    // Ensure 0 < value <= l.
+    assert(value != 0);
+    assert_lt(value, BABY_JUBJUB_ORDER_PLUS_ONE);
 
     // ScalarField is parameterised by the number of 4-bit slices it contains.
     // Since value is already known to be max 251 bits, there are 63 slices.
@@ -40,9 +42,12 @@ pub fn VerifyEncryptMessage_ElGamal(
     r: Field,
     pubkey: edwards::Curve<BabyJubJubParams>,
 ) -> (edwards::Curve<BabyJubJubParams>, edwards::Curve<BabyJubJubParams>) {
-    // Ensure 0 < r < l.
+    // Ensure 0 < r <= l.
     assert(r != 0);
-    assert_lt(r, BABY_JUBJUB_ORDER);
+    assert_lt(r, BABY_JUBJUB_ORDER_PLUS_ONE);
+    // Ensure 0 < message <= l.
+    assert(message != 0);
+    assert_lt(message, BABY_JUBJUB_ORDER_PLUS_ONE);
 
     // Ephemeral public key = r * G (G is the generator)
     let ephemeral = field_scalar_to_point(r);
@@ -71,10 +76,12 @@ pub fn VerifyEncryptMessage_ECDH(
     r: Field,
     pubkey: edwards::Curve<BabyJubJubParams>,
 ) -> (edwards::Curve<BabyJubJubParams>, Field) {
-    assert_lt(message, BABY_JUBJUB_ORDER);
-    // Ensure 0 < r < l.
+    // Ensure 0 < message <= l.
+    assert(message != 0);
+    assert_lt(message, BABY_JUBJUB_ORDER_PLUS_ONE);
+    // Ensure 0 < r <= l.
     assert(r != 0);
-    assert_lt(r, BABY_JUBJUB_ORDER);
+    assert_lt(r, BABY_JUBJUB_ORDER_PLUS_ONE);
 
     // R = r * G (G is the generator)
     let R: Curve<BabyJubJubParams> = field_scalar_to_point(r);
@@ -105,7 +112,10 @@ pub fn VerifyEncryptMessage_ECDH(
     let message_bignum: U256 = U256::from(message);
     let cipher_bignum_over = shared_secret_bignum + message_bignum;
     let cipher_bignum: U256 = cipher_bignum_over.umod(l_bignum);
-    let cipher: Field = bignum::bignum::to_field(cipher_bignum);
+    let mut cipher: Field = bignum::bignum::to_field(cipher_bignum);
+    if cipher == 0 {
+        cipher = BABY_JUBJUB_ORDER;
+    }
 
     (R, cipher)
 }
@@ -122,9 +132,10 @@ pub fn FeldmanSecretShare_2_of_2_Optimized(
     secret: Field,
     a_1: Field,
 ) -> (Curve<BabyJubJubParams>, Field, Field) {
-    // Given 0 < secret < l.
-    // Ensure a_1 < l.
-    assert_lt(a_1, BABY_JUBJUB_ORDER);
+    // Given 0 < secret <= l.
+    // Ensure 0 < a_1 <= l.
+    assert(a_1 != 0);
+    assert_lt(a_1, BABY_JUBJUB_ORDER_PLUS_ONE);
 
     // ScalarField is parameterised by the number of 4-bit slices it contains.
     // Since a_1 is already known to be max 251 bits, there are 63 slices.
@@ -180,10 +191,12 @@ pub fn FeldmanSecretShare_2_of_2(
     secret: Field,
     a_1: Field,
 ) -> (Curve<BabyJubJubParams>, Curve<BabyJubJubParams>, Field, Field) {
-    // Ensure secret < l.
-    assert_lt(secret, BABY_JUBJUB_ORDER);
-    // Ensure a_1 < l.
-    assert_lt(a_1, BABY_JUBJUB_ORDER);
+    // Ensure 0 < secret <= l.
+    assert(secret != 0);
+    assert_lt(secret, BABY_JUBJUB_ORDER_PLUS_ONE);
+    // Ensure 0 < a_1 <= l.
+    assert(a_1 != 0);
+    assert_lt(a_1, BABY_JUBJUB_ORDER_PLUS_ONE);
 
     // ScalarField is parameterised by the number of 4-bit slices it contains.
     // Since secret is already known to be max 251 bits, there are 63 slices.

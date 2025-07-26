@@ -10,7 +10,7 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{
-    AdaptedSignature, GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0,
+    AdaptedSignature, GenericPoint, GenericScalar, KesProof, PeerProof0, PrivateUpdateOutputs, Proofs0,
     PublicUpdateOutputs, PublicUpdateProof, ShardInfo, UpdateProofs,
 };
 use crate::lifecycle_impl;
@@ -55,7 +55,7 @@ pub struct EstablishedChannelState {
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     pub(crate) my_proof0: Proofs0,
-    pub peer_proof0: PublicProof0,
+    pub peer_proof0: PeerProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) current_update: Option<UpdateRecord>,
 }
@@ -98,7 +98,7 @@ impl EstablishedChannelState {
         self.current_update
             .as_ref()
             .map(|update| update.peer_proofs.public_outputs.T_current)
-            .unwrap_or(self.peer_proof0.public_outputs.T_0)
+            .unwrap_or(self.peer_proof0.public_proof0.public_outputs.T_0)
     }
 
     /// Returns the keys to be able to reconstruct the multisig wallet.
@@ -146,14 +146,16 @@ impl EstablishedChannelState {
         // Essentially, only witness_0 is important here, and maybe T_0. which is witness_0.G.
         // The proofs are only needed in a dispute, but when update count is 0, there's no future state to prove in a
         // dispute anyway.
-        let pvt_out = PrivateUpdateOutputs {
+        let _pvt_out = PrivateUpdateOutputs {
             witness_i: self.my_proof0.private_outputs.witness_0,
             ..PrivateUpdateOutputs::default()
         };
-        let pub_out =
+        let _pub_out =
             PublicUpdateOutputs { T_current: self.my_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
-        let peer_pub_out =
-            PublicUpdateOutputs { T_current: self.peer_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
+        let _peer_pub_out = PublicUpdateOutputs {
+            T_current: self.peer_proof0.public_proof0.public_outputs.T_0,
+            ..PublicUpdateOutputs::default()
+        };
         todo!("Finalize the channel if no updates have been made");
     }
 

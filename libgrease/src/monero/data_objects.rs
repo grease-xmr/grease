@@ -26,6 +26,32 @@ pub struct MultisigSplitSecretsResponse {
     pub kes_proof: KesProof,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfirmMsAddress {
+    pub address: String,
+}
+
+impl ConfirmMsAddress {
+    pub fn new(address: String) -> ConfirmMsAddress {
+        Self { address }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConfirmMsAddressResponse {
+    pub confirmed: bool,
+}
+
+impl ConfirmMsAddressResponse {
+    pub fn new(confirmed: bool) -> ConfirmMsAddressResponse {
+        ConfirmMsAddressResponse { confirmed: confirmed }
+    }
+
+    pub fn not_confirmed() -> ConfirmMsAddressResponse {
+        ConfirmMsAddressResponse { confirmed: false }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(bound(deserialize = "T: for<'des> Deserialize<'des>", serialize = "T: Serialize",))]
 pub struct MessageEnvelope<T>

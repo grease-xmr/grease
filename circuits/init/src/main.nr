@@ -20,9 +20,9 @@ fn VerifyWitness0(
     assert(nonce_peer != 0);
     assert(witness_0 != 0);
     assert(blinding != 0);
-    assert_lt(nonce_peer, library::BABY_JUBJUB_ORDER);
-    assert_lt(witness_0, library::BABY_JUBJUB_ORDER);
-    assert_lt(blinding, library::BABY_JUBJUB_ORDER);
+    assert_lt(nonce_peer, library::BABY_JUBJUB_ORDER_PLUS_ONE);
+    assert_lt(witness_0, library::BABY_JUBJUB_ORDER_PLUS_ONE);
+    assert_lt(blinding, library::BABY_JUBJUB_ORDER_PLUS_ONE);
 
     //Create hash (random oracle) from both peers' entropy to ensure uniqueness
     let constant_slice: [u8] = HASH_HEADER_CONSTANT.as_slice();
@@ -42,9 +42,12 @@ fn VerifyWitness0(
     let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
 
     let witness_0_calc_bignum = hash_bignum.umod(l_bignum);
-    let witness_0_calc_field = bignum::bignum::to_field(witness_0_calc_bignum);
+    let mut witness_0_calc_field = bignum::bignum::to_field(witness_0_calc_bignum);
+    if witness_0_calc_field == 0 {
+        witness_0_calc_field = library::BABY_JUBJUB_ORDER;
+    }
 
-    assert_lt(witness_0_calc_field, library::BABY_JUBJUB_ORDER); //TODO: Is this necessary since the function has already been calculated?
+    assert_lt(witness_0_calc_field, library::BABY_JUBJUB_ORDER_PLUS_ONE); //TODO: Is this necessary since the function has already been calculated?
     // Ensure the witness matches the reduced hash
     assert_eq(witness_0_calc_field, witness_0);
 

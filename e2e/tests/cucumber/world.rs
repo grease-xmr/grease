@@ -15,7 +15,7 @@ pub struct GreaseWorld {
 
 impl Default for GreaseWorld {
     fn default() -> Self {
-        Self { monero_node: None, users: create_users(), servers: HashMap::new(), current_channel: None }
+        Self { monero_node: None, users: create_users().unwrap(), servers: HashMap::new(), current_channel: None }
     }
 }
 
