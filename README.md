@@ -12,13 +12,13 @@ that can be implemented in production, but as of now, consider this a proof-of-c
 
 -- Greased Lightning, _Grease_ (1978)
 
-* For a brief motivation for Grease, read the [introduction](./docs/introduction.md).
-* You can find a more detailed description of how Grease works in the [architecture document](./docs/architecture.md).
+* For a brief motivation for Grease, read the [introduction](docs/legacy/introduction.md).
+* You can find a more detailed description of how Grease works in the [architecture document](docs/legacy/architecture.md).
 
 # Using the Grease CLI
 
 (You can run Grease in a local testnet. If you need help setting that up, 
-follow the [testnet setup instructions](./testnet/README.md).)
+follow the [testnet setup instructions](scripts/testnet/README.md).)
 
 Both merchant and customer use the same command line interface (CLI) to interact with the Grease network.
 First, you need to create an identity that identifies you on the P2P network.

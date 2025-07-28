@@ -1,2 +1,2 @@
 [build]
-rustdoc = "./docs/rustdoc-workspace-shim.sh"
+rustdoc = "./scripts/docs/rustdoc-workspace-shim.sh"

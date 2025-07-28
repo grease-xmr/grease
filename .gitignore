@@ -26,6 +26,6 @@ e2e/data
 
 # testnet files
 /testnet/*.log
-/testnet/*-spend-key.txt
+/scripts/testnet/*-spend-key.txt
 /testnet/*.bin
-/testnet/localnet
+/scripts/testnet/localnet

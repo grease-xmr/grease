@@ -158,6 +158,10 @@ where
     ///      3. Create a new multisig wallet with the public keys.
     ///   2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
     ///   3. Verify the wallet address with the peer.
+    ///
+    /// ## Sequence diagram
+    #[doc = include_str!("../../docs/diagrams/establish_channel_sequence.md")]
+
     pub async fn establish_new_channel(&self, proposal: NewChannelProposal) -> Result<String, ChannelServerError> {
         self.inner.customer_establish_new_channel(proposal).await
     }

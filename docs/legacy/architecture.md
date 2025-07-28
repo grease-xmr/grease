@@ -4,61 +4,27 @@ _This document is currently still in planning / conceptual phase and is subject 
 
 ## Systems
 
-* [ ] Monero Blockchain
-  * Intention to use existing monero RPC client interacting with `monerod`. 
-  * https://github.com/monero-rs/monero-rpc-rs
-  * https://github.com/Cuprate/cuprate/blob/main/rpc/interface/README.md
+* [x] Monero Blockchain
+  * ~~Intention to use existing monero RPC client interacting with `monerod`.~~
+  * The Serai project provides a simple, easy-to-use RPC library for interacting with the Monero blockchain.
+  * The Serai project provides the bulk of the machinery needed for Multisig wallets.
 * [ ] Z-K Blockchain
   * Likely Aztec / Noir for PoC, but there can be support for multiple implementations.  
 * [ ] Key Escrow Service (KES)
-* [ ] Grease Client
-  * Rust-based CLI application
-* [ ] Grease Server
+* ~~Grease Client~~
+  * Both merchant and customer use the same grease server implementation.
+* [x] Grease Server
   * Rust-based CLI application
 * [ ] Grease Middleware
-  * [ ] Payment channel state machine
-  * [ ] Z-K proofs. Noir?
-* [ ] Grease P2P
+  * [x] Payment channel state machine
+  * [ ] Z-K proofs. Noir.
+* [x] Grease P2P
   * Rust. Built on `libp2p` and `tokio`.
 
 ## Users
 
 Public peer, sometimes referred to as the merchant.
 Private peer, sometimes referred to as the client.
-
-## Apriori Assets
-
-### Public peer
-
-* 0 XMR (None needed, so no running balance)
-* ~X~ ZKL2 gas
-* ~Y~ KES gas
-* Grease Server
-
-### Private peer
-
-* 1 XMR
-* Grease Client
-
-## Synthetic Assets
-
-### Public peer
-
-`Tab` key
-
-### Private peer
-
-`Tab` key
-
-## UX Steps
-
-1. Negotiate
-2. Purchase
-3. Close
-4. Dispute
-
-Not covered:
-5. Re-open/re-allocate amount
 
 # Walkthrough
 

@@ -1,5 +1,8 @@
 # Introduction
 
+_Note: This markdown version is retained for convenience, but may not be maintained in the future. The typst version
+(docs/introduction.typ) is the canonical version._
+
 Monero is, alongside cash, the world's most private [[1],[2],[3]] and, arguably the best currency in circulation, but
 the user _experience_ remains less than ideal.
 This comment is not necessarily aimed at user _interfaces_ -- for example, there are Monero wallets that are
@@ -7,7 +10,7 @@ very attractive and easy to use -- but the fundamental design of Monero means th
 
 - many, especially new, users find that they can only send a single send every ~20 minutes (since their wallets
   contain a single UTXO),
-- due to the lack of scripting capabilities, use cases that capture the imagination of the public, like DeFi, are not
+- due to the lack of scripting capabilities, use-cases that capture the public imagination, like DeFi, are not
   possible in vanilla Monero.
 
 Therefore, the _experience_ of using Monero tends to be one of waiting, and limited functionality.
@@ -124,3 +127,13 @@ Grease embraces this use case and optimizes the design and UX based on the follo
   claim their funds after a predetermined time-out. In this case, the
   forcing party is usually the merchant since they have the greater incentive to do so in the case where a channel
   has been abandoned by the client.
+
+### Anti-principles
+
+The following design goals are explicitly _excluded_ from the Grease design:
+
+* Multi-hop channels. Multi-hop channels are probably _possible_ in Grease, but they are not a design goal. 
+  Taking the Lightning Network as the case study, [CJ argues](monerokon5) that the vast majority of the utility of 
+  lightning is captured by bilateral channels, with a tiny fraction of the complexity.
+
+[monerokon5]: https://cfp.twed.org/mk5/talk/QYDGPM/ "Grease: A Minimalistic Payment Channel Implementation for Monero"
