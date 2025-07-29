@@ -1,4 +1,5 @@
 #let pubOf(k, P) = { $#P = #k dot.op G$ }
+#let hashOf(alg, input) = { $H_(#alg)(#input)$ }
 
 #let bjj = $"BJJ"$
 #let ed = $"Ed"$
@@ -12,11 +13,12 @@
 #let Led = $L_ed$
 #let witness = $omega$
 
-
+// Baby Jubjub points
+#let PubBjj(k) = $Pi_#k$
 
 #let nomenclature = {
 
-  table(columns: 2, align: (left, center),
+  table(columns: 2, align: (left, left),
     table.header( [*Symbol*], [*Description*]),
     Gbjj, [Generator point for BabyJubJub curve],
     Ged, [Generator point for curve Ed25519],
@@ -41,7 +43,7 @@
       (v, [The peer playing the role of #s])
   }).flatten()
 
-table(columns: 2, align: (left, center),
+table(columns: 2, align: (left, left),
     table.header( [*Subscript*], [*Referent*]),
     bjj, [BabyJubJub curve],
     ed, [Curve Ed25519],
