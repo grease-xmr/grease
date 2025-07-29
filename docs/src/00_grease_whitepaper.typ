@@ -1,4 +1,5 @@
 #import "@preview/ilm:1.4.1": *
+#import "metadata/nomenclature.typ":*
 
 #let title = "Grease: A Private Payment Channel Protocol for Monero"
 #let author = "Grease Team"
@@ -15,9 +16,18 @@
   table-index: (enabled: true),
   listing-index: (enabled: true)
 )
-
-#import "metadata/front-matter.typ":format
-#show: format
+#show link: underline
 
 #include "01_introduction.typ"
 #include "02_circuits.typ"
+#include "03_limitations.typ"
+
+= Nomenclature
+
+== Symbols
+
+#nomenclature
+
+== Subscripts
+
+#subscripts

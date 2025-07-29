@@ -39,37 +39,28 @@ proof-of-concept Monero payment channel for Monero.
 
 === Enter Grease
 
-Grease is a proof-of-concept Monero payment channel that uses a ZK-rollup chain for off-chain state management.
+The Grease protocol is a new bi-directional payment channel design with unlimited lifetime for Monero. It is fully compatible with the current Monero implementation and is also fully compatible with the upcoming FCMP++ update.
 
-It aims to tackle the use cases that are exemplified by the following scenarios:
+Using the Grease protocol, two peers may trustlessly cooperate to share, divide and reclaim a common locked amount of Monero XMR while minimizing the online transaction costs and with minimal use of outside trusted third parties.
 
-==== Rapid point-of-sale
+The Grease protocol maintains all of Monero's security.
+No identifiable information about the peers' privately owned Monero wallets are shared between the peers. This means
+that there is no way that privacy can be compromised. Each channel lifecycle requires two Monero transactions, with
+effectively unlimited near-instant updates to the channel balance in between these two transactions. This dramatically
+improves the scalability of Monero.
 
-Alice is a customer of Bob's bar. Alice will be making multiple purchases throughout an evening. She opens a channel at
-the beginning of the evening with a certain amount of Monero, and can make instant purchases against it until she and Bob
-mutually close the channel at the end of the evening and the final settlement is recorded on the Monero chain.
+The Grease protocol is based on the original AuxChannel@aux-channel paper and MoNet@monet protocol. These papers
+introduced new cryptography primitives that are useful for trustlessly proving conformity by untrusted peers. These primitives are useful abstractly, but the means of implementation were based on innovative and non-standard cryptographic methods that have not gained the general acceptance of the cryptographic community. This may change in time, while the Grease protocol bypasses this limitation by the use of generally accepted methods for the primitives' implementation.
 
-==== Micro-transactions
-
-Bob owns a Monero-enabled arcade. Dave can open a channel and play dozens, or hundreds of games until his balance runs out.
-Each payment is instant and secure, does not bloat the Monero blockchain, and is completely private. Some games might offer
-rebate prizes which can be pushed straight back into the channel.
-
-==== Private and anonymous content consumption
-
-Erica's online newspaper utilizes a pay-per-view model. Instead of a monthly subscription fee, users open a channel with
-their maximum "reading budget" and instantly and seamlessly pay for each article they read. No accounts, no KYC and no email
-addresses are required. At the end of the month, users can close the channel to settle their bills, or default opt to continue
-their balance to the next month without closing the channel (and hence performing an on-chain swap with the associated XMR
-fees). That is to say that if Fred has read 100 articles at 0.0005 XMR each, and has sent 0.05 XMR down the channel, he can
-pay 0.05 XMR on-chain, and Erica pushes that amount back up the channel, effectively resetting the state for the new month.
-
-This provides the ability to have a combination of the use-or-lose minimum fee plus À la carte options which is standard
-in legacy subscription models.
+Every update and the final closure of the channel require an online interaction over the Grease network. In order to
+prevent the accidental or intentional violation of the protocol by a peer not interacting and thus jamming the channel
+closure, Grease introduces an external Key Escrow Service (KES). The KES needs to run on a stateful, logic- and
+time-aware platform. A decentralized zero-knowledge smart contract platform satisfies this requirement while also
+providing the privacy-focused ethos familiar to the Monero community.
 
 === Why does another chain have to be involved?
 
-Offline payment channels necessarily require a trustless state management mechanism. Typically, the scripting features for
+Offline payment channels necessarily _require_ a trustless state management mechanism. Typically, the scripting features for
 a given blockchain allow for this state to be managed directly. However, Monero's primary design goals are privacy and fungibility.
 Attaching state to UTXOs would create a heterogeneity that threatens these goals. (Fungibility is more important than specialty
 for maintaining privacy.)
@@ -82,14 +73,12 @@ The state does not have to be managed on the same chain though. Any place where 
 
 will suffice.
 
-The AuxChannel@aux-channel and Monet@monet papers, summarized in Sui's PhD thesis@sui23 provide a sketch of how this
-might be achieved, using Ethereum as the state management chain. However, by using Ethereum, the channel metadata,
-including the peer's public keys and the channel state (open, disputed) is scrutable by the public.
+The initial implementation uses the any Noir-compatible execution environment that supports the Barretenberg Plonky
+proving system, the Aztec blockchain being one candidate.
 
-Grease aims to improve on this by making the payment channel metadata private as well. Zero knowledge proofs provide a way
-to do this.
+The KES will act as third-party judge of disputes. At initialization, each peer provably encrypts a 2-of-2 secret shared to both the other peer and to the KES. Any one share does not have enough information to interfere with the channel's operations or violate security. In the case of a dispute the KES will decide which peer is in violation and then release its share of the violating peer's secret to the wronged peer. The wronged peer can then reconstruct the original secret. This secret will allow the wronged peer to simulate the missing online interaction of the violating peer, allowing the channel to close with the existing balance. Only willfully valid channel balances can be closed as there is no way to simulate false updates.
 
-== Design principles
+= Design principles
 
 Grease is a bidirectional two-party payment channel. This means that funds can flow in both directions, but in the vast
 majority of cases, funds will flow from one party (the client, or private peer) to the other (the merchant, or public peer).
@@ -110,10 +99,10 @@ Grease embraces this use case and optimizes the design and UX based on the follo
   funds after a predetermined time-out. In this case, the forcing party is usually the merchant since they have the
   greater incentive to do so in the case where a channel has been abandoned by the client.
 
-=== Anti-principles
+== Anti-principles
 
 The following design goals are explicitly _excluded_ from the Grease design:
 
 - Multi-hop channels. Multi-hop channels are probably _possible_ in Grease, but they are not a design goal.
-Taking the Lightning Network as the case study, CJ  #link("https://cfp.twed.org/mk5/talk/QYDGPM/")[argues] that the vast
+Taking the Lightning Network as the case study, CJ  argues@monerokon-grease that the vast
 majority of the utility of lightning is captured by bilateral channels, with a tiny fraction of the complexity.

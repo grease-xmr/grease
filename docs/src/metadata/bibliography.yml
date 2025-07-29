@@ -47,3 +47,16 @@ monet:
   date: 2022-07-10
   pages: 280-290
   url: https://eprint.iacr.org/2022/744.pdf
+monerokon-grease:
+  type: web
+  title: "Grease: A minimal Monero Payment Channel implementation for Monero"
+  author:
+    - CJ
+    - Sean Coughlin
+  url: https://cfp.twed.org/mk5/talk/QYDGPM/
+jeffro25:
+  type: misc
+  author:
+    - jeffro256
+  title: "Personal communication: Signature changes post-FCMP"
+  date: 2025-06-22
