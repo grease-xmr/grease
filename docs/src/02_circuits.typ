@@ -229,7 +229,6 @@ the peer in addition to the generated proofs while the private values are stored
       [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
       [$witness_i$], [Private], [The next private private key protecting access to close the payment channel (`witness_i`)],
       [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
-      [C], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
       [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
       [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
       [$Delta_ed$], [Private], [Optimization parameter (`response_div_BabyJubJub`)],
@@ -418,7 +417,8 @@ There are no outputs.
 
 === Summary
 
-The *VerifyFeldmanSecretShare_peer* operation is a verification protocol and is language independent. This operation is not redundant, in that the successful verification of the previous *FeldmanSecretShare_2_of_2* operation with the same publicly visible parameters implies that this operation will succeed, but the conditions are different.
+The *VerifyFeldmanSecretShare_KES* operation is a verification protocol and is language independent. This operation is
+not redundant, in that the successful verification of the previous *FeldmanSecretShare_2_of_2* operation with the same publicly visible parameters implies that this operation will succeed, but the conditions are different.
 
 This operation will be implemented by the KES in its own native implementation language where the successful verification of the previous *FeldmanSecretShare_2_of_2* operation cannot be assumed. As such, this operation will exist and can called independently of any other operations.
 
@@ -501,7 +501,7 @@ The scalar order of the Baby Jubjub curve is represented here by $L_bjj$.
 $
   Pi = kappa dot.c G_bjj \
   kappa_Phi = kappa dot.c Phi \
-  C = H_"blake2s" (kappa_Phi."x" || kappa_Phi."y") \
+  C = hashOf("blake2s", kappa_Phi."x" || kappa_Phi."y") \
   s = C mod L_bjj \
   sigma = chi - s mod L_bjj \
 $
