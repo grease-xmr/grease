@@ -25,7 +25,11 @@ async fn new_channel(world: &mut GreaseWorld, step: &Step, customer: String, mer
     let proposal =
         create_channel_proposal(customer, merchant, initial_balances).expect("Failed to create channel proposal");
     let customer_server = world.servers.get(&customer.name).expect("Customer server not found in the world");
-    let channel_name = customer_server.server.establish_new_channel(proposal.clone()).await.unwrap();
+    let channel_name = customer_server
+        .server
+        .establish_new_channel(proposal.clone(), &mut rand::rng())
+        .await
+        .expect("Failed to establish new channel");
     info!("Channel established: {channel_name}");
     world.current_channel = Some(channel_name.clone());
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

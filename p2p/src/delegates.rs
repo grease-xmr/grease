@@ -1,11 +1,13 @@
 use crate::message_types::NewChannelProposal;
 use crate::Client;
+use circuits::BBError;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    AdaptedSignature, Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey,
-    PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
+    AdaptedSignature, Comm0PrivateInputs, Comm0PublicInputs, GenericPoint, GenericScalar, KesProof,
+    PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof,
+    UpdateProofs,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
@@ -16,13 +18,29 @@ use thiserror::Error;
 use wallet::watch_only::WatchOnlyWallet;
 use wallet::{connect_to_rpc, Rpc};
 
-#[derive(Debug, Error)]
-#[error("Delegate error: {0}")]
-pub struct DelegateError(pub String);
+#[derive(Error, Debug)]
+pub enum DelegateError {
+    #[error("An error occurred while zkSNARK processing. {0}")]
+    BBError(#[from] BBError),
+    #[error("An error occurred. {0}")]
+    String(String),
+    #[error("NIZK DLEQ failed to verify")]
+    DLEQVerify,
+    #[error("Prover failed to verify its own proof")]
+    SelfVerify,
+    #[error("Failed to verify peer proof")]
+    Verify,
+}
 
 impl From<&str> for DelegateError {
     fn from(s: &str) -> Self {
-        DelegateError(s.to_string())
+        DelegateError::String(s.to_string())
+    }
+}
+
+impl From<String> for DelegateError {
+    fn from(value: String) -> Self {
+        DelegateError::String(value)
     }
 }
 
@@ -72,7 +90,8 @@ pub trait FundChannel {
 pub trait GreaseInitializer {
     fn generate_initial_proofs(
         &self,
-        inputs: Comm0PrivateInputs,
+        input_public: &Comm0PublicInputs,
+        input_private: &Comm0PrivateInputs,
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<Proofs0, DelegateError>> + Send;
 
@@ -82,6 +101,8 @@ pub trait GreaseInitializer {
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
+
+//----------------------------------------   Commitment TX0 ------------------------------------------------------------
 
 /// Co-ordinate with the L2 to produce a signature from the KES that it has been set up correctly.
 pub trait KesProver {
@@ -98,7 +119,7 @@ pub trait KesProver {
         channel_name: String,
         customer_key: PartialEncryptedKey,
         merchant_key: PartialEncryptedKey,
-        kes_public_key: GenericPoint,
+        kes_public_key: &GenericPoint,
         proofs: KesProof,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
@@ -185,10 +206,12 @@ impl ProposalVerifier for DummyDelegate {
 impl GreaseInitializer for DummyDelegate {
     async fn generate_initial_proofs(
         &self,
-        _in: Comm0PrivateInputs,
+        _input_public: &Comm0PublicInputs,
+        _input_private: &Comm0PrivateInputs,
         metadata: &ChannelMetadata,
     ) -> Result<Proofs0, DelegateError> {
         info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
+
         Ok(Proofs0::default())
     }
 
@@ -198,6 +221,7 @@ impl GreaseInitializer for DummyDelegate {
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
+
         Ok(())
     }
 }
@@ -219,14 +243,14 @@ impl KesProver for DummyDelegate {
         channel_name: String,
         _c_key: PartialEncryptedKey,
         _m_key: PartialEncryptedKey,
-        _kes_pubkey: GenericPoint,
+        _kes_pubkey: &GenericPoint,
         proofs: KesProof,
     ) -> Result<(), DelegateError> {
         if proofs.proof == format!("KesProof|{channel_name}").into_bytes() {
             info!("DummyDelegate: KES proofs verified successfully");
             Ok(())
         } else {
-            Err(DelegateError("Invalid KES proofs".to_string()))
+            Err(DelegateError::String("Invalid KES proofs".to_string()))
         }
     }
 }
@@ -265,10 +289,10 @@ impl FundChannel for DummyDelegate {
             "Registering transaction watcher for channel {name} at address: {}",
             self.rpc_address
         );
-        let rpc = connect_to_rpc(&self.rpc_address).await.map_err(|e| DelegateError(e.to_string()))?;
-        let height = rpc.get_height().await.map_err(|e| DelegateError(e.to_string()))? as u64;
+        let rpc = connect_to_rpc(&self.rpc_address).await.map_err(|e| DelegateError::String(e.to_string()))?;
+        let height = rpc.get_height().await.map_err(|e| DelegateError::String(e.to_string()))? as u64;
         let mut wallet = WatchOnlyWallet::new(rpc, private_view_key, public_spend_key, birthday)
-            .map_err(|e| DelegateError(e.to_string()))?;
+            .map_err(|e| DelegateError::String(e.to_string()))?;
         info!("Watch-only wallet created with birthday {birthday:?}. Current height is {height}");
         let mut interval = tokio::time::interval(poll_interval);
         let mut client = client.clone();
@@ -350,7 +374,7 @@ impl Updater for DummyDelegate {
             );
             Ok(())
         } else {
-            Err(DelegateError("Invalid update proof".to_string()))
+            Err(DelegateError::String("Invalid update proof".to_string()))
         }
     }
 

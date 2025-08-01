@@ -14,6 +14,7 @@ use crate::errors::WalletError;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::AdaptedSignature;
+use libgrease::crypto::zk_objects::GenericPoint;
 use libgrease::monero::data_objects::MultisigWalletData;
 use log::*;
 use modular_frost::dkg::musig::musig;
@@ -310,7 +311,7 @@ impl MultisigWallet {
         Ok(())
     }
 
-    pub fn verify_adapted_signature(&self, adapted: &AdaptedSignature) -> Result<(), WalletError> {
+    pub fn verify_adapted_signature(&self, _adapted: &AdaptedSignature) -> Result<(), WalletError> {
         // TODO: Implement verification logic for adapted signatures
         Ok(())
     }
@@ -319,13 +320,17 @@ impl MultisigWallet {
         self.shared_spend_key.clone()
     }
 
-    pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptedSignature, WalletError> {
+    pub fn adapt_signature(
+        &self,
+        witness: &Curve25519Secret,
+        statement: &GenericPoint,
+    ) -> Result<AdaptedSignature, WalletError> {
         let real_sig = self
             .my_signing_share()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
         let real_sig = signature_share_to_secret(real_sig);
         let adapted = real_sig.as_scalar() + witness.as_scalar();
-        Ok(AdaptedSignature(Curve25519Secret::from(adapted)))
+        Ok(AdaptedSignature::new(&Curve25519Secret::from(adapted), statement))
     }
 
     pub fn bytes_to_signature_share(&self, bytes: &[u8]) -> Result<SignatureShare<Ed25519>, WalletError> {
@@ -354,12 +359,12 @@ impl MultisigWallet {
         Ok(sig)
     }
 
-    pub fn sign(&mut self, peer_share: SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
+    pub fn sign(&mut self, peer_share: &SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
         if self.final_signer.is_none() || self.shared_spend_key.is_none() {
             return Err(WalletError::KeyError("Final signer or shares not initialized".into()));
         }
         let machine = self.final_signer.take().unwrap();
-        let shares = self.assign_shares(vec![peer_share]);
+        let shares = self.assign_shares(vec![peer_share.clone()]);
         let tx = machine.complete(shares)?;
         debug!("Final signing completed");
         Ok(tx)

@@ -42,6 +42,8 @@ pub fn create_channel_proposal(
         .with_closing_address(merchant.config.refund_address.expect("Merchant refund address is not set"))
         .with_key_id(1)
         .with_kes_public_key(merchant.config.kes_public_key.as_ref().expect("No public key for KES specified").clone())
+        .with_public_key(merchant.config.public_key.as_ref().expect("No public key specified").clone())
+        .with_nonce(merchant.config.nonce.as_ref().expect("No nonce specified").clone())
         .with_user_label(merchant.config.user_label.as_ref().expect("User label is not set").clone())
         .with_initial_balances(initial_balances)
         .build()

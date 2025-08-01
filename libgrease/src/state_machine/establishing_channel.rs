@@ -1,6 +1,7 @@
 use crate::amount::MoneroAmount;
 use crate::channel_metadata::ChannelMetadata;
-use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
+use crate::crypto::zk_objects::Comm0PublicInputs;
+use crate::crypto::zk_objects::{KesProof, PeerProof0, Proofs0, PublicProof0, ShardInfo};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::error::LifeCycleError;
@@ -11,6 +12,7 @@ use log::*;
 use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +21,7 @@ pub struct EstablishingState {
     pub(crate) multisig_wallet: Option<MultisigWalletData>,
     pub(crate) shards: Option<ShardInfo>,
     pub(crate) my_proof0: Option<Proofs0>,
-    pub(crate) peer_proof0: Option<PublicProof0>,
+    pub(crate) peer_proof0: Option<PeerProof0>,
     pub(crate) funding_transaction_ids: HashMap<TransactionId, TransactionRecord>,
     pub(crate) kes_proof: Option<KesProof>,
     /// Data used to watch for the funding transaction. Implementation agnostic.
@@ -122,9 +124,9 @@ impl EstablishingState {
         }
     }
 
-    pub fn save_peer_proof0(&mut self, proof: PublicProof0) {
+    pub fn save_peer_proof0(&mut self, proof: PublicProof0, public_input: Comm0PublicInputs) {
         debug!("Saving peer's initial witness proof");
-        let old = self.peer_proof0.replace(proof);
+        let old = self.peer_proof0.replace(PeerProof0::new(proof, public_input));
         if old.is_some() {
             warn!("Peer's initial witness proof was already set and has been replaced.");
         }
