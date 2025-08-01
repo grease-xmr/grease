@@ -32,6 +32,8 @@ pub enum InvalidProposal {
     ZeroTotalValue,
     #[error("The merchant's public key in the proposal does not match the one that was expected")]
     MismatchedMerchantPublicKey,
+    #[error("The merchant's nonce in the proposal does not match the one that was expected")]
+    MismatchedMerchantNonce,
     #[error("The customer's public key in the proposal does not match the one that was expected")]
     MismatchedCustomerPublicKey,
     #[error("The KES's public key in the proposal does not match the one that was expected")]

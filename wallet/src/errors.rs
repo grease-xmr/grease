@@ -1,3 +1,4 @@
+use libgrease::crypto::keys::KeyError;
 use modular_frost::FrostError;
 use monero_rpc::RpcError;
 use monero_wallet::send::SendError;
@@ -39,4 +40,10 @@ pub enum WalletError {
     TooBig,
     #[error("Transaction was invalid due to Too Few Outputs")]
     TooFewOutputs,
+}
+
+impl From<KeyError> for WalletError {
+    fn from(value: KeyError) -> Self {
+        WalletError::KeyError(value.to_string())
+    }
 }

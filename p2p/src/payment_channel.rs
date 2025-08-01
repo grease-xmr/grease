@@ -1,7 +1,7 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroDelta;
-use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
+use libgrease::crypto::zk_objects::{KesProof, PeerProof0, Proofs0, ShardInfo};
 use libgrease::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
@@ -253,9 +253,9 @@ impl PaymentChannel {
         })
     }
 
-    fn on_peer_proof0(&mut self, peer_proof: PublicProof0) -> Result<(), LifeCycleError> {
+    fn on_peer_proof0(&mut self, peer_proof: PeerProof0) -> Result<(), LifeCycleError> {
         self.update_establishing(|mut establishing| {
-            establishing.save_peer_proof0(peer_proof);
+            establishing.save_peer_proof0(peer_proof.public_proof0, peer_proof.comm0_public_inputs);
             match establishing.next() {
                 Ok(established) => {
                     debug!("⚡️  Transitioned to Established state after receiving peer's proof0");
@@ -476,8 +476,11 @@ impl PaymentChannels {
 mod test {
     use crate::{ContactInfo, PaymentChannel};
     use blake2::Blake2b512;
+    use circuits::*;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+    use libgrease::crypto::zk_objects::random_251_bits;
+    use libgrease::crypto::zk_objects::PeerProof0;
     use libgrease::crypto::zk_objects::{
         AdaptedSignature, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo,
         UpdateProofs,
@@ -490,6 +493,8 @@ mod test {
     };
     use libp2p::{Multiaddr, PeerId};
     use monero::Address;
+    use num_bigint::BigUint;
+    use rand::{CryptoRng, RngCore};
     use std::str::FromStr;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
@@ -498,28 +503,48 @@ mod test {
     const BOB_ADDRESS: &str =
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
-    pub fn new_channel_state() -> NewChannelState {
+    pub fn new_channel_state<R: CryptoRng + RngCore>(rng: &mut R) -> NewChannelState {
+        let (_, public_key_self) = make_keypair_bjj(rng);
+        let (_, public_key_peer) = make_keypair_bjj(rng);
+        let (_, public_key_kes) = make_keypair_bjj(rng);
+        let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
+        let nonce_peer = BigUint::from_bytes_be(&random_251_bits(rng));
+
         // All this info is known, or can be scanned in from a QR code etc
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
         let initial_state = initial_state
-            .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
+            .with_kes_public_key(public_key_kes)
             .with_customer_initial_balance(MoneroAmount::from(1000))
             .with_merchant_initial_balance(MoneroAmount::default())
             .with_my_user_label("me")
             .with_peer_label("you")
             .with_customer_closing_address(Address::from_str(ALICE_ADDRESS).unwrap())
             .with_merchant_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
-            .build::<Blake2b512>()
+            .with_public_key_self(public_key_self.into())
+            .with_nonce_self(nonce_self.into())
+            .with_public_key_peer(public_key_peer.into())
+            .with_nonce_peer(nonce_peer.into())
+            .build::<Blake2b512, R>(rng)
             .expect("Failed to build initial state");
         initial_state
     }
     #[test]
     fn happy_path() {
+        let rng = &mut rand::rng();
         env_logger::try_init().ok();
-        let peer = ContactInfo { name: "Alice".to_string(), peer_id: PeerId::random(), address: Multiaddr::empty() };
+        let (_, public_key_self) = make_keypair_bjj(rng);
+        let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
+
+        let peer = ContactInfo {
+            name: "Alice".to_string(),
+            peer_id: PeerId::random(),
+            address: Multiaddr::empty(),
+            public_key: public_key_self.into(),
+            nonce: Some(nonce_self.into()),
+        };
         let some_pub =
             Curve25519PublicKey::from_hex("61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016").unwrap();
-        let state = new_channel_state();
+        let state = new_channel_state(&mut rand::rng());
         let proposal = state.for_proposal();
         let state = state.to_channel_state();
         let mut channel = PaymentChannel::new(peer, state);
@@ -548,9 +573,15 @@ mod test {
         };
         let event = LifeCycleEvent::KesShards(Box::new(ShardInfo { my_shards, their_shards }));
         channel.handle_event(event).unwrap();
-        let proof0 =
-            Proofs0 { public_outputs: Default::default(), private_outputs: Default::default(), proofs: vec![] };
+        let proof0 = Proofs0 {
+            public_input: Default::default(),
+            public_outputs: Default::default(),
+            private_outputs: Default::default(),
+            proofs: vec![],
+        };
         let peer_proof0 = proof0.public_only();
+        let public_input = proof0.public_input.clone();
+        let peer_proof0: PeerProof0 = PeerProof0::new(peer_proof0, public_input);
         let event = LifeCycleEvent::MyProof0Generated(Box::new(proof0));
         channel.handle_event(event).unwrap();
         let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof0));
@@ -576,10 +607,17 @@ mod test {
             },
             proof: b"my_update_proof".to_vec(),
         };
+
+        let mut rng = &mut rand::rng();
+        let (offset_self, statement_self) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+        let offset_self = Curve25519Secret::from_generic_scalar(&offset_self.into()).unwrap();
+        let (offset_peer, statement_peer) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+        let offset_peer = Curve25519Secret::from_generic_scalar(&offset_peer.into()).unwrap();
+
         let info = UpdateRecord {
             my_signature: b"my_signature".to_vec(),
-            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
-            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            my_adapted_signature: AdaptedSignature::new(&offset_self, &statement_self.into()),
+            peer_adapted_signature: AdaptedSignature::new(&offset_peer, &statement_peer.into()),
             my_preprocess: b"my_prepared_info".to_vec(),
             peer_preprocess: b"peer_prepared_info".to_vec(),
             my_proofs,

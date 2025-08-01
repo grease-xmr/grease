@@ -199,7 +199,7 @@ impl InteractiveApp {
         let proposal = self.create_channel_proposal(oob_info, address)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
-        let name = self.server.establish_new_channel(proposal.clone()).await?;
+        let name = self.server.establish_new_channel(proposal.clone(), &mut rand::rng()).await?;
         self.save_channels().await?;
         info!("Channels saved.");
         self.current_channel = Some(name.clone());
@@ -324,6 +324,13 @@ impl InteractiveApp {
             .config
             .kes_public_key()
             .ok_or_else(|| anyhow!("No KES public key found. Is `kes_public_key` configured in the config file?"))?;
+        let public_key = self
+            .config
+            .public_key()
+            .ok_or_else(|| anyhow!("No public key found. Is `public_key` configured in the config file?"))?;
+        //Note: do not share private_key
+        let nonce =
+            self.config.nonce().ok_or_else(|| anyhow!("No nonce found. Is `nonce` configured in the config file?"))?;
         let label = self
             .config
             .user_label()
@@ -337,6 +344,8 @@ impl InteractiveApp {
         let seed_info = ChannelSeedBuilder::default()
             .with_key_id(index)
             .with_kes_public_key(kes)
+            .with_public_key(public_key)
+            .with_nonce(nonce)
             .with_initial_balances(balances)
             .with_user_label(channel_id)
             .with_closing_address(address)

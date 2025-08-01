@@ -3,6 +3,7 @@
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use libgrease::crypto::keys::Curve25519Secret;
+use libgrease::crypto::zk_objects::{GenericPoint, GenericScalar};
 use libp2p::Multiaddr;
 use monero::Address;
 use serde::{Deserialize, Serialize};
@@ -76,7 +77,13 @@ pub struct GlobalOptions {
     /// The address other parties can use to contact this identity on the internet.
     pub server_address: Option<Multiaddr>,
     /// The public key of the Key Escrow Service (KES).
-    pub kes_public_key: Option<String>,
+    pub kes_public_key: Option<GenericPoint>,
+    /// The public key of the user for interacting with the KES.
+    pub public_key: Option<GenericPoint>,
+    /// The private key of the user for interacting with the KES.
+    pub private_key: Option<GenericScalar>,
+    // A nonce used for channel state consistency.
+    pub nonce: Option<GenericScalar>,
     /// A name, or label that will be inserted into every channel you are part of.
     /// Make it descriptive and unique.
     pub user_label: Option<String>,
@@ -110,9 +117,24 @@ impl GlobalOptions {
         self.server_address.clone()
     }
 
-    /// Returns a clone of the configured Curve25519 public key, if set.
-    pub fn kes_public_key(&self) -> Option<String> {
+    /// Returns a clone of the configured BabyJubjub public key, if set.
+    pub fn kes_public_key(&self) -> Option<GenericPoint> {
         self.kes_public_key.clone()
+    }
+
+    /// Returns a clone of the configured BabyJubjub public key, if set.
+    pub fn public_key(&self) -> Option<GenericPoint> {
+        self.public_key.clone()
+    }
+
+    /// Returns a clone of the configured BabyJubjub private key, if set.
+    pub fn private_key(&self) -> Option<GenericScalar> {
+        self.private_key.clone()
+    }
+
+    /// Returns a clone of the configured nonce, if set.
+    pub fn nonce(&self) -> Option<GenericScalar> {
+        self.nonce.clone()
     }
 
     /// Returns the address to which channel refunds will be sent.

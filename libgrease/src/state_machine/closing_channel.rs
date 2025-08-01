@@ -2,7 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::keys::{Curve25519Secret, KeyError};
-use crate::crypto::zk_objects::{GenericScalar, KesProof, Proofs0, PublicProof0, ShardInfo};
+use crate::crypto::zk_objects::{GenericScalar, KesProof, PeerProof0, Proofs0, ShardInfo};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
@@ -27,7 +27,7 @@ pub struct ClosingChannelState {
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     pub(crate) peer_witness: GenericScalar,
     pub(crate) my_proof0: Proofs0,
-    pub(crate) peer_proof0: PublicProof0,
+    pub(crate) peer_proof0: PeerProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) last_update: UpdateRecord,
     pub(crate) final_tx: Option<TransactionId>,

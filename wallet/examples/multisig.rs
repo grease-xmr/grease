@@ -4,6 +4,7 @@ use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use wallet::errors::WalletError;
+use wallet::multisig_wallet::signature_share_to_bytes;
 use wallet::multisig_wallet::MultisigWallet;
 use wallet::publish_transaction;
 use wallet::watch_only::WatchOnlyWallet;
@@ -104,6 +105,13 @@ async fn main() -> Result<(), WalletError> {
     wallet_b.partial_sign(&wallet_a_pp)?;
     println!("Partial Signing completed for Bob\n");
 
+    {
+        // Test signature conversion for ss_a
+        let ss_a = wallet_a.my_signing_share().unwrap();
+        let ss_a_bytes = signature_share_to_bytes(&ss_a);
+        let _ = wallet_a.bytes_to_signature_share(&ss_a_bytes)?;
+    }
+
     // Serialize and restore the wallet.
     info!("Se- and Deserializing Alice's wallet");
     let data = wallet_a.serializable();
@@ -116,11 +124,14 @@ async fn main() -> Result<(), WalletError> {
 
     info!("Creating adaptor signatures for Alice and Bob");
     // Create adaptor signature
-    let offset_b = Curve25519Secret::random(&mut rand::rng());
-    let adapted_b = wallet_b.adapt_signature(&offset_b)?;
+    let mut rng = &mut rand::rng();
+    let (offset_b, statement_b) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+    let offset_b = Curve25519Secret::from_generic_scalar(&offset_b.into())?;
+    let adapted_b = wallet_b.adapt_signature(&offset_b, &statement_b.into())?;
 
-    let offset_a = Curve25519Secret::random(&mut rand::rng());
-    let adapted_a = wallet_a.adapt_signature(&offset_a)?;
+    let (offset_a, statement_a) = circuits::make_keypair_ed25519_bjj_order(&mut rng);
+    let offset_a = Curve25519Secret::from_generic_scalar(&offset_a.into())?;
+    let adapted_a = wallet_a.adapt_signature(&offset_a, &statement_a.into())?;
 
     // Alice signs with an adaptor signature
     wallet_b.verify_adapted_signature(&adapted_a)?;
@@ -129,11 +140,10 @@ async fn main() -> Result<(), WalletError> {
     // Recreate the original signature share
     let ss_a = wallet_b.extract_true_signature(&adapted_a, &offset_a)?;
     let ss_b = wallet_a.extract_true_signature(&adapted_b, &offset_b)?;
-
-    let tx_a = wallet_a.sign(ss_b)?;
+    let tx_a = wallet_a.sign(&ss_b)?;
     println!("Alice's transaction signed successfully");
 
-    let tx_b = wallet_b.sign(ss_a)?;
+    let tx_b = wallet_b.sign(&ss_a)?;
     println!("Bob's transaction signed successfully");
 
     println!("Wallet transaction from Alice: {}", hex::encode(tx_a.hash()));

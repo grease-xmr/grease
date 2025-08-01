@@ -1,34 +1,103 @@
 use crate::crypto::keys::Curve25519Secret;
 use crate::monero::data_objects::MultisigSplitSecrets;
+use circuits::*;
+use curve25519_dalek::montgomery::MontgomeryPoint;
 use curve25519_dalek::Scalar;
 use hex::FromHexError;
+use num_bigint::BigUint;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// A curve-agnostic representation of a scalar.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(PartialEq, Debug, Clone, Copy, Default, Deserialize, Serialize)]
 pub struct GenericScalar(
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")]
     pub  [u8; 32],
 );
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AdaptedSignature(pub Curve25519Secret);
+
+pub struct AdaptedSignature {
+    pub adapted_signature: Curve25519Secret,
+    pub statement: GenericPoint,
+}
 
 impl AdaptedSignature {
+    pub fn new(adapted_signature: &Curve25519Secret, statement: &GenericPoint) -> AdaptedSignature {
+        AdaptedSignature { adapted_signature: adapted_signature.clone(), statement: statement.clone() }
+    }
     pub fn as_scalar(&self) -> &Scalar {
-        self.0.as_scalar()
+        self.adapted_signature.as_scalar()
     }
 }
 
 impl GenericScalar {
     pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
-        GenericScalar(random_256_bits(rng))
+        GenericScalar(random_251_bits(rng))
+    }
+
+    /// Convert a hex-encoded string to a GenericScalar.
+    pub fn from_hex(hex: &str) -> Result<Self, FromHexError> {
+        let mut bytes = [0u8; 32];
+        hex::decode_to_slice(hex, &mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
+
+impl Into<GenericScalar> for BigUint {
+    fn into(self) -> GenericScalar {
+        let mut g = [0u8; 32];
+
+        g.copy_from_slice(&right_pad_bytes_32(&self.to_bytes_le()));
+
+        GenericScalar { 0: g }
+    }
+}
+
+impl Into<GenericScalar> for &BigUint {
+    fn into(self) -> GenericScalar {
+        let mut g = [0u8; 32];
+
+        g.copy_from_slice(&self.to_bytes_le());
+
+        GenericScalar { 0: g }
+    }
+}
+
+impl Into<BigUint> for GenericScalar {
+    fn into(self) -> BigUint {
+        BigUint::from_bytes_le(&self.0)
+    }
+}
+
+impl Into<BigUint> for &GenericScalar {
+    fn into(self) -> BigUint {
+        BigUint::from_bytes_le(&self.0)
+    }
+}
+
+impl Into<GenericScalar> for [u8; 32] {
+    fn into(self) -> GenericScalar {
+        let mut g = [0u8; 32];
+
+        g.copy_from_slice(&self);
+
+        GenericScalar { 0: g }
+    }
+}
+
+impl Into<[u8; 32]> for GenericScalar {
+    fn into(self) -> [u8; 32] {
+        let mut g = [0u8; 32];
+
+        g.copy_from_slice(&self.0);
+
+        g
     }
 }
 
 /// A curve-agnostic representation of a point.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 pub struct GenericPoint(
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::array_from_hex")] [u8; 32],
 );
@@ -42,7 +111,70 @@ impl GenericPoint {
     }
 
     pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
-        GenericPoint(random_256_bits(rng))
+        GenericPoint(random_251_bits(rng))
+    }
+}
+
+impl Into<GenericPoint> for [u8; 32] {
+    fn into(self) -> GenericPoint {
+        GenericPoint { 0: self }
+    }
+}
+
+impl Into<GenericPoint> for babyjubjub_rs::Point {
+    fn into(self) -> GenericPoint {
+        GenericPoint { 0: self.compress() }
+    }
+}
+
+impl TryFrom<GenericPoint> for babyjubjub_rs::Point {
+    type Error = String;
+
+    fn try_from(value: GenericPoint) -> Result<babyjubjub_rs::Point, Self::Error> {
+        babyjubjub_rs::decompress_point(value.0)
+    }
+}
+
+impl TryFrom<&GenericPoint> for babyjubjub_rs::Point {
+    type Error = String;
+
+    fn try_from(value: &GenericPoint) -> Result<babyjubjub_rs::Point, Self::Error> {
+        babyjubjub_rs::decompress_point(value.0)
+    }
+}
+
+impl Into<MontgomeryPoint> for GenericPoint {
+    fn into(self) -> MontgomeryPoint {
+        MontgomeryPoint(self.0)
+    }
+}
+
+impl Into<GenericPoint> for MontgomeryPoint {
+    fn into(self) -> GenericPoint {
+        GenericPoint(self.0)
+    }
+}
+
+impl TryFrom<&str> for GenericPoint {
+    type Error = FromHexError;
+
+    fn try_from(value: &str) -> Result<GenericPoint, Self::Error> {
+        let mut bytes = [0u8; 32];
+        hex::decode_to_slice(value, &mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Comm0PublicInputs {
+    /// 𝛎_ꞷ0 - Random public value
+    pub nonce_peer: GenericScalar,
+    pub pubkey_peer: GenericPoint,
+}
+
+impl Comm0PublicInputs {
+    pub fn new(nonce_peer: &GenericScalar, pubkey_peer: &GenericPoint) -> Self {
+        Comm0PublicInputs { nonce_peer: nonce_peer.clone(), pubkey_peer: pubkey_peer.clone() }
     }
 }
 
@@ -51,11 +183,11 @@ pub struct Comm0PrivateInputs {
     /// 𝛎_ꞷ0 - Random blinding value
     pub random_blinding: GenericScalar,
     /// Random value
-    pub a1: GenericPoint,
+    pub a1: GenericScalar,
     /// 𝛎_1 - Random value
-    pub r1: GenericPoint,
+    pub r1: GenericScalar,
     /// 𝛎_2 - Random value
-    pub r2: GenericPoint,
+    pub r2: GenericScalar,
     /// 𝛎_DLEQ - Random blinding value for DLEQ proof
     pub blinding_dleq: GenericScalar,
 }
@@ -84,6 +216,10 @@ pub struct Comm0PublicOutputs {
     pub rho_bjj: GenericScalar,
     /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (response_div_ed25519).
     pub rho_ed: GenericScalar,
+    /// **R_BabyJubjub** - The ... on the Baby Jubjub curve (R1).
+    pub R1: GenericPoint,
+    /// **R_Ed25519** - The ... on the Ed25519 curve (R2).
+    pub R2: GenericPoint,
 }
 
 /// The proof outputs that are stored, but not shared with the peer.
@@ -138,6 +274,7 @@ pub struct PrivateUpdateOutputs {
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct Proofs0 {
+    pub public_input: Comm0PublicInputs,
     pub public_outputs: Comm0PublicOutputs,
     pub private_outputs: Comm0PrivateOutputs,
     pub proofs: Vec<u8>,
@@ -145,10 +282,25 @@ pub struct Proofs0 {
 
 impl Proofs0 {
     pub fn public_only(&self) -> PublicProof0 {
-        PublicProof0 { public_outputs: self.public_outputs.clone(), proofs: self.proofs.clone() }
+        PublicProof0 {
+            public_inputs: self.public_input.clone(),
+            public_outputs: self.public_outputs.clone(),
+            proofs: self.proofs.clone(),
+        }
     }
 }
 
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
+pub struct PeerProof0 {
+    pub public_proof0: PublicProof0,
+    pub comm0_public_inputs: Comm0PublicInputs,
+}
+
+impl PeerProof0 {
+    pub fn new(public_proof0: PublicProof0, comm0_public_inputs: Comm0PublicInputs) -> PeerProof0 {
+        PeerProof0 { public_proof0, comm0_public_inputs }
+    }
+}
 /// The output of the ZK proof for a channel update.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct UpdateProofs {
@@ -173,6 +325,7 @@ pub struct PublicUpdateProof {
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct PublicProof0 {
+    pub public_inputs: Comm0PublicInputs,
     pub public_outputs: Comm0PublicOutputs,
     #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
     pub proofs: Vec<u8>,
@@ -197,15 +350,19 @@ pub struct ShardInfo {
 pub fn generate_txc0_nonces<R: CryptoRng + RngCore>(rng: &mut R) -> Comm0PrivateInputs {
     Comm0PrivateInputs {
         random_blinding: GenericScalar::random(rng),
-        a1: GenericPoint::random(rng),
-        r1: GenericPoint::random(rng),
-        r2: GenericPoint::random(rng),
+        a1: GenericScalar::random(rng),
+        r1: GenericScalar::random(rng),
+        r2: GenericScalar::random(rng),
         blinding_dleq: GenericScalar::random(rng),
     }
 }
 
-pub fn random_256_bits<R: CryptoRng + RngCore>(rng: &mut R) -> [u8; 32] {
+pub fn random_251_bits<R: CryptoRng + RngCore>(rng: &mut R) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rng.fill_bytes(&mut bytes);
+
+    //The 251 bits are in little endian format, so snip the top 5 bits from the last byte
+    bytes[31] = 0x1F & bytes[31];
+
     bytes
 }

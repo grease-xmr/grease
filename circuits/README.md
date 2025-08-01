@@ -81,6 +81,21 @@ bb verify -v -k ./target/vk/vkUpdate.key -p ./target/proof/proofUpdate.key   # v
 Hint: If you get a `bad_alloc` error, make sure that the `-k` and `-p` paths point to the proof and verification key 
 _files_ and not their enclosing folders.
 
+### Integrated
+```bash
+rm -rf target && \
+nargo compile --workspace && \
+nargo execute -p Prover.toml --workspace && \
+mkdir target/vk && \
+bb write_vk -b ./target/Grease.json -o ./target/vk/vk.key -v && \
+bb write_vk -b ./target/GreaseUpdate.json -o ./target/vk/vkUpdate.key -v && \
+mkdir target/proof && \
+bb prove -b ./target/Grease.json -w ./target/Grease.gz -o ./target/proof/proof.key -v && \
+bb prove -b ./target/GreaseUpdate.json -w ./target/GreaseUpdate.gz -o ./target/proof/proofUpdate.key -v && \
+bb verify -v -k ./target/vk/vk.key -p ./target/proof/proof.key && \
+bb verify -v -k ./target/vk/vkUpdate.key -p ./target/proof/proofUpdate.key
+```
+
 ## Circuit costs
 
 | Stage      | Gates      | Proof size |

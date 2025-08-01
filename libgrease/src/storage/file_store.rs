@@ -61,7 +61,7 @@ mod test {
         fn inner() -> Result<(), (ChannelState, LifeCycleError)> {
             let path = PathBuf::from("./test_data");
             let mut store = FileStore::new(path).expect("directory to exist");
-            let state = new_channel_state().to_channel_state();
+            let state = new_channel_state(&mut rand::rng()).to_channel_state();
             let name = state.name();
             store.write_channel(&state).expect("Failed to write channel");
             let _loaded = store.load_channel(&name).expect("Failed to load New channel");

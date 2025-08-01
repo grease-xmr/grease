@@ -1,3 +1,4 @@
+use libgrease::crypto::zk_objects::{GenericPoint, GenericScalar};
 use libp2p::identity::Keypair;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
@@ -23,20 +24,42 @@ pub struct ConversationIdentity {
     peer_id: PeerId,
     /// The address other parties can use to dial this identity.
     address: Multiaddr,
+    public_key: GenericPoint,
+    private_key: GenericScalar, // This is the private key used for payment channels, not the keypair secret key.
+    nonce: GenericScalar,       // A nonce used for channel state consistency.
 }
 
 impl ConversationIdentity {
     /// Create a new identity with the given id and keypair.
     /// The peer id is derived from the public key.
-    pub fn random_with_id(id: impl Into<String>, addr: impl Into<Multiaddr>) -> Self {
+    pub fn random_with_id(
+        id: impl Into<String>,
+        addr: impl Into<Multiaddr>,
+        public_key: impl Into<GenericPoint>,
+        private_key: impl Into<GenericScalar>,
+        nonce: impl Into<GenericScalar>,
+    ) -> Self {
         let keypair = Keypair::generate_ed25519();
         let peer_id = keypair.public().to_peer_id();
-        ConversationIdentity { id: id.into(), keypair, peer_id, address: addr.into() }
+        ConversationIdentity {
+            id: id.into(),
+            keypair,
+            peer_id,
+            address: addr.into(),
+            public_key: public_key.into(),
+            private_key: private_key.into(),
+            nonce: nonce.into(),
+        }
     }
 
     /// Create a new identity with a random id and keypair.
-    pub fn random(addr: impl Into<Multiaddr>) -> Self {
-        Self::random_with_id(random_name(), addr)
+    pub fn random(
+        addr: impl Into<Multiaddr>,
+        public_key: impl Into<GenericPoint>,
+        private_key: impl Into<GenericScalar>,
+        nonce: impl Into<GenericScalar>,
+    ) -> Self {
+        Self::random_with_id(random_name(), addr, public_key, private_key, nonce)
     }
 
     pub fn id(&self) -> &str {
@@ -64,6 +87,30 @@ impl ConversationIdentity {
 
     pub fn address(&self) -> &Multiaddr {
         &self.address
+    }
+
+    pub fn set_public_key(&mut self, public_key: GenericPoint) {
+        self.public_key = public_key;
+    }
+
+    pub fn public_key(&self) -> &GenericPoint {
+        &self.public_key
+    }
+
+    pub fn set_private_key(&mut self, private_key: GenericScalar) {
+        self.private_key = private_key;
+    }
+
+    pub fn private_key(&self) -> &GenericScalar {
+        &self.private_key
+    }
+
+    pub fn set_nonce(&mut self, nonce: GenericScalar) {
+        self.nonce = nonce;
+    }
+
+    pub fn nonce(&self) -> &GenericScalar {
+        &self.nonce
     }
 
     pub fn take_keypair(self) -> Keypair {
@@ -109,7 +156,13 @@ impl ConversationIdentity {
     ///
     /// The address must be set for this to return a contact sheet.
     pub fn contact_info(&self) -> ContactInfo {
-        ContactInfo { name: self.id.clone(), peer_id: self.peer_id, address: self.dial_address() }
+        ContactInfo {
+            name: self.id.clone(),
+            peer_id: self.peer_id,
+            address: self.dial_address(),
+            public_key: self.public_key,
+            nonce: Some(self.nonce),
+        }
     }
 
     /// Return an internal consistency check, that the Peer Id corresponds to the public key.
@@ -144,6 +197,8 @@ pub struct ContactInfo {
     #[serde(serialize_with = "serialize_peer", deserialize_with = "deserialize_peer")]
     pub peer_id: PeerId,
     pub address: Multiaddr,
+    pub public_key: GenericPoint,
+    pub nonce: Option<GenericScalar>,
 }
 
 impl ContactInfo {
@@ -293,6 +348,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use circuits::make_keypair_bjj;
     use log::info;
     use std::str::FromStr;
     use tempfile::TempPath;
@@ -301,7 +357,10 @@ mod test {
     fn test_identity_save_load_yml() {
         env_logger::try_init().ok();
         let addr = Multiaddr::from_str("/ip4/127.0.0.1/tcp/23001").expect("invalid valid address");
-        let identity = ConversationIdentity::random(addr);
+        let mut rng = rand::rng();
+        let (private_key, public_key) = make_keypair_bjj(&mut rng);
+        let nonce = GenericScalar::random(&mut rng);
+        let identity = ConversationIdentity::random(addr, public_key, private_key, nonce);
         let tmp = TempPath::from_path("test_id.yml");
         let s = identity.to_yml().expect("serialize identity");
         info!("serialized YAML identity:\n{s}");
@@ -315,7 +374,10 @@ mod test {
     fn test_identity_save_load_ron() {
         env_logger::try_init().ok();
         let addr = Multiaddr::from_str("/ip4/127.0.0.1/tcp/23001").expect("invalid valid address");
-        let identity = ConversationIdentity::random(addr);
+        let mut rng = rand::rng();
+        let (private_key, public_key) = make_keypair_bjj(&mut rng);
+        let nonce = GenericScalar::random(&mut rng);
+        let identity = ConversationIdentity::random(addr, public_key, private_key, nonce);
         let tmp = TempPath::from_path("test_id.ron");
         let s = identity.to_ron().expect("serialize identity");
         info!("serialized RON identity:\n{s}");

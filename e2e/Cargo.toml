@@ -14,6 +14,8 @@ anyhow = { workspace = true }
 log = { workspace = true }
 monero = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
+hex = { workspace = true }
+rand = { workspace = true }
 
 [dependencies.monero-simple-request-rpc]
 version = "0.1"
