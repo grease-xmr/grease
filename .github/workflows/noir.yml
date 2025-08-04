@@ -1,0 +1,40 @@
+name: Noir test
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+permissions:
+  contents: read
+
+env:
+  REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+  REF: ${{ github.head_ref || github.ref_name }}
+  MINIMUM_NOIR_VERSION: v0.16.0
+
+jobs:
+  install:
+    name: Noir (CLI) install
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install pre-requisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl build-essential pkg-config libssl-dev clang cmake git jq
+      - name: Install nargo toolchain
+        run: |
+          NOIR_VERSION=nightly
+          PWD=$(pwd)
+          export NARGO_HOME="${HOME}/.nargo"
+          export PATH="$PATH:${NARGO_HOME}/bin:${HOME}/.bb:${PATH}"
+          # Install noirup
+          curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          noirup --version $NOIR_VERSION
+          # Install bb
+          curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/master/barretenberg/bbup/install | bash
+          bbup
+
+          echo NARGO: $(nargo --version)
+          echo BB: $(bb --version)
