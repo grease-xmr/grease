@@ -14,7 +14,6 @@ use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
 use digest::Digest;
 use log::*;
 use monero::{Address, Network};
-use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -75,7 +74,7 @@ impl NewChannelBuilder {
         }
     }
 
-    pub fn build<D: Digest, R: CryptoRng + RngCore>(&self, _rng: &mut R) -> Option<NewChannelState> {
+    pub fn build<D: Digest>(&self) -> Option<NewChannelState> {
         if self.my_label.is_none()
             || self.peer_label.is_none()
             || (self.merchant_amount.is_none() && self.customer_amount.is_none())

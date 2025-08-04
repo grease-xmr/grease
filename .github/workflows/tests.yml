@@ -27,6 +27,55 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
 
+      - name: Install nargo toolchain
+        run: |
+          NOIR_VERSION=v1.0.0-beta.6
+          PWD=$(pwd)
+          export NARGO_HOME="${HOME}/.nargo"
+          export PATH="$PATH:${NARGO_HOME}/bin:${HOME}/.bb:${PATH}"
+          # Install noirup
+          curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          noirup --version $NOIR_VERSION
+          # Install bb
+          curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/master/barretenberg/bbup/install | bash
+          bbup
+
+      - name: Copy nargo toolchain to /usr/bin
+        run: |
+          sudo cp ${HOME}/.nargo/bin/nargo /usr/bin/nargo
+          sudo cp ${HOME}/.bb/bb /usr/bin/bb
+
+      - name: Verify nargo
+        run: |
+          which nargo
+          nargo --version
+
+      - name: Verify bb
+        run: |
+          which bb
+          bb --version
+
+      - name: Compile circuits
+        run: |
+          cd circuits
+          nargo compile --silence-warnings --workspace
+          nargo execute --silence-warnings -p Prover.toml --package Grease
+          nargo execute --silence-warnings -p Prover.toml --package GreaseUpdate
+          mkdir target/vk
+          bb write_vk -b ./target/Grease.json -o ./target/vk -v
+          mv ./target/vk/vk ./target/vk/vk.key
+          bb write_vk -b ./target/GreaseUpdate.json -o ./target/vk -v
+          mv ./target/vk/vk ./target/vk/vkUpdate.key
+          mkdir target/proof
+          bb prove -b ./target/Grease.json -w ./target/Grease.gz -o ./target/proof -v
+          mv ./target/proof/proof ./target/proof/proof.key
+          mv ./target/proof/public_inputs ./target/proof/public_inputs.key
+          bb prove -b ./target/GreaseUpdate.json -w ./target/GreaseUpdate.gz -o ./target/proof -v
+          mv ./target/proof/proof ./target/proof/proofUpdate.key
+          mv ./target/proof/public_inputs ./target/proof/public_inputsUpdate.key
+          bb verify -v -k ./target/vk/vk.key -p ./target/proof/proof.key -i ./target/proof/public_inputs.key
+          bb verify -v -k ./target/vk/vkUpdate.key -p ./target/proof/proofUpdate.key -i ./target/proof/public_inputsUpdate.key
+
       - name: Run tests
         run: cargo test --all-features --workspace --exclude e2e
 

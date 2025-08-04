@@ -58,8 +58,11 @@ impl Into<GenericScalar> for &BigUint {
     fn into(self) -> GenericScalar {
         let mut g = [0u8; 32];
 
-        g.copy_from_slice(&self.to_bytes_le());
-
+        let bytes = self.to_bytes_le();
+        if bytes.len() > 32 {
+            panic!("BigUint too large for GenericScalar");
+        }
+        g[..bytes.len()].copy_from_slice(&bytes);
         GenericScalar { 0: g }
     }
 }
@@ -361,7 +364,7 @@ pub fn random_251_bits<R: CryptoRng + RngCore>(rng: &mut R) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rng.fill_bytes(&mut bytes);
 
-    //The 251 bits are in little endian format, so snip the top 5 bits from the last byte
+    //The 251 bits are stored in byte-wise little endian format, so snip the top 5 bits from the last byte
     bytes[31] = 0x1F & bytes[31];
 
     bytes

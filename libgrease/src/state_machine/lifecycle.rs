@@ -206,7 +206,6 @@ pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::crypto::zk_objects::random_251_bits;
-    use crate::crypto::zk_objects::GenericPoint;
     use crate::crypto::zk_objects::{
         AdaptedSignature, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo,
         UpdateProofs,
@@ -230,10 +229,10 @@ pub mod test {
         "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
     const BOB_ADDRESS: &str =
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
-    const KES_PUBKEY: &str = "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46";
 
     pub fn new_channel_state<R: CryptoRng + RngCore>(rng: &mut R) -> NewChannelState {
         // All this info is known, or can be scanned in from a QR code etc
+        let (_, public_key_kes) = make_keypair_bjj(rng);
         let (_, public_key_self) = make_keypair_bjj(rng);
         let (_, public_key_peer) = make_keypair_bjj(rng);
         let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
@@ -244,7 +243,7 @@ pub mod test {
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
         let initial_state = initial_state
-            .with_kes_public_key(GenericPoint::from_hex(KES_PUBKEY).unwrap())
+            .with_kes_public_key(public_key_kes)
             .with_customer_initial_balance(initial_customer_amount)
             .with_merchant_initial_balance(initial_merchant_amount)
             .with_my_user_label("me")
@@ -255,7 +254,7 @@ pub mod test {
             .with_nonce_self(nonce_self.into())
             .with_public_key_peer(public_key_peer.into())
             .with_nonce_peer(nonce_peer.into())
-            .build::<Blake2b512, R>(rng)
+            .build::<Blake2b512>()
             .expect("Failed to build initial state");
         // Create a new channel state machine
         assert_eq!(initial_state.stage(), LifecycleStage::New);

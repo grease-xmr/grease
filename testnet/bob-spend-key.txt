@@ -1,0 +1,3 @@
+Private Key: 3d5c6bdd9fd9a123ffa0da21d5ccd345b87d19f2fa7bcd9a39764b749cc9b909
+Public Key: fadb8fcb3d21df9877c7abdc599cf40a739b4311e335635d351037c245168343
+Bye :)

@@ -334,7 +334,7 @@ where
         info!("💍️ Sending new channel proposal to merchant");
         // Needed for KES verification later..
         let kes_public_key = proposal.seed.kes_public_key.clone();
-        let name = self.customer_send_proposal(proposal, rng).await?.map_err(ChannelServerError::ProposalRejected)?;
+        let name = self.customer_send_proposal(proposal).await?.map_err(ChannelServerError::ProposalRejected)?;
         info!("💍️ Proposal accepted. Channel name: {name}");
         // 2. We're in establishing phase now.
         let channel = self.channels.peek(&name).await.ok_or(ChannelServerError::ChannelNotFound)?;
@@ -437,17 +437,16 @@ where
     /// Sends a channel proposal to the merchant and waits for a response. If the merchant ACKs the proposal, we
     /// verify the terms and create a new channel state machine. If the merchant rejects the proposal, or if we
     /// reject the final proposal, we return the reason to the client.
-    async fn customer_send_proposal<R: CryptoRng + RngCore>(
+    async fn customer_send_proposal(
         &self,
         proposal: NewChannelProposal,
-        rng: &mut R,
     ) -> Result<Result<String, RejectChannelProposal>, PeerConnectionError> {
         let mut client = self.network_client.clone();
         let address = proposal.contact_info_proposee.dial_address();
         // todo: check what happens if there's already a connection?
         client.dial(address).await?;
         trace!("Sending channel proposal to merchant.");
-        let state = self.customer_create_new_state(proposal.clone(), rng);
+        let state = self.customer_create_new_state(proposal.clone());
         let res = client.new_channel_proposal(proposal).await?;
         let result = match res {
             ChannelProposalResult::Accepted(final_proposal) => {
@@ -492,7 +491,7 @@ where
     }
 
     /// Helper function. Creates a [`NewChannelState`] from the given proposal and secret.
-    fn customer_create_new_state<R: CryptoRng + RngCore>(&self, prop: NewChannelProposal, rng: &mut R) -> ChannelState {
+    fn customer_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
         let new_state = NewChannelBuilder::new(prop.seed.role)
             .with_my_user_label(&prop.proposer_label)
             .with_peer_label(&prop.seed.user_label)
@@ -505,14 +504,14 @@ where
             .with_nonce_self(prop.contact_info_proposer.nonce.expect("Missing nonce self, customer"))
             .with_public_key_peer(prop.contact_info_proposee.public_key)
             .with_nonce_peer(prop.contact_info_proposee.nonce.expect("Missing nonce peer, customer"))
-            .build::<blake2::Blake2b512, R>(rng)
+            .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data, customer");
         new_state.to_channel_state()
     }
 
     // TODO - the merchant label should be used to extract data that was generated ourselves, rather than trusting
     // the proposal.
-    fn merchant_create_new_state<R: CryptoRng + RngCore>(&self, prop: NewChannelProposal, rng: &mut R) -> ChannelState {
+    fn merchant_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
         let new_state = NewChannelBuilder::new(prop.seed.role.other())
             .with_my_user_label(&prop.seed.user_label)
             .with_peer_label(&prop.proposer_label)
@@ -525,7 +524,7 @@ where
             .with_nonce_self(prop.contact_info_proposee.nonce.expect("Missing nonce self, merchant"))
             .with_public_key_peer(prop.contact_info_proposer.public_key)
             .with_nonce_peer(prop.contact_info_proposer.nonce.expect("Missing nonce peer, merchant"))
-            .build::<blake2::Blake2b512, R>(rng)
+            .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data, merchant");
         new_state.to_channel_state()
     }
@@ -563,7 +562,7 @@ where
         // Construct the new channel
         let peer_info = data.contact_info_proposer.clone();
         let info = data.proposed_channel_info();
-        let new_state = self.merchant_create_new_state(data, &mut rand::rng());
+        let new_state = self.merchant_create_new_state(data);
         let name = self.common_create_channel(new_state, peer_info, info).await.map_err(|e| {
             warn!("Error creating new channel {e}");
             RejectChannelProposal::internal("Error creating new channel")

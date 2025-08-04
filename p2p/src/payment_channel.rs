@@ -524,7 +524,7 @@ mod test {
             .with_nonce_self(nonce_self.into())
             .with_public_key_peer(public_key_peer.into())
             .with_nonce_peer(nonce_peer.into())
-            .build::<Blake2b512, R>(rng)
+            .build::<Blake2b512>()
             .expect("Failed to build initial state");
         initial_state
     }
