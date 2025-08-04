@@ -19,10 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Install pre-requisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl build-essential pkg-config libssl-dev clang cmake git jq
       - name: Install nargo toolchain
         run: |
           NOIR_VERSION=nightly
