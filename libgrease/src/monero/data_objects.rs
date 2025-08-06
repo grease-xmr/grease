@@ -124,7 +124,7 @@ pub struct FinalizedUpdate {
 pub struct MultisigWalletData {
     pub my_spend_key: Curve25519Secret,
     pub my_public_key: Curve25519PublicKey,
-    pub sorted_pubkeys: [Curve25519PublicKey; 2],
+    pub sorted_public_keys: [Curve25519PublicKey; 2],
     pub joint_private_view_key: Curve25519Secret,
     pub joint_public_spend_key: Curve25519PublicKey,
     pub birthday: u64,
@@ -132,11 +132,11 @@ pub struct MultisigWalletData {
 }
 
 impl MultisigWalletData {
-    pub fn peer_public_key(&self) -> &Curve25519PublicKey {
-        if self.my_public_key == self.sorted_pubkeys[0] {
-            &self.sorted_pubkeys[1]
+    pub fn public_key_peer(&self) -> &Curve25519PublicKey {
+        if self.my_public_key == self.sorted_public_keys[0] {
+            &self.sorted_public_keys[1]
         } else {
-            &self.sorted_pubkeys[0]
+            &self.sorted_public_keys[0]
         }
     }
 
@@ -155,8 +155,8 @@ impl Debug for MultisigWalletData {
         write!(
             f,
             "sorted_pubkeys: [{}, {}], ",
-            self.sorted_pubkeys[0].as_hex(),
-            self.sorted_pubkeys[1].as_hex()
+            self.sorted_public_keys[0].as_hex(),
+            self.sorted_public_keys[1].as_hex()
         )?;
         write!(f, "birthday: {}, ", self.birthday)?;
         write!(f, "known_outputs: {}, ", self.known_outputs.len())?;

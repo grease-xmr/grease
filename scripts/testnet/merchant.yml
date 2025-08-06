@@ -1,7 +1,7 @@
 identities_file: /home/code/.grease/identities.yml
 preferred_identity: Bob
 server_address: /ip4/127.0.0.1/tcp/40011
-kes_public_key: 61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016
+kes_public_key: da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46
 user_label: test_merchant
 initial_secret: ce89029949049c902fdd5f2bf1493977dd061e782c44fd634b512bd75bc5ec08
 channel_storage_directory: merchant_channels

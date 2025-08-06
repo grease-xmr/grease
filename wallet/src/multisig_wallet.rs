@@ -37,7 +37,7 @@ pub struct MultisigWallet {
     rpc: SimpleRequestRpc,
     my_spend_key: Curve25519Secret,
     my_public_key: Curve25519PublicKey,
-    sorted_pubkeys: [Curve25519PublicKey; 2],
+    sorted_public_keys: [Curve25519PublicKey; 2],
     musig_keys: ThresholdKeys<Ed25519>,
     joint_private_view_key: Curve25519Secret,
     joint_public_view_key: Curve25519PublicKey,
@@ -55,14 +55,14 @@ impl MultisigWallet {
         rpc: SimpleRequestRpc,
         spend_key: Curve25519Secret,
         public_spend_key: &Curve25519PublicKey,
-        peer_pubkey: &Curve25519PublicKey,
+        public_key_peer: &Curve25519PublicKey,
         birthday: Option<u64>,
     ) -> Result<Self, WalletError> {
-        let mut pubkeys = [public_spend_key.clone(), peer_pubkey.clone()];
-        sort_pubkeys(&mut pubkeys);
-        let musig_keys = musig_2_of_2(&spend_key, &pubkeys)
+        let mut public_keys = [public_spend_key.clone(), public_key_peer.clone()];
+        sort_public_keys(&mut public_keys);
+        let musig_keys = musig_2_of_2(&spend_key, &public_keys)
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
-        let (jprv_vk, j_pub_vk) = musig_dh_viewkey(&spend_key, peer_pubkey);
+        let (jprv_vk, j_pub_vk) = musig_dh_viewkey(&spend_key, public_key_peer);
         let joint_private_view_key = Curve25519Secret::from(jprv_vk.0);
         let joint_public_view_key = Curve25519PublicKey::from(j_pub_vk.0);
         let joint_public_spend_key = Curve25519PublicKey::from(musig_keys.group_key().0);
@@ -70,7 +70,7 @@ impl MultisigWallet {
             rpc,
             my_spend_key: spend_key,
             my_public_key: public_spend_key.clone(),
-            sorted_pubkeys: pubkeys,
+            sorted_public_keys: public_keys,
             musig_keys,
             joint_private_view_key,
             joint_public_view_key,
@@ -100,21 +100,25 @@ impl MultisigWallet {
         &self.my_public_key
     }
 
-    pub fn peer_public_key(&self) -> &Curve25519PublicKey {
-        if self.sorted_pubkeys[0] == self.my_public_key {
-            &self.sorted_pubkeys[1]
+    pub fn public_key_peer(&self) -> &Curve25519PublicKey {
+        if self.sorted_public_keys[0] == self.my_public_key {
+            &self.sorted_public_keys[1]
         } else {
-            &self.sorted_pubkeys[0]
+            &self.sorted_public_keys[0]
         }
     }
 
     pub fn from_serializable(rpc: SimpleRequestRpc, data: MultisigWalletData) -> Result<Self, WalletError> {
-        let mut sorted_pubkeys = data.sorted_pubkeys;
-        sort_pubkeys(&mut sorted_pubkeys);
-        let peer_pubkey = if data.my_public_key == sorted_pubkeys[0] { &sorted_pubkeys[1] } else { &sorted_pubkeys[0] };
-        let musig_keys = musig_2_of_2(&data.my_spend_key, &sorted_pubkeys)
+        let mut sorted_public_keys = data.sorted_public_keys;
+        sort_public_keys(&mut sorted_public_keys);
+        let public_key_peer = if data.my_public_key == sorted_public_keys[0] {
+            &sorted_public_keys[1]
+        } else {
+            &sorted_public_keys[0]
+        };
+        let musig_keys = musig_2_of_2(&data.my_spend_key, &sorted_public_keys)
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
-        let (joint_private_view_key, joint_public_view_key) = musig_dh_viewkey(&data.my_spend_key, peer_pubkey);
+        let (joint_private_view_key, joint_public_view_key) = musig_dh_viewkey(&data.my_spend_key, public_key_peer);
         let joint_private_view_key = Curve25519Secret::from(joint_private_view_key.0);
         let joint_public_view_key = Curve25519PublicKey::from(joint_public_view_key.0);
         let joint_public_spend_key = musig_keys.group_key();
@@ -126,7 +130,7 @@ impl MultisigWallet {
             rpc,
             my_spend_key: data.my_spend_key,
             my_public_key: data.my_public_key,
-            sorted_pubkeys,
+            sorted_public_keys,
             musig_keys,
             joint_private_view_key,
             joint_public_view_key,
@@ -371,7 +375,7 @@ impl MultisigWallet {
     }
 
     fn participants(&self) -> (Participant, Participant) {
-        let first = self.sorted_pubkeys[0] == self.my_public_key;
+        let first = self.sorted_public_keys[0] == self.my_public_key;
         if first {
             (Participant::new(1).unwrap(), Participant::new(2).unwrap())
         } else {
@@ -436,7 +440,7 @@ impl MultisigWallet {
         MultisigWalletData {
             my_spend_key: self.my_spend_key.clone(),
             my_public_key: self.my_public_key.clone(),
-            sorted_pubkeys: self.sorted_pubkeys.clone(),
+            sorted_public_keys: self.sorted_public_keys.clone(),
             joint_private_view_key: self.joint_private_view_key.clone(),
             joint_public_spend_key: self.joint_public_spend_key.clone(),
             birthday: self.birthday,
@@ -506,7 +510,7 @@ fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
     result
 }
 
-fn sort_pubkeys(keys: &mut [Curve25519PublicKey; 2]) {
+fn sort_public_keys(keys: &mut [Curve25519PublicKey; 2]) {
     keys.sort_unstable_by(|a, b| a.as_compressed().as_bytes().cmp(b.as_compressed().as_bytes()));
 }
 

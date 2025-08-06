@@ -25,11 +25,15 @@ pub struct ChannelMetadata {
     kes_public_key: GenericPoint,
     /// The external identifier
     public_key_self: GenericPoint,
+    /// The external identifier for interacting with the KES
+    public_key_bjj_self: GenericPoint,
     /// Random nonce
     nonce_self: GenericScalar,
-    ///
+    /// The external identifier for the peer
     public_key_peer: GenericPoint,
-    ///
+    /// The external identifier for the peer for interacting with the KES
+    public_key_bjj_peer: GenericPoint,
+    /// Random nonce for the peer
     nonce_peer: GenericScalar,
 }
 
@@ -40,8 +44,10 @@ impl ChannelMetadata {
         channel_id: ChannelId,
         kes_public_key: GenericPoint,
         public_key_self: GenericPoint,
+        public_key_bjj_self: GenericPoint,
         nonce_self: GenericScalar,
         public_key_peer: GenericPoint,
+        public_key_bjj_peer: GenericPoint,
         nonce_peer: GenericScalar,
     ) -> Self {
         Self {
@@ -52,8 +58,10 @@ impl ChannelMetadata {
             kes_public_key,
             update_count: 0,
             public_key_self,
+            public_key_bjj_self,
             nonce_self,
             public_key_peer,
+            public_key_bjj_peer,
             nonce_peer,
         }
     }
@@ -90,6 +98,10 @@ impl ChannelMetadata {
         &self.public_key_self
     }
 
+    pub fn public_key_bjj_self(&self) -> &GenericPoint {
+        &self.public_key_bjj_self
+    }
+
     pub fn apply_delta(&mut self, delta: MoneroDelta) -> bool {
         match self.current_balances.apply_delta(delta) {
             Some(new_balances) => {
@@ -103,6 +115,10 @@ impl ChannelMetadata {
 
     pub fn public_key_peer(&self) -> &GenericPoint {
         &self.public_key_peer
+    }
+
+    pub fn public_key_bjj_peer(&self) -> &GenericPoint {
+        &self.public_key_bjj_peer
     }
 
     pub fn nonce_peer(&self) -> &GenericScalar {

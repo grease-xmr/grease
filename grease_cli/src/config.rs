@@ -80,6 +80,8 @@ pub struct GlobalOptions {
     pub kes_public_key: Option<GenericPoint>,
     /// The public key of the user for interacting with the KES.
     pub public_key: Option<GenericPoint>,
+    /// The public key of the user for interacting with the KES in BabyJubjub format.
+    pub public_key_bjj: Option<GenericPoint>,
     /// The private key of the user for interacting with the KES.
     pub private_key: Option<GenericScalar>,
     // A nonce used for channel state consistency.
@@ -122,12 +124,17 @@ impl GlobalOptions {
         self.kes_public_key.clone()
     }
 
-    /// Returns a clone of the configured BabyJubjub public key, if set.
+    /// Returns a clone of the configured Ed25519 public key, if set.
     pub fn public_key(&self) -> Option<GenericPoint> {
         self.public_key.clone()
     }
 
-    /// Returns a clone of the configured BabyJubjub private key, if set.
+    /// Returns a clone of the configured BabyJubjub public key, if set.
+    pub fn public_key_bjj(&self) -> Option<GenericPoint> {
+        self.public_key_bjj.clone()
+    }
+
+    /// Returns a clone of the configured Ed25519 private key, if set.
     pub fn private_key(&self) -> Option<GenericScalar> {
         self.private_key.clone()
     }

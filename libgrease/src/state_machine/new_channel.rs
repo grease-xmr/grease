@@ -36,8 +36,10 @@ pub struct NewChannelBuilder {
     merchant_closing: Option<Address>,
     customer_closing: Option<Address>,
     public_key_self: Option<GenericPoint>,
+    public_key_bjj_self: Option<GenericPoint>,
     nonce_self: Option<GenericScalar>,
     public_key_peer: Option<GenericPoint>,
+    public_key_bjj_peer: Option<GenericPoint>,
     nonce_peer: Option<GenericScalar>,
 }
 
@@ -68,8 +70,10 @@ impl NewChannelBuilder {
             merchant_closing: None,
             customer_closing: None,
             public_key_self: None,
+            public_key_bjj_self: None,
             nonce_self: None,
             public_key_peer: None,
+            public_key_bjj_peer: None,
             nonce_peer: None,
         }
     }
@@ -82,8 +86,10 @@ impl NewChannelBuilder {
             || self.merchant_closing.is_none()
             || self.customer_closing.is_none()
             || self.public_key_self.is_none()
+            || self.public_key_bjj_self.is_none()
             || self.nonce_self.is_none()
             || self.public_key_peer.is_none()
+            || self.public_key_bjj_peer.is_none()
             || self.nonce_peer.is_none()
         {
             return None;
@@ -114,8 +120,10 @@ impl NewChannelBuilder {
             channel_id,
             self.kes_public_key.clone().unwrap(),
             self.public_key_self?,
+            self.public_key_bjj_self?,
             self.nonce_self?,
             self.public_key_peer?,
+            self.public_key_bjj_peer?,
             self.nonce_peer?,
         );
         Some(NewChannelState { metadata: channel_info, customer_label, merchant_label })
@@ -161,6 +169,11 @@ impl NewChannelBuilder {
         self
     }
 
+    pub fn with_public_key_bjj_self(mut self, public_key_bjj_self: GenericPoint) -> Self {
+        self.public_key_bjj_self = Some(public_key_bjj_self);
+        self
+    }
+
     pub fn with_nonce_self(mut self, nonce_self: GenericScalar) -> Self {
         self.nonce_self = Some(nonce_self);
         self
@@ -168,6 +181,11 @@ impl NewChannelBuilder {
 
     pub fn with_public_key_peer(mut self, public_key_peer: GenericPoint) -> Self {
         self.public_key_peer = Some(public_key_peer);
+        self
+    }
+
+    pub fn with_public_key_bjj_peer(mut self, public_key_bjj_peer: GenericPoint) -> Self {
+        self.public_key_bjj_peer = Some(public_key_bjj_peer);
         self
     }
 
@@ -200,18 +218,58 @@ impl NewChannelState {
         if *self.metadata.kes_public_key() != proposal.kes_public_key {
             return Err(InvalidProposal::MismatchedKesPublicKey);
         }
-        if *self.metadata.public_key_self() != proposal.public_key {
-            //TODO: Can we assume that the merchant is the one who sent the proposal?
-            // If not, we need to check the role in the proposal.
-            return Err(InvalidProposal::MismatchedMerchantPublicKey);
-        }
-        if *self.metadata.nonce_self() != proposal.nonce {
-            //TODO: Can we assume that the merchant is the one who sent the proposal?
-            // If not, we need to check the role in the proposal.
-            return Err(InvalidProposal::MismatchedMerchantNonce);
-        }
         if self.metadata.channel_id().name() != proposal.channel_name {
             return Err(InvalidProposal::MismatchedChannelId);
+        }
+        match self.metadata.role() {
+            ChannelRole::Merchant => match proposal.role {
+                ChannelRole::Customer => {
+                    //TODO: Can we assume that the merchant is the one who sent the proposal?
+                    if *self.metadata.public_key_self() != proposal.public_key {
+                        warn!(
+                            "public_key mismatch: '{:?}' vs '{:?}', '{:?}'",
+                            proposal.public_key,
+                            self.metadata.public_key_self(),
+                            self.metadata.public_key_peer()
+                        );
+                        return Err(InvalidProposal::MismatchedMerchantCustomerPublicKey);
+                    }
+                    if *self.metadata.public_key_bjj_self() != proposal.public_key_bjj {
+                        return Err(InvalidProposal::MismatchedMerchantCustomerPublicKeyBJJ);
+                    }
+                    if *self.metadata.nonce_self() != proposal.nonce {
+                        return Err(InvalidProposal::MismatchedCustomerNonce);
+                    }
+                }
+                ChannelRole::Merchant => {
+                    if *self.metadata.public_key_self() != proposal.public_key {
+                        return Err(InvalidProposal::MismatchedMerchantPublicKey);
+                    }
+                    if *self.metadata.public_key_bjj_self() != proposal.public_key_bjj {
+                        return Err(InvalidProposal::MismatchedMerchantPublicKeyBJJ);
+                    }
+                    if *self.metadata.nonce_self() != proposal.nonce {
+                        return Err(InvalidProposal::MismatchedMerchantNonce);
+                    }
+                }
+            },
+            ChannelRole::Customer => match proposal.role {
+                ChannelRole::Customer => {
+                    if *self.metadata.public_key_self() != proposal.public_key {
+                        return Err(InvalidProposal::MismatchedCustomerCustomerPublicKey);
+                    }
+                    if *self.metadata.public_key_bjj_self() != proposal.public_key_bjj {
+                        return Err(InvalidProposal::MismatchedCustomerCustomerPublicKeyBJJ);
+                    }
+                    if *self.metadata.nonce_self() != proposal.nonce {
+                        return Err(InvalidProposal::MismatchedCustomerNonce);
+                    }
+                }
+                ChannelRole::Merchant => {
+                    warn!("Role mismatch: Customer -> Merchant");
+                    panic!();
+                }
+            },
         }
         Ok(())
     }
@@ -222,6 +280,7 @@ impl NewChannelState {
             role: self.metadata.role(),
             kes_public_key: self.metadata.kes_public_key().clone(),
             public_key: self.metadata.public_key_self().clone(),
+            public_key_bjj: self.metadata.public_key_bjj_self().clone(),
             nonce: self.metadata.nonce_self().clone(),
             initial_balances: self.metadata.balances(),
             customer_label: self.customer_label.clone(),
@@ -288,6 +347,7 @@ pub struct ProposedChannelInfo {
     pub role: ChannelRole,
     pub kes_public_key: GenericPoint,
     pub public_key: GenericPoint,
+    pub public_key_bjj: GenericPoint,
     pub nonce: GenericScalar,
     /// The amount of money in the channel
     pub initial_balances: Balances,
@@ -311,6 +371,8 @@ pub struct ChannelSeedInfo {
     pub kes_public_key: GenericPoint,
     /// The proposer's public key.
     pub public_key: GenericPoint,
+    /// The proposer's public key for interacting with the KES in BabyJubjub format.
+    pub public_key_bjj: GenericPoint,
     /// The nonce used to derive ZKPs.
     pub nonce: GenericScalar,
     /// The proposed initial set of channel balances
@@ -328,6 +390,7 @@ pub struct ChannelSeedBuilder {
     key_id: Option<u64>,
     kes_public_key: Option<GenericPoint>,
     public_key: Option<GenericPoint>,
+    public_key_bjj: Option<GenericPoint>,
     nonce: Option<GenericScalar>,
     initial_balances: Option<Balances>,
     user_label: Option<String>,
@@ -341,6 +404,7 @@ impl ChannelSeedBuilder {
             key_id: None,
             kes_public_key: None,
             public_key: None,
+            public_key_bjj: None,
             nonce: None,
             initial_balances: None,
             user_label: None,
@@ -355,6 +419,11 @@ impl ChannelSeedBuilder {
 
     pub fn with_public_key(mut self, public_key: impl Into<GenericPoint>) -> Self {
         self.public_key = Some(public_key.into());
+        self
+    }
+
+    pub fn with_public_key_bjj(mut self, public_key_bjj: impl Into<GenericPoint>) -> Self {
+        self.public_key_bjj = Some(public_key_bjj.into());
         self
     }
 
@@ -387,6 +456,7 @@ impl ChannelSeedBuilder {
         let key_id = self.key_id.ok_or(MissingSeedInfo::Missing)?;
         let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::KesPublicKey)?;
         let public_key = self.public_key.ok_or(MissingSeedInfo::PublicKey)?;
+        let public_key_bjj = self.public_key_bjj.ok_or(MissingSeedInfo::PublicKeyBJJ)?;
         let nonce = self.nonce.ok_or(MissingSeedInfo::Nonce)?;
         let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
         let user_label = self.user_label.ok_or(MissingSeedInfo::PartialChannelId)?;
@@ -397,6 +467,7 @@ impl ChannelSeedBuilder {
             key_id,
             kes_public_key,
             public_key,
+            public_key_bjj,
             nonce,
             initial_balances,
             user_label,
@@ -415,6 +486,8 @@ impl Default for ChannelSeedBuilder {
 pub enum MissingSeedInfo {
     #[error("Missing public key")]
     PublicKey,
+    #[error("Missing public key in BabyJubjub format")]
+    PublicKeyBJJ,
     // #[error("Missing private key")]
     // PrivateKey,
     #[error("Missing nonce")]

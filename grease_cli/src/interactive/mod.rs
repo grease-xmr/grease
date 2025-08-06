@@ -320,7 +320,7 @@ impl InteractiveApp {
             MoneroAmount::from_xmr(&customer_balance).ok_or_else(|| anyhow!("Invalid customer balance"))?,
         );
         let contact_info = self.identity.contact_info();
-        let kes = self
+        let kes_public_key = self
             .config
             .kes_public_key()
             .ok_or_else(|| anyhow!("No KES public key found. Is `kes_public_key` configured in the config file?"))?;
@@ -328,6 +328,10 @@ impl InteractiveApp {
             .config
             .public_key()
             .ok_or_else(|| anyhow!("No public key found. Is `public_key` configured in the config file?"))?;
+        let public_key_bjj = self
+            .config
+            .public_key_bjj()
+            .ok_or_else(|| anyhow!("No public key BJJ found. Is `public_key_bjj` configured in the config file?"))?;
         //Note: do not share private_key
         let nonce =
             self.config.nonce().ok_or_else(|| anyhow!("No nonce found. Is `nonce` configured in the config file?"))?;
@@ -343,8 +347,9 @@ impl InteractiveApp {
             .ok_or_else(|| anyhow!("No refund address found. Is `refund_address` configured in the config file?"))?;
         let seed_info = ChannelSeedBuilder::default()
             .with_key_id(index)
-            .with_kes_public_key(kes)
+            .with_kes_public_key(kes_public_key)
             .with_public_key(public_key)
+            .with_public_key_bjj(public_key_bjj)
             .with_nonce(nonce)
             .with_initial_balances(balances)
             .with_user_label(channel_id)

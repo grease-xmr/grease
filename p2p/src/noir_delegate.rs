@@ -67,15 +67,15 @@ impl GreaseInitializer for NoirDelegate {
 
         let r_1: BigUint = input_private.r1.clone().into();
 
-        let pubkey_peer: babyjubjub_rs::Point = input_public.pubkey_peer.try_into()?;
+        let public_key_bjj_peer: babyjubjub_rs::Point = input_public.public_key_bjj_peer.try_into()?;
 
-        let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &pubkey_peer, None)?;
+        let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &public_key_bjj_peer, None)?;
 
         let r_2: BigUint = input_private.r2.clone().into();
 
-        let pubkey_kes: babyjubjub_rs::Point = metadata.kes_public_key().try_into()?;
+        let kes_public_key: babyjubjub_rs::Point = metadata.kes_public_key().try_into()?;
 
-        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &pubkey_kes, None)?;
+        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &kes_public_key, None)?;
 
         //NIZK DLEQ
         let blinding_dleq: BigUint = input_private.blinding_dleq.clone().into();
@@ -118,7 +118,7 @@ impl GreaseInitializer for NoirDelegate {
         }
 
         //Prove
-        let proof_init = bb_prove_init(
+        let zero_knowledge_proof_init = bb_prove_init(
             &a_1,
             &blinding,
             &blinding_dleq,
@@ -139,12 +139,12 @@ impl GreaseInitializer for NoirDelegate {
             &c_1,
             &fi_1,
             &fi_2,
-            &pubkey_kes,
-            &pubkey_peer,
+            &kes_public_key,
+            &public_key_bjj_peer,
         )?;
 
         //Verify
-        let public = PublicInit::new(
+        let public_init = PublicInit::new(
             &t_0,
             &c_1,
             &fi_1,
@@ -159,7 +159,13 @@ impl GreaseInitializer for NoirDelegate {
             &r2,
         );
 
-        let verification = bb_verify_init(&public, &proof_init)?;
+        let verification = bb_verify_init(
+            &nonce_peer,
+            &public_key_bjj_peer,
+            &kes_public_key,
+            &public_init,
+            &zero_knowledge_proof_init,
+        )?;
         if !verification {
             return Err(DelegateError::SelfVerify);
         }
@@ -187,7 +193,7 @@ impl GreaseInitializer for NoirDelegate {
                 delta_bjj: response_div_baby_jub_jub.into(),
                 delta_ed: response_div_ed25519.into(),
             },
-            proofs: proof_init,
+            zero_knowledge_proof_init,
         };
 
         Ok(p)
@@ -195,13 +201,16 @@ impl GreaseInitializer for NoirDelegate {
 
     async fn verify_initial_proofs(
         &self,
+        nonce_peer: &BigUint,
+        public_key_bjj_peer: &babyjubjub_rs::Point,
+        kes_public_key: &babyjubjub_rs::Point,
         proof: &PublicProof0,
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("NoirDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
 
         //Verify SNARKs
-        let public = PublicInit::new(
+        let public_init = PublicInit::new(
             &babyjubjub_rs::Point::try_from(&proof.public_outputs.T_0)?,
             &babyjubjub_rs::Point::try_from(&proof.public_outputs.c_1)?,
             &babyjubjub_rs::Point::try_from(&proof.public_outputs.phi_1)?,
@@ -216,7 +225,13 @@ impl GreaseInitializer for NoirDelegate {
             &proof.public_outputs.R2.into(),
         );
 
-        let verification = bb_verify_init(&public, &proof.proofs)?;
+        let verification = bb_verify_init(
+            nonce_peer,
+            &public_key_bjj_peer,
+            &kes_public_key,
+            &public_init,
+            &proof.zero_knowledge_proof_init,
+        )?;
         if !verification {
             return Err(DelegateError::Verify);
         }
@@ -310,7 +325,7 @@ impl Updater for NoirDelegate {
         }
 
         //Prove
-        let proof_update = bb_prove_update(
+        let zero_knowledge_proof_update = bb_prove_update(
             &blinding_dleq,
             &challenge_bytes,
             &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
@@ -324,7 +339,7 @@ impl Updater for NoirDelegate {
         )?;
 
         //Verify
-        let public = PublicUpdate::new(
+        let public_update = PublicUpdate::new(
             &t_im1,
             &t_i,
             &s_i,
@@ -335,7 +350,7 @@ impl Updater for NoirDelegate {
             &r2,
         );
 
-        let verification = bb_verify_update(&public, &proof_update)?;
+        let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update)?;
         if !verification {
             return Err(DelegateError::SelfVerify);
         }
@@ -357,7 +372,7 @@ impl Updater for NoirDelegate {
                 delta_bjj: response_div_baby_jub_jub.into(),
                 delta_ed: response_div_ed25519.into(),
             },
-            proof: proof_update,
+            zero_knowledge_proof_update,
         };
 
         Ok(p)
@@ -373,7 +388,7 @@ impl Updater for NoirDelegate {
         info!("NoirDelegate: Verifying update proofs for {}", metadata.channel_id().name());
 
         //Verify SNARKs
-        let public = PublicUpdate::new(
+        let public_update = PublicUpdate::new(
             &babyjubjub_rs::Point::try_from(&proof.public_outputs.T_prev)?,
             &babyjubjub_rs::Point::try_from(&proof.public_outputs.T_current)?,
             &proof.public_outputs.S_current.into(),
@@ -384,7 +399,7 @@ impl Updater for NoirDelegate {
             &proof.public_outputs.R_ed.into(),
         );
 
-        let verification = bb_verify_update(&public, &proof.proof)?;
+        let verification = bb_verify_update(&public_update, &proof.zero_knowledge_proof_update)?;
         if !verification {
             return Err(DelegateError::Verify);
         }
@@ -428,6 +443,7 @@ impl Updater for NoirDelegate {
         info!("NoirDelegate: Verifying adapted signature");
 
         //TODO: Implement
+        error!("TODO: NoirDelegate: Verifying adapted signature");
         todo!();
     }
 }
@@ -438,9 +454,10 @@ impl KesProver for NoirDelegate {
         _channel_name: String,
         _cust_key: PartialEncryptedKey,
         _m_key: PartialEncryptedKey,
-        _kes_pubkey: GenericPoint,
+        _kes_public_key: GenericPoint,
     ) -> Result<KesProof, DelegateError> {
         //TODO: Implement
+        error!("TODO: create_kes_proofs");
         todo!();
     }
 
@@ -449,10 +466,11 @@ impl KesProver for NoirDelegate {
         _channel_name: String,
         _c_key: PartialEncryptedKey,
         _m_key: PartialEncryptedKey,
-        _kes_pubkey: &GenericPoint,
+        __kes_public_key: &GenericPoint,
         _proofs: KesProof,
     ) -> Result<(), DelegateError> {
         //TODO: Implement
+        error!("TODO: verify_kes_proofs");
         todo!();
     }
 }
@@ -465,11 +483,13 @@ impl VerifiableSecretShare for NoirDelegate {
         _peer: &Curve25519PublicKey,
     ) -> Result<MultisigSplitSecrets, DelegateError> {
         //TODO: Implement
+        error!("TODO: split_secret_share");
         todo!();
     }
 
     fn verify_my_shards(&self, _share: &Curve25519Secret, _shards: &MultisigSplitSecrets) -> Result<(), DelegateError> {
         //TODO: Implement
+        error!("TODO: verify_my_shards");
         todo!();
     }
 }

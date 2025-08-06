@@ -16,7 +16,8 @@ use wallet::connect_to_rpc;
 use wallet::wallet::MoneroWallet;
 
 pub const KES_PUBKEY: &str = "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46";
-pub const PUBKEY: &str = "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46";
+pub const PUBKEY: &str = "61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016";
+pub const PUBKEY_BJJ: &str = "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46";
 pub const PRIVATEKEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 pub const NONCE: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -68,6 +69,8 @@ pub fn create_user(name: &str, spend_key: &str, port: u16) -> Result<User, FromH
     config.kes_public_key = Some(GenericPoint::from_hex(KES_PUBKEY)?);
     // The public key of the user for interacting with the KES.
     config.public_key = Some(GenericPoint::from_hex(PUBKEY)?);
+    // The public key of the user for interacting with the KES in BabyJubjub format.
+    config.public_key_bjj = Some(GenericPoint::from_hex(PUBKEY_BJJ)?);
     // The private key of the user for interacting with the KES.
     config.private_key = Some(GenericScalar::from_hex(PRIVATEKEY)?);
     // A nonce used for channel state consistency.

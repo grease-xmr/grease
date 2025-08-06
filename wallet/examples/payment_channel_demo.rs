@@ -110,27 +110,21 @@ async fn main() -> Result<(), WalletError> {
             .unwrap()
         );
 
-        // r_1 = "2422852404430683902810753577573102653260911761556849713949680014072177383950"
-        // [pubkey_peer]
-        //   x="0x1529458aa75b635e1f96ece9c2ef9aa44cb019f519a979cd85fce0080b8e2417"
-        //   y="0x033da4d76cfae27f8360bd4681609681fdcb09ece4ead5c88113c143a9a20c69"
         let r_1: BigUint = BigUint::parse_bytes(
             b"2422852404430683902810753577573102653260911761556849713949680014072177383950",
             10,
         )
         .unwrap();
-        // let pubkey_peer: Point = GetBJJPointFromHexPoints(
-        //         "1529458aa75b635e1f96ece9c2ef9aa44cb019f519a979cd85fce0080b8e2417",
-        //         "033da4d76cfae27f8360bd4681609681fdcb09ece4ead5c88113c143a9a20c69");
-        let private_key_peer: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
-        let pubkey_peer = get_scalar_to_point_bjj(&private_key_peer);
+        let private_key_bjj_peer: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
+        let public_key_bjj_peer = get_scalar_to_point_bjj(&private_key_bjj_peer);
 
         // enc_1 = "1220122097491108282229984040904504012545109624322527294624787674340936491877"
         // [fi_1]
         //   x="0x09d58da0c2ab2b11cc1f8579f739e7e463235185753ab5d4719e8db6aa476a23"
         //   y="0x1bc9eb7eab983bfd017433c4ed524b8bfde9db0abda7c7940e9c43822268b4ce"
 
-        let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &pubkey_peer, Some(&private_key_peer)).unwrap();
+        let (fi_1, enc_1) =
+            encrypt_message_ecdh(&share_1, &r_1, &public_key_bjj_peer, Some(&private_key_bjj_peer)).unwrap();
 
         assert_eq!(
             fi_1.x.to_string(),
@@ -152,14 +146,14 @@ async fn main() -> Result<(), WalletError> {
         //   x="0x12f87860325f2ba2d84d9332a0bedc25edd93736776e818d8993a1da678958bf"
         //   y="0x105900362a575a29943602c90d432768f271ffb8f06af513dcd81d05c3a2c4a3"
         let private_key_kes: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
-        let pubkey_kes = get_scalar_to_point_bjj(&private_key_kes);
+        let kes_public_key = get_scalar_to_point_bjj(&private_key_kes);
 
         // enc_2 = "321084871571726505169933431313947177118001726846734186078876149279016535274"
         // [fi_2]
         //   x="0x0ac31edd3af81f177137239a950c8f70662c4b6fbbeec57dae63bfcb61d931ee"
         //   y="0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0"
 
-        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &pubkey_kes, Some(&private_key_kes)).unwrap();
+        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &kes_public_key, Some(&private_key_kes)).unwrap();
 
         assert_eq!(
             fi_2.x.to_string(),
@@ -230,7 +224,7 @@ async fn main() -> Result<(), WalletError> {
         }
 
         //Prove
-        let proof_init = bb_prove_init(
+        let zero_knowledge_proof_init = bb_prove_init(
             &a_1,
             &blinding,
             &blinding_dleq,
@@ -251,13 +245,13 @@ async fn main() -> Result<(), WalletError> {
             &c_1,
             &fi_1,
             &fi_2,
-            &pubkey_kes,
-            &pubkey_peer,
+            &kes_public_key,
+            &public_key_bjj_peer,
         )
         .unwrap();
 
         //Verify
-        let public_outputs = PublicInit::new(
+        let public_init = PublicInit::new(
             &t_0,
             &c_1,
             &fi_1,
@@ -272,7 +266,14 @@ async fn main() -> Result<(), WalletError> {
             &r2,
         );
 
-        let verification = bb_verify_init(&public_outputs, &proof_init).unwrap();
+        let verification = bb_verify_init(
+            &nonce_peer,
+            &public_key_bjj_peer,
+            &kes_public_key,
+            &public_init,
+            &zero_knowledge_proof_init,
+        )
+        .unwrap();
         assert!(verification);
 
         //witness_i = "1012694528770316483559205215366203370757356884565651608309268621249697619247"
@@ -357,7 +358,7 @@ async fn main() -> Result<(), WalletError> {
         }
 
         //Prove
-        let proof_update = bb_prove_update(
+        let zero_knowledge_proof_update = bb_prove_update(
             &blinding_dleq_1,
             &challenge_bytes_1,
             &left_pad_bytes_32_vec(&response_div_baby_jub_jub_1.to_bytes_be()),
@@ -372,7 +373,7 @@ async fn main() -> Result<(), WalletError> {
         .unwrap();
 
         //Verify
-        let public_outputs = crate::PublicUpdate::new(
+        let public_update = crate::PublicUpdate::new(
             &t_0,
             &t_1,
             &s_1,
@@ -383,7 +384,7 @@ async fn main() -> Result<(), WalletError> {
             &r2_1,
         );
 
-        let verification = bb_verify_update(&public_outputs, &proof_update).unwrap();
+        let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update).unwrap();
         assert!(verification);
 
         println!("Success!");

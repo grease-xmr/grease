@@ -117,6 +117,8 @@ pub fn create_identity(config: &GlobalOptions, name: Option<String>) -> Result<C
     let mut local_identities = load_or_create_identities(&path)?;
     let addr = config.server_address.as_ref().ok_or_else(|| anyhow!("The config file needs a listener address."))?;
     let public_key = config.public_key.as_ref().ok_or_else(|| anyhow!("The config file needs a public key."))?;
+    let public_key_bjj =
+        config.public_key_bjj.as_ref().ok_or_else(|| anyhow!("The config file needs a public key BJJ."))?;
     let private_key = config.private_key.as_ref().ok_or_else(|| anyhow!("The config file needs a private key."))?;
     let nonce = config.nonce.as_ref().ok_or_else(|| anyhow!("The config file needs a nonce."))?;
     let identity = match name {
@@ -124,10 +126,17 @@ pub fn create_identity(config: &GlobalOptions, name: Option<String>) -> Result<C
             name.clone(),
             addr.clone(),
             public_key.clone(),
+            public_key_bjj.clone(),
             private_key.clone(),
             nonce.clone(),
         ),
-        None => ConversationIdentity::random(addr.clone(), public_key.clone(), private_key.clone(), nonce.clone()),
+        None => ConversationIdentity::random(
+            addr.clone(),
+            public_key.clone(),
+            public_key_bjj.clone(),
+            private_key.clone(),
+            nonce.clone(),
+        ),
     };
     if local_identities.contains(identity.id()) {
         return Err(anyhow!("Identity with id {} already exists.", identity.id()));

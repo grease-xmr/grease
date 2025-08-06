@@ -1,6 +1,7 @@
 use crate::message_types::NewChannelProposal;
 use crate::Client;
 use circuits::BBError;
+use circuits::ZeroKnowledgeProofUpdate;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
@@ -12,6 +13,7 @@ use libgrease::crypto::zk_objects::{
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
 use libgrease::state_machine::error::InvalidProposal;
 use log::*;
+use num_bigint::BigUint;
 use std::future::Future;
 use std::time::Duration;
 use thiserror::Error;
@@ -56,8 +58,8 @@ pub trait VerifiableSecretShare {
     fn split_secret_share(
         &self,
         secret: &Curve25519Secret,
-        kes_pubkey: &GenericPoint,
-        peer_pubkey: &Curve25519PublicKey,
+        kes_public_key: &GenericPoint,
+        public_key_peer: &Curve25519PublicKey,
     ) -> Result<MultisigSplitSecrets, DelegateError>;
 
     /// Verifies the secret share.
@@ -97,6 +99,9 @@ pub trait GreaseInitializer {
 
     fn verify_initial_proofs(
         &self,
+        nonce_peer: &BigUint,
+        public_key_bjj_peer: &babyjubjub_rs::Point,
+        kes_public_key: &babyjubjub_rs::Point,
         proof: &PublicProof0,
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
@@ -217,6 +222,9 @@ impl GreaseInitializer for DummyDelegate {
 
     async fn verify_initial_proofs(
         &self,
+        _nonce_peer: &BigUint,
+        _public_key_bjj_peer: &babyjubjub_rs::Point,
+        _kes_public_key: &babyjubjub_rs::Point,
         _proof: &PublicProof0,
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
@@ -232,7 +240,7 @@ impl KesProver for DummyDelegate {
         channel_name: String,
         _cust_key: PartialEncryptedKey,
         _m_key: PartialEncryptedKey,
-        _kes_pubkey: GenericPoint,
+        _kes_public_key: GenericPoint,
     ) -> Result<KesProof, DelegateError> {
         info!("DummyDelegate: Creating KES proofs for channel {channel_name}");
         Ok(KesProof { proof: format!("KesProof|{channel_name}").into_bytes() })
@@ -243,7 +251,7 @@ impl KesProver for DummyDelegate {
         channel_name: String,
         _c_key: PartialEncryptedKey,
         _m_key: PartialEncryptedKey,
-        _kes_pubkey: &GenericPoint,
+        _kes_public_key: &GenericPoint,
         proofs: KesProof,
     ) -> Result<(), DelegateError> {
         if proofs.proof == format!("KesProof|{channel_name}").into_bytes() {
@@ -331,7 +339,7 @@ impl Updater for DummyDelegate {
         delta: MoneroDelta,
         _witness: &GenericScalar,
         _blinding_dleq: &GenericScalar,
-        metadata: &ChannelMetadata,
+        _metadata: &ChannelMetadata,
     ) -> Result<UpdateProofs, DelegateError> {
         info!("DummyDelegate: Generating update {index} proof for channel.  {}", delta.amount);
         let mut rng = rand::rng();
@@ -354,8 +362,8 @@ impl Updater for DummyDelegate {
             delta_bjj: GenericScalar::random(&mut rng),
             delta_ed: GenericScalar::random(&mut rng),
         };
-        let proof = format!("UpdateProof|{}|{index}|{}", metadata.channel_id().name(), delta.amount).into_bytes();
-        Ok(UpdateProofs { private_outputs, public_outputs, proof })
+        let zero_knowledge_proof_update = ZeroKnowledgeProofUpdate::default();
+        Ok(UpdateProofs { private_outputs, public_outputs, zero_knowledge_proof_update })
     }
 
     async fn verify_update(
@@ -366,8 +374,8 @@ impl Updater for DummyDelegate {
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("Verifying update {index} proof for {} picoXMR", delta.amount);
-        let expected = format!("UpdateProof|{}|{index}|{}", metadata.channel_id().name(), delta.amount);
-        if proof.proof == expected.as_bytes() {
+        let expected = ZeroKnowledgeProofUpdate::default();
+        if proof.zero_knowledge_proof_update == expected {
             info!(
                 "Update proof verified successfully for channel {}",
                 metadata.channel_id().name()

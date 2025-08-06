@@ -34,6 +34,7 @@ use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;
+use num_bigint::BigUint;
 use rand::rng;
 use std::path::Path;
 use std::time::Duration;
@@ -356,8 +357,8 @@ where
         let wallet = self.customer_create_multisig_wallet(&name, k, p, peer_key_info).await?;
         // 2.2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
         debug!("👛️ Splitting, encrypting and sharing spend key with merchant for channel {name}");
-        let peer_pubkey = wallet.peer_public_key();
-        let merchant_shards = self.split_secrets(wallet.my_spend_key(), &kes_public_key, peer_pubkey).await?;
+        let public_key_peer = wallet.public_key_peer();
+        let merchant_shards = self.split_secrets(wallet.my_spend_key(), &kes_public_key, public_key_peer).await?;
         let shards_and_kes =
             self.customer_exchange_split_secrets(peer_id, &name, merchant_shards.clone(), &kes_public_key).await?;
         debug!("👛️ Merchant provided their encrypted shards for channel {name}");
@@ -386,19 +387,30 @@ where
         let input_private = generate_txc0_nonces(rng);
 
         let nonce_peer = channel.state().metadata().nonce_peer();
-        let pubkey_peer = channel.state().metadata().public_key_peer();
+        // let public_key_peer = channel.state().metadata().public_key_peer();
+        let kes_public_key = channel.state().metadata().kes_public_key();
+        let public_key_bjj_peer = channel.state().metadata().public_key_bjj_peer();
 
-        let input_public = Comm0PublicInputs::new(nonce_peer, pubkey_peer);
+        let input_public = Comm0PublicInputs::new(nonce_peer, public_key_bjj_peer);
         let peer_proof = self.generate_and_store_witness0(&name, &input_public, &input_private).await?;
         info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {name} with merchant.");
 
         let nonce_self = channel.state().metadata().nonce_self();
-        let pubkey_self = channel.state().metadata().public_key_self();
-        let peer_proof0: PeerProof0 = PeerProof0::new(peer_proof, Comm0PublicInputs::new(nonce_self, pubkey_self));
+        // let public_key_self = channel.state().metadata().public_key_self();
+        let public_key_bjj_self = channel.state().metadata().public_key_bjj_self();
+        let peer_proof0: PeerProof0 =
+            PeerProof0::new(peer_proof, Comm0PublicInputs::new(nonce_self, public_key_bjj_self));
 
         let merchant_proof = self.customer_send_proofs0(&name, peer_id, peer_proof0).await?;
         info!("👁️‍🗨️ Verifying merchant's initial transaction proof for channel {name}. (ZK-Witness0 proof)");
-        self.verify_proof0(&name, &merchant_proof.public_proof0).await?;
+        self.verify_proof0(
+            &name,
+            nonce_peer,
+            public_key_bjj_peer,
+            kes_public_key,
+            &merchant_proof.public_proof0,
+        )
+        .await?;
         info!("👁️‍🗨️ Merchant's initial transaction proof is VALID for channel {name}. (ZK-Witness0 proof)");
         self.store_public_proof0(&name, &merchant_proof).await?;
         info!("👁️‍🗨️ Stored Merchant's initial transaction proof for channel {name}.");
@@ -501,8 +513,10 @@ where
             .with_customer_closing_address(prop.closing_address)
             .with_merchant_closing_address(prop.seed.closing_address)
             .with_public_key_self(prop.contact_info_proposer.public_key)
+            .with_public_key_bjj_self(prop.contact_info_proposer.public_key_bjj)
             .with_nonce_self(prop.contact_info_proposer.nonce.expect("Missing nonce self, customer"))
             .with_public_key_peer(prop.contact_info_proposee.public_key)
+            .with_public_key_bjj_peer(prop.contact_info_proposee.public_key_bjj)
             .with_nonce_peer(prop.contact_info_proposee.nonce.expect("Missing nonce peer, customer"))
             .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data, customer");
@@ -521,8 +535,10 @@ where
             .with_customer_closing_address(prop.closing_address)
             .with_merchant_closing_address(prop.seed.closing_address)
             .with_public_key_self(prop.contact_info_proposee.public_key)
+            .with_public_key_bjj_self(prop.contact_info_proposee.public_key_bjj)
             .with_nonce_self(prop.contact_info_proposee.nonce.expect("Missing nonce self, merchant"))
             .with_public_key_peer(prop.contact_info_proposer.public_key)
+            .with_public_key_bjj_peer(prop.contact_info_proposer.public_key_bjj)
             .with_nonce_peer(prop.contact_info_proposer.nonce.expect("Missing nonce peer, merchant"))
             .build::<blake2::Blake2b512>()
             .expect("Missing new channel state data, merchant");
@@ -580,7 +596,7 @@ where
     ) -> Result<MultisigKeyInfo, ChannelServerError> {
         let mut client = self.network_client.clone();
         let key_info = MultisigKeyInfo { key: my_pubkey.clone() };
-        let peer_pubkey = match client.send_multisig_key(peer_id, name, key_info).await? {
+        let public_key_peer = match client.send_multisig_key(peer_id, name, key_info).await? {
             Ok(envelope) => {
                 let (channel_name, peer_key_info) = envelope.open();
                 if channel_name != name {
@@ -595,7 +611,7 @@ where
                 return Err(ChannelServerError::ProtocolError(err.to_string()));
             }
         };
-        Ok(peer_pubkey)
+        Ok(public_key_peer)
     }
 
     async fn create_new_2_of_2_wallet(
@@ -673,10 +689,10 @@ where
     async fn split_secrets(
         &self,
         secret: &Curve25519Secret,
-        kes_pubkey: &GenericPoint,
-        peer: &Curve25519PublicKey,
+        kes_public_key: &GenericPoint,
+        public_key_peer: &Curve25519PublicKey,
     ) -> Result<MultisigSplitSecrets, ChannelServerError> {
-        let split_secrets = self.delegate.split_secret_share(secret, kes_pubkey, peer)?;
+        let split_secrets = self.delegate.split_secret_share(secret, kes_public_key, public_key_peer)?;
         Ok(split_secrets)
     }
 
@@ -776,11 +792,11 @@ where
             )))
         })?;
         let key = wallet.my_spend_key.clone();
-        let peer = wallet.peer_public_key().clone();
-        let kes_pubkey = channel.state().metadata().kes_public_key();
+        let public_key_peer = wallet.public_key_peer().clone();
+        let kes_public_key = channel.state().metadata().kes_public_key();
         // drop(channel);
         debug!("👛️  Splitting multisig wallet spend key for customer and KES.");
-        let customer_shards = self.split_secrets(&key, &kes_pubkey, &peer).await.map_err(|e| {
+        let customer_shards = self.split_secrets(&key, &kes_public_key, &public_key_peer).await.map_err(|e| {
             GreaseResponse::MsKeyExchange(Err(RemoteServerError::internal(format!(
                 "Merchant could not create encrypted secret shares: {e}"
             ))))
@@ -795,7 +811,7 @@ where
                 name.clone(),
                 my_shards.kes_shard.clone(),
                 customer_shards.kes_shard.clone(),
-                *kes_pubkey,
+                *kes_public_key,
             )
             .await
             .map_err(|e| {
@@ -951,9 +967,24 @@ where
         debug!("👁️‍🗨️  Received witness_0 proof exchange request");
         let (name, peer_proof) = envelope.open();
         debug!("👁️‍🗨️  Verifying received witness0 proof for channel {name}.");
-        self.verify_proof0(&name, &peer_proof.public_proof0)
+        let channel = self
+            .channels
+            .peek(&name)
             .await
-            .map_err(|e| GreaseResponse::ExchangeProof0(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
+            .ok_or(GreaseResponse::ExchangeProof0(Err(RemoteServerError::ChannelDoesNotExist)))?;
+        let nonce_peer = channel.state().metadata().nonce_peer();
+        // let public_key_peer = channel.state().metadata().public_key_peer();
+        let kes_public_key = channel.state().metadata().kes_public_key();
+        let public_key_bjj_peer = channel.state().metadata().public_key_bjj_peer();
+        self.verify_proof0(
+            &name,
+            nonce_peer,
+            public_key_bjj_peer,
+            kes_public_key,
+            &peer_proof.public_proof0,
+        )
+        .await
+        .map_err(|e| GreaseResponse::ExchangeProof0(Err(RemoteServerError::InvalidProof(e.to_string()))))?;
         debug!("👁️‍🗨️  Storing witness0 proof for channel {name}.");
         self.store_public_proof0(&name, &peer_proof).await.map_err(|e| {
             GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
@@ -963,10 +994,6 @@ where
         debug!("👁️‍🗨️  Customer's witness0 proof is VALID for channel {name}.");
         let input_private = generate_txc0_nonces(&mut rand::rng());
 
-        // let nonce_peer = channel.state().metadata().nonce_peer();
-        // let pubkey_peer = channel.state().metadata().public_key_peer();
-
-        // let input_public = Comm0PublicInputs::new(nonce_peer, pubkey_peer);
         let pub_proof = self
             .generate_and_store_witness0(&name, &peer_proof.comm0_public_inputs, &input_private)
             .await
@@ -983,11 +1010,27 @@ where
         Ok(GreaseResponse::ExchangeProof0(Ok(envelope)))
     }
 
-    async fn verify_proof0(&self, name: &str, proof: &PublicProof0) -> Result<(), ChannelServerError> {
+    async fn verify_proof0(
+        &self,
+        name: &str,
+        nonce_peer: &GenericScalar,
+        public_key_bjj_peer: &GenericPoint,
+        kes_public_key: &GenericPoint,
+        proof: &PublicProof0,
+    ) -> Result<(), ChannelServerError> {
         let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let metadata = channel.state().metadata().clone();
         drop(channel);
-        self.delegate.verify_initial_proofs(proof, &metadata).await?;
+
+        let nonce_peer: BigUint = nonce_peer.into();
+        let public_key_bjj_peer = babyjubjub_rs::Point::try_from(public_key_bjj_peer)
+            .map_err(|_| ChannelServerError::InvalidState("Invalid public key BJJ peer".to_string()))?;
+        let kes_public_key = babyjubjub_rs::Point::try_from(kes_public_key)
+            .map_err(|_| ChannelServerError::InvalidState("Invalid KES public key".to_string()))?;
+
+        self.delegate
+            .verify_initial_proofs(&nonce_peer, &public_key_bjj_peer, &kes_public_key, proof, &metadata)
+            .await?;
         Ok(())
     }
 

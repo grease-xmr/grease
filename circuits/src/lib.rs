@@ -8,15 +8,18 @@ use ff_ce::PrimeField;
 use hex;
 use num_bigint::{BigInt, BigUint};
 use num_traits::ops::euclid::Euclid;
+use num_traits::Zero;
 use poseidon_rs::Fr;
 use rand::{CryptoRng, RngCore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::io::{self, Read};
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use toml;
+
+pub mod helpers;
 
 use lazy_static::lazy_static;
 lazy_static! {
@@ -194,6 +197,15 @@ pub fn make_keypair_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, babyju
     (secret_key, public_key)
 }
 
+pub fn make_keypair_ed25519<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
+    let mut secret_bytes = [0u8; 32];
+    rng.fill_bytes(&mut secret_bytes);
+    let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
+    let secret_key: BigUint = secret_key.rem_euclid(&ED25519_ORDER);
+    let public_key = get_scalar_to_point_ed25519(&secret_key);
+    (secret_key, public_key)
+}
+
 pub fn make_keypair_ed25519_bjj_order<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
     let mut secret_bytes = [0u8; 32];
     rng.fill_bytes(&mut secret_bytes);
@@ -287,11 +299,11 @@ pub fn feldman_secret_share_2_of_2(
 pub fn encrypt_message_ecdh(
     message: &BigUint,
     r: &BigUint,
-    pubkey: &babyjubjub_rs::Point,
+    public_key: &babyjubjub_rs::Point,
     private_key: Option<&BigUint>,
 ) -> Result<(babyjubjub_rs::Point, BigUint), BBError> {
     let r_g = B8.mul_scalar(&r.clone().into());
-    let r_p = pubkey.mul_scalar(&r.clone().into());
+    let r_p = public_key.mul_scalar(&r.clone().into());
 
     // Input byte array
     let r_p_x_bytes = get_field_bytes(&r_p.x);
@@ -774,6 +786,35 @@ struct UpdateConfig {
     T_im1: PointConfig,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ZeroKnowledgeProofInit {
+    // pub public_input: [u8; 1312],
+    pub public_input: Vec<u8>,
+    #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
+    pub proof: Option<Box<[u8; 14080]>>,
+}
+
+impl Default for ZeroKnowledgeProofInit {
+    fn default() -> Self {
+        Self { public_input: Default::default(), proof: None }
+    }
+}
+
+//Copy
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ZeroKnowledgeProofUpdate {
+    // pub public_input: [u8; 1152],
+    pub public_input: Vec<u8>,
+    #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
+    pub proof: Option<Box<[u8; 14080]>>,
+}
+
+impl Default for ZeroKnowledgeProofUpdate {
+    fn default() -> Self {
+        Self { public_input: Default::default(), proof: None }
+    }
+}
+
 pub fn bb_prove_init(
     a_1: &BigUint,
     blinding: &BigUint,
@@ -796,9 +837,9 @@ pub fn bb_prove_init(
     c_1: &Point,
     fi_1: &Point,
     fi_2: &Point,
-    pubkey_kes: &Point,
-    pubkey_peer: &Point,
-) -> Result<Vec<u8>, BBError> {
+    kes_public_key: &Point,
+    public_key_peer: &Point,
+) -> Result<ZeroKnowledgeProofInit, BBError> {
     let config = InitConfig {
         a_1: a_1.to_string(),
         blinding: blinding.to_string(),
@@ -821,8 +862,8 @@ pub fn bb_prove_init(
         c_1: get_point_config_baby_jubjub(c_1),
         fi_1: get_point_config_baby_jubjub(fi_1),
         fi_2: get_point_config_baby_jubjub(fi_2),
-        pubkey_KES: get_point_config_baby_jubjub(pubkey_kes),
-        pubkey_peer: get_point_config_baby_jubjub(pubkey_peer),
+        pubkey_KES: get_point_config_baby_jubjub(kes_public_key),
+        pubkey_peer: get_point_config_baby_jubjub(public_key_peer),
     };
 
     // Serialize to TOML string
@@ -863,7 +904,7 @@ pub fn bb_prove_init(
     //bb prove
     //TODO: Embed the Grease.json file
     let args: Vec<&str> = vec!["prove", "-b", "./target/Grease.json", "-w", &witness_binary_file_path, "-v", "-o", "-"];
-    let proof: Vec<u8> = match call_shell(Shell::Bb, &args) {
+    let mut public_input_and_proof: Vec<u8> = match call_shell(Shell::Bb, &args) {
         Ok((stdout, _stderr)) => stdout,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -874,7 +915,26 @@ pub fn bb_prove_init(
     //Delete temp file
     witness_binary_file.close()?;
 
-    Ok(proof)
+    if public_input_and_proof.len() != 1312 + 14080 {
+        return Err(BBError::String("Invalid public input and proof length".to_string()));
+    }
+
+    //41 public fields ==> 1,312 bytes @ 32 bytes each
+    let proof: Vec<u8> = public_input_and_proof.split_off(1312);
+
+    if public_input_and_proof.len() != 1312 {
+        return Err(BBError::String("Invalid public input length".to_string()));
+    }
+    if proof.len() != 14080 {
+        return Err(BBError::String("Invalid proof length".to_string()));
+    }
+
+    Ok(ZeroKnowledgeProofInit {
+        // public_input: <[u8; 1312]>::try_from(public_input_and_proof)
+        //     .map_err(|_| BBError::String("public_input must be exactly 1312 bytes".to_string()))?,
+        public_input: public_input_and_proof,
+        proof: Some(proof.try_into().map_err(|_| BBError::String("proof must be exactly 14080 bytes".to_string()))?),
+    })
 }
 
 // /**
@@ -888,17 +948,21 @@ pub fn bb_prove_init(
 //   proof: Uint8Array;
 // };
 
-pub fn bb_verify(proof: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> {
-    // Create a named temporary file
+pub fn bb_verify(proof: &Box<[u8; 14080]>, public_inputs: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> {
+    // Create named temporary files
     let mut proof_file = NamedTempFile::new()?;
+    let mut public_inputs_file = NamedTempFile::new()?;
 
-    // Write content to the temporary file
-    proof_file.write_all(proof)?;
+    // Write content to the temporary files
+    proof_file.write_all(&proof.to_vec())?;
+    public_inputs_file.write_all(public_inputs)?;
 
     let proof_file_path = proof_file.path().to_string_lossy().to_string();
+    let public_inputs_file_path = public_inputs_file.path().to_string_lossy().to_string();
 
     //nargo verify
-    let args: Vec<&str> = vec!["verify", "-v", "-k", view_key_file, "-p", &proof_file_path];
+    let args: Vec<&str> =
+        vec!["verify", "-v", "-k", view_key_file, "-p", &proof_file_path, "-i", &public_inputs_file_path];
     let ret: Result<bool, BBError> = match call_shell(Shell::Bb, &args) {
         Ok((_stdout, _stderr)) => Ok(true),
         Err(e) => {
@@ -907,17 +971,105 @@ pub fn bb_verify(proof: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> 
         }
     };
 
-    //Delete temp file
+    //Delete temp files
     proof_file.close()?;
+    public_inputs_file.close()?;
 
     ret
 }
 
-pub fn bb_verify_init(_public: &PublicInit, proof: &Vec<u8>) -> Result<bool, BBError> {
-    //TODO: Verify public parameters
+pub fn bb_verify_init(
+    nonce_peer: &BigUint,
+    public_key_bjj_peer: &babyjubjub_rs::Point,
+    kes_public_key: &babyjubjub_rs::Point,
+    public_init: &PublicInit,
+    zero_knowledge_proof_init: &ZeroKnowledgeProofInit,
+) -> Result<bool, BBError> {
+    let proof = match zero_knowledge_proof_init.proof {
+        Some(ref p) => p,
+        None => return Err(BBError::String("Proof is missing".to_string())),
+    };
+
+    // nonce_peer: pub Field,
+    if *nonce_peer != BigUint::from_bytes_be(&zero_knowledge_proof_init.public_input[0..32]) {
+        return Err(BBError::String("Nonce peer does not match".to_string()));
+    }
+    // T_0: pub edwards::Curve<BabyJubJubParams>,
+    let t_0_x_bytes = get_field_bytes(&public_init.T_0.x);
+    if t_0_x_bytes != zero_knowledge_proof_init.public_input[32..64] {
+        return Err(BBError::String("T_0.x does not match".to_string()));
+    }
+    let t_0_y = get_field_bytes(&public_init.T_0.y);
+    if t_0_y != zero_knowledge_proof_init.public_input[64..96] {
+        return Err(BBError::String("T_0.y does not match".to_string()));
+    }
+    // c_1: pub edwards::Curve<BabyJubJubParams>,
+    let c_1_x_bytes = get_field_bytes(&public_init.c_1.x);
+    if c_1_x_bytes != zero_knowledge_proof_init.public_input[96..128] {
+        return Err(BBError::String("c_1.x does not match".to_string()));
+    }
+    let c_1_y_bytes = get_field_bytes(&public_init.c_1.y);
+    if c_1_y_bytes != zero_knowledge_proof_init.public_input[128..160] {
+        return Err(BBError::String("c_1.y does not match".to_string()));
+    }
+    // pubkey_peer: pub edwards::Curve<BabyJubJubParams>,
+    let public_key_peer_x_bytes = get_field_bytes(&public_key_bjj_peer.x);
+    if public_key_peer_x_bytes != zero_knowledge_proof_init.public_input[160..192] {
+        return Err(BBError::String("public_key_peer.x does not match".to_string()));
+    }
+    let public_key_peer_y_bytes = get_field_bytes(&public_key_bjj_peer.y);
+    if public_key_peer_y_bytes != zero_knowledge_proof_init.public_input[192..224] {
+        return Err(BBError::String("public_key_peer.y does not match".to_string()));
+    }
+    // pubkey_KES: pub edwards::Curve<BabyJubJubParams>,
+    let kes_public_key_x_bytes = get_field_bytes(&kes_public_key.x);
+    if kes_public_key_x_bytes != zero_knowledge_proof_init.public_input[224..256] {
+        return Err(BBError::String("kes_public_key.x does not match".to_string()));
+    }
+    let kes_public_key_y_bytes = get_field_bytes(&kes_public_key.y);
+    if kes_public_key_y_bytes != zero_knowledge_proof_init.public_input[256..288] {
+        return Err(BBError::String("kes_public_key.y does not match".to_string()));
+    }
+    // challenge_bytes: pub [u8; 32],
+    //BigUint::from_bytes_be(&zero_knowledge_proof_init.public_input[(288 + (? *32))..32])
+    let challenge_bytes = public_init.c.to_bytes_be();
+    if challenge_bytes.len() > 32 {
+        return Err(BBError::String(
+            "challenge_bytes must less than or equal to 32 bytes".to_string(),
+        ));
+    }
+    let leading_zeroes = 32 - challenge_bytes.len();
+    if leading_zeroes > 0 {
+        for i in 0..leading_zeroes {
+            let public_input_index = 288 + (i * 32);
+            let public_input_index_until = public_input_index + 32;
+
+            if BigUint::zero()
+                != BigUint::from_bytes_be(
+                    &zero_knowledge_proof_init.public_input[public_input_index..public_input_index_until],
+                )
+            {
+                return Err(BBError::String("challenge_bytes does not match".to_string()));
+            }
+        }
+    }
+    for i in leading_zeroes..32 {
+        let public_input_index = 288 + (i * 32);
+        let public_input_index_until = public_input_index + 32;
+        let challenge_byte = BigUint::from(challenge_bytes[leading_zeroes + i]);
+
+        if challenge_byte
+            != BigUint::from_bytes_be(
+                &zero_knowledge_proof_init.public_input[public_input_index..public_input_index_until],
+            )
+        {
+            return Err(BBError::String("challenge_bytes does not match".to_string()));
+        }
+    }
+    //TODO: Generate public parameters
 
     //TODO: Embed the vk.key file
-    bb_verify(proof, "./target/vk/vk.key")
+    bb_verify(proof, &zero_knowledge_proof_init.public_input.to_vec(), "./target/vk/vk.key")
 }
 
 pub fn bb_prove_update(
@@ -932,7 +1084,7 @@ pub fn bb_prove_update(
 
     t_i: &Point,
     t_im1: &Point,
-) -> Result<Vec<u8>, BBError> {
+) -> Result<ZeroKnowledgeProofUpdate, BBError> {
     let config = UpdateConfig {
         blinding_DLEQ: blinding_dleq.to_string(),
         challenge_bytes: byte_array_to_string_array(&challenge_bytes),
@@ -986,7 +1138,7 @@ pub fn bb_prove_update(
     //TODO: Embed the GreaseUpdate.json file
     let args: Vec<&str> =
         vec!["prove", "-b", "./target/GreaseUpdate.json", "-w", &witness_binary_file_path, "-v", "-o", "-"];
-    let proof = match call_shell(Shell::Bb, &args) {
+    let mut public_input_and_proof = match call_shell(Shell::Bb, &args) {
         Ok((stdout, _stderr)) => stdout,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -997,7 +1149,15 @@ pub fn bb_prove_update(
     //Delete temp file
     witness_binary_file.close()?;
 
-    Ok(proof)
+    //36 public fields ==> 1,152 bytes @ 32 bytes each
+    let proof: Vec<u8> = public_input_and_proof.split_off(1152);
+
+    Ok(ZeroKnowledgeProofUpdate {
+        // public_input: <[u8; 1152]>::try_from(public_input_and_proof)
+        //     .map_err(|_| BBError::String("public_input must be exactly 1152 bytes".to_string()))?,
+        public_input: public_input_and_proof,
+        proof: Some(proof.try_into().map_err(|_| BBError::String("proof must be exactly 14080 bytes".to_string()))?),
+    })
 }
 
 /// The outputs of the Commitment0 proofs that must be shared with the peer.
@@ -1114,11 +1274,77 @@ impl PublicUpdate {
     }
 }
 
-pub fn bb_verify_update(_public: &PublicUpdate, proof: &Vec<u8>) -> Result<bool, BBError> {
-    //TODO: Verify public parameters
+pub fn bb_verify_update(
+    public_update: &PublicUpdate,
+    zero_knowledge_proof_update: &ZeroKnowledgeProofUpdate,
+) -> Result<bool, BBError> {
+    let proof = match zero_knowledge_proof_update.proof {
+        Some(ref p) => p,
+        None => return Err(BBError::String("Proof is missing".to_string())),
+    };
+
+    // T_im1: pub edwards::Curve<BabyJubJubParams>,
+    let t_prev_x_bytes = get_field_bytes(&public_update.T_prev.x);
+    if t_prev_x_bytes != zero_knowledge_proof_update.public_input[0..32] {
+        return Err(BBError::String("T_prev.x does not match".to_string()));
+    }
+    let t_prev_y = get_field_bytes(&public_update.T_prev.y);
+    if t_prev_y != zero_knowledge_proof_update.public_input[32..64] {
+        return Err(BBError::String("T_prev.y does not match".to_string()));
+    }
+    // T_i: pub edwards::Curve<BabyJubJubParams>,
+    let t_current_x_bytes = get_field_bytes(&public_update.T_current.x);
+    if t_current_x_bytes != zero_knowledge_proof_update.public_input[64..96] {
+        return Err(BBError::String("T_current.x does not match".to_string()));
+    }
+    let t_current_y_bytes = get_field_bytes(&public_update.T_current.y);
+    if t_current_y_bytes != zero_knowledge_proof_update.public_input[96..128] {
+        return Err(BBError::String("T_current.y does not match".to_string()));
+    }
+    // challenge_bytes: pub [u8; 32],
+    //BigUint::from_bytes_be(&zero_knowledge_proof_update.public_input[(128 + (? *32))..32])
+    let challenge_bytes = public_update.challenge.to_bytes_be();
+    if challenge_bytes.len() > 32 {
+        return Err(BBError::String(
+            "challenge_bytes must less than or equal to 32 bytes".to_string(),
+        ));
+    }
+    let leading_zeroes = 32 - challenge_bytes.len();
+    if leading_zeroes > 0 {
+        for i in 0..leading_zeroes {
+            let public_input_index = 128 + (i * 32);
+            let public_input_index_until = public_input_index + 32;
+
+            if BigUint::zero()
+                != BigUint::from_bytes_be(
+                    &zero_knowledge_proof_update.public_input[public_input_index..public_input_index_until],
+                )
+            {
+                return Err(BBError::String("challenge_bytes does not match".to_string()));
+            }
+        }
+    }
+    for i in leading_zeroes..32 {
+        let public_input_index = 128 + (i * 32);
+        let public_input_index_until = public_input_index + 32;
+        let challenge_byte = BigUint::from(challenge_bytes[leading_zeroes + i]);
+
+        if challenge_byte
+            != BigUint::from_bytes_be(
+                &zero_knowledge_proof_update.public_input[public_input_index..public_input_index_until],
+            )
+        {
+            return Err(BBError::String("challenge_bytes does not match".to_string()));
+        }
+    }
+    //TODO: Generate public parameters
 
     //TODO: Embed the vk.key file
-    bb_verify(proof, "./target/vk/vkUpdate.key")
+    bb_verify(
+        proof,
+        &zero_knowledge_proof_update.public_input.to_vec(),
+        "./target/vk/vkUpdate.key",
+    )
 }
 
 //TESTS
@@ -1299,12 +1525,12 @@ mod test {
             let (c_1, share_1, share_2) = crate::feldman_secret_share_2_of_2(&witness_0, &a_1).unwrap();
 
             let r_1 = crate::make_scalar_bjj(rng);
-            let (_, pubkey_peer) = crate::make_keypair_bjj(rng);
-            let (fi_1, enc_1) = crate::encrypt_message_ecdh(&share_1, &r_1, &pubkey_peer, None).unwrap();
+            let (_, public_key_peer) = crate::make_keypair_bjj(rng);
+            let (fi_1, enc_1) = crate::encrypt_message_ecdh(&share_1, &r_1, &public_key_peer, None).unwrap();
 
             let r_2 = crate::make_scalar_bjj(rng);
-            let (_, pubkey_kes) = crate::make_keypair_bjj(rng);
-            let (fi_2, enc_2) = crate::encrypt_message_ecdh(&share_2, &r_2, &pubkey_kes, None).unwrap();
+            let (_, kes_public_key) = crate::make_keypair_bjj(rng);
+            let (fi_2, enc_2) = crate::encrypt_message_ecdh(&share_2, &r_2, &kes_public_key, None).unwrap();
 
             let blinding_dleq = crate::make_scalar_bjj(rng);
 
@@ -1318,7 +1544,7 @@ mod test {
                 response_div_ed25519,
             ) = crate::generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
 
-            let proof_init = crate::bb_prove_init(
+            let zero_knowledge_proof_init = crate::bb_prove_init(
                 &a_1,
                 &blinding,
                 &blinding_dleq,
@@ -1339,13 +1565,13 @@ mod test {
                 &c_1,
                 &fi_1,
                 &fi_2,
-                &pubkey_kes,
-                &pubkey_peer,
+                &kes_public_key,
+                &public_key_peer,
             )
             .unwrap();
 
             //Verify
-            let public = crate::PublicInit::new(
+            let public_init = crate::PublicInit::new(
                 &t_0,
                 &c_1,
                 &fi_1,
@@ -1359,7 +1585,15 @@ mod test {
                 &r1,
                 &r2,
             );
-            let verification = crate::bb_verify_init(&public, &proof_init).unwrap();
+
+            let verification = crate::bb_verify_init(
+                &nonce_peer,
+                &public_key_peer,
+                &kes_public_key,
+                &public_init,
+                &zero_knowledge_proof_init,
+            )
+            .unwrap();
             assert!(verification);
         }
     }
@@ -1386,7 +1620,7 @@ mod test {
         ) = crate::generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
 
         //Prove
-        let proof_update = crate::bb_prove_update(
+        let zero_knowledge_proof_update = crate::bb_prove_update(
             &blinding_dleq,
             &challenge_bytes,
             &crate::left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
@@ -1401,7 +1635,7 @@ mod test {
         .unwrap();
 
         //Verify
-        let public = crate::PublicUpdate::new(
+        let public_update = crate::PublicUpdate::new(
             &t_im1,
             &t_i,
             &s_i,
@@ -1411,7 +1645,8 @@ mod test {
             &r1,
             &r2,
         );
-        let verification = crate::bb_verify_update(&public, &proof_update).unwrap();
+
+        let verification = crate::bb_verify_update(&public_update, &zero_knowledge_proof_update).unwrap();
         assert!(verification);
     }
 }

@@ -278,6 +278,7 @@ impl NewChannelProposal {
             role: self.seed.role,
             kes_public_key: self.seed.kes_public_key.clone(),
             public_key: self.seed.public_key.clone(),
+            public_key_bjj: self.seed.public_key_bjj.clone(),
             nonce: self.seed.nonce.clone(),
             initial_balances: self.seed.initial_balances,
             customer_label,

@@ -47,7 +47,7 @@ preferred_identity: Alice
 # The URL that the grease server must listen on
 server_address: /ip4/127.0.0.1/tcp/40012
 # The public key of the KES that this identity wants to use
-kes_public_key: 61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016
+kes_public_key: da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46
 # An arbitrary label use to derive Channel IDs. Make this unique to yourself
 user_label: test_customer
   # You root secret key. Do not share this with anyone. This is used to derive the channel keys, and spend keys for 
@@ -191,7 +191,7 @@ Channel info:
 ▀▀▀▀▀▀▀ ▀ ▀     ▀ ▀ ▀▀▀ ▀▀ ▀▀  ▀ ▀▀  ▀  ▀ ▀▀▀   ▀▀       ▀▀ ▀▀▀ ▀  ▀    ▀▀ ▀   ▀     ▀ ▀▀▀▀▀ 
 {"contact":{"name":"Bob","peer_id":"0024080112209c3cd0da14edbce70c1d19c660b2835750a0931794a08676ddf03c7b655a886e",
 "address":"/ip4/127.0.0.1/tcp/23001/p2p/12D3KooWLLFZAuusef2zws9er5e5cTziLd66EKKGiqTa6mZaJr2R"},"seed":{"role":
-"Customer","key_id":721853122146939167,"kes_public_key":"61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016",
+"Customer","key_id":721853122146939167,"kes_public_key":"da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46",
 "initial_balances":{"merchant":0,"customer":1000000000000},"user_label":"test_merchant-721853122146939167",
 "closing_address":"4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3"}}
 ```
@@ -216,7 +216,7 @@ If you have set the `RUST_LOG` environment variable to `info`, you will see the 
 Paste merchant info: {"contact":{"name":"...  as above ... bNGuePkRLYcFo4N7p3"}}
 
 [2025-06-16T11:34:02Z INFO  grease_p2p::server] 💍️ Sending new channel proposal to merchant
-[2025-06-16T11:34:02Z INFO  grease_p2p::delegates] DummyDelegate: Verifying proposal. NewChannelProposal { seed: ChannelSeedInfo { role: Customer, key_id: 721853122146939167, kes_public_key: "61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016", initial_balances: Balances { merchant: MoneroAmount { amount: 0 }, customer: MoneroAmount { amount: 1000000000000 } }, user_label: "test_merchant-721853122146939167", closing_address: Address { network: Mainnet, addr_type: Standard, public_spend: fec0022be3ee858abd36caee0beeae71ae0936d833cf4df161af676a834e5669, public_view: bbfce3242172c754ea909f94a354532973f87bacbb553ecd77356f7ebb844583 } }, contact_info_proposer: ContactInfo { name: "Alice", peer_id: PeerId("12D3KooWKBUUwYfK3d2JAfm2tW6CqKuzXXLhop6dZB92ThiMxuDB"), address: /ip4/127.0.0.1/tcp/23002/p2p/12D3KooWKBUUwYfK3d2JAfm2tW6CqKuzXXLhop6dZB92ThiMxuDB }, contact_info_proposee: ContactInfo { name: "Bob", peer_id: PeerId("12D3KooWLLFZAuusef2zws9er5e5cTziLd66EKKGiqTa6mZaJr2R"), address: /ip4/127.0.0.1/tcp/23001/p2p/12D3KooWLLFZAuusef2zws9er5e5cTziLd66EKKGiqTa6mZaJr2R }, proposer_label: "Alice-5478350487753156342", closing_address: Address { network: Mainnet, addr_type: Standard, public_spend: 3708501937897f5513732909621a72d106fbe464e45acb7dc03e9f9852d207bd, public_view: 03f8d79546903664fefa2c85377747875d94ece8c9710e106dd624a800d0eedd } }
+[2025-06-16T11:34:02Z INFO  grease_p2p::delegates] DummyDelegate: Verifying proposal. NewChannelProposal { seed: ChannelSeedInfo { role: Customer, key_id: 721853122146939167, kes_public_key: "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46", initial_balances: Balances { merchant: MoneroAmount { amount: 0 }, customer: MoneroAmount { amount: 1000000000000 } }, user_label: "test_merchant-721853122146939167", closing_address: Address { network: Mainnet, addr_type: Standard, public_spend: fec0022be3ee858abd36caee0beeae71ae0936d833cf4df161af676a834e5669, public_view: bbfce3242172c754ea909f94a354532973f87bacbb553ecd77356f7ebb844583 } }, contact_info_proposer: ContactInfo { name: "Alice", peer_id: PeerId("12D3KooWKBUUwYfK3d2JAfm2tW6CqKuzXXLhop6dZB92ThiMxuDB"), address: /ip4/127.0.0.1/tcp/23002/p2p/12D3KooWKBUUwYfK3d2JAfm2tW6CqKuzXXLhop6dZB92ThiMxuDB }, contact_info_proposee: ContactInfo { name: "Bob", peer_id: PeerId("12D3KooWLLFZAuusef2zws9er5e5cTziLd66EKKGiqTa6mZaJr2R"), address: /ip4/127.0.0.1/tcp/23001/p2p/12D3KooWLLFZAuusef2zws9er5e5cTziLd66EKKGiqTa6mZaJr2R }, proposer_label: "Alice-5478350487753156342", closing_address: Address { network: Mainnet, addr_type: Standard, public_spend: 3708501937897f5513732909621a72d106fbe464e45acb7dc03e9f9852d207bd, public_view: 03f8d79546903664fefa2c85377747875d94ece8c9710e106dd624a800d0eedd } }
 [2025-06-16T11:34:02Z INFO  grease_p2p::server] 💍️ Proposal accepted. Channel name: XGCbc28bd2783ed9fa5c9d8ca08f6daddd0
 [2025-06-16T11:34:02Z INFO  grease_p2p::server] 👛️ Creating new multisig wallet keys for channel XGCbc28bd2783ed9fa5c9d8ca08f6daddd0
 [2025-06-16T11:34:02Z INFO  grease_p2p::delegates] DummyDelegate: Splitting secret share

@@ -504,16 +504,18 @@ mod test {
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state<R: CryptoRng + RngCore>(rng: &mut R) -> NewChannelState {
-        let (_, public_key_self) = make_keypair_bjj(rng);
-        let (_, public_key_peer) = make_keypair_bjj(rng);
-        let (_, public_key_kes) = make_keypair_bjj(rng);
+        let (_, public_key_self) = make_keypair_ed25519(rng);
+        let (_, public_key_bjj_self) = make_keypair_bjj(rng);
+        let (_, public_key_peer) = make_keypair_ed25519(rng);
+        let (_, kes_public_key) = make_keypair_ed25519(rng);
+        let (_, public_key_bjj_peer) = make_keypair_bjj(rng);
         let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
         let nonce_peer = BigUint::from_bytes_be(&random_251_bits(rng));
 
         // All this info is known, or can be scanned in from a QR code etc
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
         let initial_state = initial_state
-            .with_kes_public_key(public_key_kes)
+            .with_kes_public_key(kes_public_key)
             .with_customer_initial_balance(MoneroAmount::from(1000))
             .with_merchant_initial_balance(MoneroAmount::default())
             .with_my_user_label("me")
@@ -521,8 +523,10 @@ mod test {
             .with_customer_closing_address(Address::from_str(ALICE_ADDRESS).unwrap())
             .with_merchant_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
             .with_public_key_self(public_key_self.into())
+            .with_public_key_bjj_self(public_key_bjj_self.into())
             .with_nonce_self(nonce_self.into())
             .with_public_key_peer(public_key_peer.into())
+            .with_public_key_bjj_peer(public_key_bjj_peer.into())
             .with_nonce_peer(nonce_peer.into())
             .build::<Blake2b512>()
             .expect("Failed to build initial state");
@@ -532,7 +536,8 @@ mod test {
     fn happy_path() {
         let rng = &mut rand::rng();
         env_logger::try_init().ok();
-        let (_, public_key_self) = make_keypair_bjj(rng);
+        let (_, public_key_self) = make_keypair_ed25519(rng);
+        let (_, public_key_bjj_self) = make_keypair_bjj(rng);
         let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
 
         let peer = ContactInfo {
@@ -540,6 +545,7 @@ mod test {
             peer_id: PeerId::random(),
             address: Multiaddr::empty(),
             public_key: public_key_self.into(),
+            public_key_bjj: public_key_bjj_self.into(),
             nonce: Some(nonce_self.into()),
         };
         let some_pub =
@@ -555,7 +561,7 @@ mod test {
         let wallet = MultisigWalletData {
             my_spend_key: Curve25519Secret::from_hex(SECRET).unwrap(),
             my_public_key: some_pub.clone(),
-            sorted_pubkeys: [some_pub.clone(), some_pub.clone()],
+            sorted_public_keys: [some_pub.clone(), some_pub.clone()],
             joint_public_spend_key: some_pub.clone(),
             joint_private_view_key: Curve25519Secret::random(&mut rand::rng()),
             birthday: 0,
@@ -577,7 +583,7 @@ mod test {
             public_input: Default::default(),
             public_outputs: Default::default(),
             private_outputs: Default::default(),
-            proofs: vec![],
+            zero_knowledge_proof_init: Default::default(),
         };
         let peer_proof0 = proof0.public_only();
         let public_input = proof0.public_input.clone();
@@ -605,7 +611,7 @@ mod test {
                 delta_bjj: Default::default(),
                 delta_ed: Default::default(),
             },
-            proof: b"my_update_proof".to_vec(),
+            zero_knowledge_proof_update: Default::default(),
         };
 
         let mut rng = &mut rand::rng();

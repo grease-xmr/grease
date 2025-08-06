@@ -172,12 +172,12 @@ impl TryFrom<&str> for GenericPoint {
 pub struct Comm0PublicInputs {
     /// 𝛎_ꞷ0 - Random public value
     pub nonce_peer: GenericScalar,
-    pub pubkey_peer: GenericPoint,
+    pub public_key_bjj_peer: GenericPoint,
 }
 
 impl Comm0PublicInputs {
-    pub fn new(nonce_peer: &GenericScalar, pubkey_peer: &GenericPoint) -> Self {
-        Comm0PublicInputs { nonce_peer: nonce_peer.clone(), pubkey_peer: pubkey_peer.clone() }
+    pub fn new(nonce_peer: &GenericScalar, public_key_bjj_peer: &GenericPoint) -> Self {
+        Comm0PublicInputs { nonce_peer: nonce_peer.clone(), public_key_bjj_peer: public_key_bjj_peer.clone() }
     }
 }
 
@@ -280,7 +280,7 @@ pub struct Proofs0 {
     pub public_input: Comm0PublicInputs,
     pub public_outputs: Comm0PublicOutputs,
     pub private_outputs: Comm0PrivateOutputs,
-    pub proofs: Vec<u8>,
+    pub zero_knowledge_proof_init: ZeroKnowledgeProofInit,
 }
 
 impl Proofs0 {
@@ -288,7 +288,7 @@ impl Proofs0 {
         PublicProof0 {
             public_inputs: self.public_input.clone(),
             public_outputs: self.public_outputs.clone(),
-            proofs: self.proofs.clone(),
+            zero_knowledge_proof_init: self.zero_knowledge_proof_init.clone(),
         }
     }
 }
@@ -309,13 +309,16 @@ impl PeerProof0 {
 pub struct UpdateProofs {
     pub public_outputs: PublicUpdateOutputs,
     pub private_outputs: PrivateUpdateOutputs,
-    pub proof: Vec<u8>,
+    pub zero_knowledge_proof_update: ZeroKnowledgeProofUpdate,
 }
 
 impl UpdateProofs {
     /// Convert the proof to a public proof.
     pub fn public_only(&self) -> PublicUpdateProof {
-        PublicUpdateProof { public_outputs: self.public_outputs.clone(), proof: self.proof.clone() }
+        PublicUpdateProof {
+            public_outputs: self.public_outputs.clone(),
+            zero_knowledge_proof_update: self.zero_knowledge_proof_update.clone(),
+        }
     }
 }
 
@@ -323,15 +326,14 @@ impl UpdateProofs {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct PublicUpdateProof {
     pub public_outputs: PublicUpdateOutputs,
-    pub proof: Vec<u8>,
+    pub zero_knowledge_proof_update: ZeroKnowledgeProofUpdate,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct PublicProof0 {
     pub public_inputs: Comm0PublicInputs,
     pub public_outputs: Comm0PublicOutputs,
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    pub proofs: Vec<u8>,
+    pub zero_knowledge_proof_init: ZeroKnowledgeProofInit,
 }
 
 /// A representation of proof that the merchant has established the KES correctly using the shared secrets and the

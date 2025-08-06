@@ -32,12 +32,22 @@ pub enum InvalidProposal {
     ZeroTotalValue,
     #[error("The merchant's public key in the proposal does not match the one that was expected")]
     MismatchedMerchantPublicKey,
+    #[error("The merchant's public key in the proposal does not match the one that was expected in BabyJubjub format")]
+    MismatchedMerchantPublicKeyBJJ,
     #[error("The merchant's nonce in the proposal does not match the one that was expected")]
     MismatchedMerchantNonce,
-    #[error("The customer's public key in the proposal does not match the one that was expected")]
-    MismatchedCustomerPublicKey,
+    #[error("The customer's public key in the proposal does not match the one that the merchant expected")]
+    MismatchedMerchantCustomerPublicKey,
+    #[error("The customer's public key in the proposal does not match the one that the merchant expected in BabyJubjub format")]
+    MismatchedMerchantCustomerPublicKeyBJJ,
+    #[error("The customer's public key in the proposal does not match the one that the customer expected")]
+    MismatchedCustomerCustomerPublicKey,
+    #[error("The customer's public key in the proposal does not match the one that the customer expected in BabyJubjub format")]
+    MismatchedCustomerCustomerPublicKeyBJJ,
     #[error("The KES's public key in the proposal does not match the one that was expected")]
     MismatchedKesPublicKey,
+    #[error("The customer's nonce in the proposal does not match the one that was expected")]
+    MismatchedCustomerNonce,
     #[error("The channel ID in the proposal does not match the one that was expected")]
     MismatchedChannelId,
 }
