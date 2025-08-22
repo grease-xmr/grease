@@ -1,4 +1,3 @@
-use crate::delegates::GreaseChannelDelegate;
 use crate::errors::{ChannelServerError, PaymentChannelError, PeerConnectionError, RemoteServerError};
 use crate::message_types::{
     ChannelProposalResult, NewChannelProposal, PrepareUpdate, RejectChannelProposal, RejectReason, RetryOptions,
@@ -6,8 +5,8 @@ use crate::message_types::{
 };
 use crate::pending_updates::{PendingUpdate, PendingUpdates, ResponderInfo};
 use crate::{
-    new_network, Client, ContactInfo, ConversationIdentity, GreaseRequest, GreaseResponse, PaymentChannel,
-    PaymentChannels, PeerConnectionEvent,
+    new_network, Client, ContactInfo, ConversationIdentity, GreaseChannelDelegate, GreaseRequest, GreaseResponse,
+    PaymentChannel, PaymentChannels, PeerConnectionEvent,
 };
 use futures::future::join;
 use futures::StreamExt;

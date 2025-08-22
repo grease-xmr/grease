@@ -23,6 +23,7 @@ venv.bak/
 circuits/node_modules/
 demo_wallet.bin
 e2e/data
+grease-proofs/
 
 # testnet files
 /testnet/*.log
