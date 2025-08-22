@@ -1,11 +1,18 @@
+use std::path::Path;
+
 use crate::cucumber::GreaseWorld;
 use cucumber::gherkin::Table;
 use cucumber::{gherkin::Step, given, then, when};
 use e2e::create_channel_proposal;
+use lazy_static::lazy_static;
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
 use log::*;
 use monero_address::{MoneroAddress, Network};
+
+lazy_static! {
+    static ref nargo_path: &'static std::path::Path = Path::new("../circuits");
+}
 
 #[given(expr = "{word} runs the grease server")]
 async fn start_server(world: &mut GreaseWorld, client_name: String) {
@@ -27,7 +34,7 @@ async fn new_channel(world: &mut GreaseWorld, step: &Step, customer: String, mer
     let customer_server = world.servers.get(&customer.name).expect("Customer server not found in the world");
     let channel_name = customer_server
         .server
-        .establish_new_channel(proposal.clone(), &mut rand::rng())
+        .establish_new_channel(proposal.clone(), &nargo_path, &mut rand::rng())
         .await
         .expect("Failed to establish new channel");
     info!("Channel established: {channel_name}");
@@ -91,8 +98,8 @@ async fn send_on_channel(
     let count = count.parse::<usize>().unwrap_or(1);
     for i in 0..count {
         let result = match dir.as_str() {
-            "pays" => sender_server.server.pay(&channel, amount).await,
-            "refunds" => sender_server.server.refund(&channel, amount).await,
+            "pays" => sender_server.server.pay(&channel, amount, &nargo_path).await,
+            "refunds" => sender_server.server.refund(&channel, amount, &nargo_path).await,
             _ => unreachable!(),
         };
         match result {

@@ -205,11 +205,11 @@ impl LifeCycle for ChannelState {
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-    use crate::crypto::zk_objects::random_251_bits;
     use crate::crypto::zk_objects::{
         AdaptedSignature, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo,
         UpdateProofs,
     };
+    use crate::crypto::zk_objects::{GenericPoint, PartialEncryptedKeyConst};
     use crate::monero::data_objects::{
         ClosingAddresses, MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord,
     };
@@ -222,7 +222,6 @@ pub mod test {
     use blake2::Blake2b512;
     use circuits::*;
     use log::*;
-    use num_bigint::BigUint;
     use rand::{CryptoRng, RngCore};
 
     const ALICE_ADDRESS: &str =
@@ -237,8 +236,8 @@ pub mod test {
         let (_, public_key_peer) = make_keypair_ed25519(rng);
         let (_, public_key_bjj_self) = make_keypair_bjj(rng);
         let (_, public_key_bjj_peer) = make_keypair_bjj(rng);
-        let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
-        let nonce_peer = BigUint::from_bytes_be(&random_251_bits(rng));
+        let nonce_self = make_scalar_bjj(rng);
+        let nonce_peer = make_scalar_bjj(rng);
 
         let initial_customer_amount = MoneroAmount::from_xmr("1.25").unwrap();
         let initial_merchant_amount = MoneroAmount::from_xmr("0.0").unwrap();
@@ -297,14 +296,18 @@ pub mod test {
         let wallet = create_wallet();
         state.wallet_created(wallet);
         // The KES shards have been exchanged.
-        let my_shards = MultisigSplitSecrets {
-            kes_shard: PartialEncryptedKey("kes_shard_from_customer".into()),
-            peer_shard: PartialEncryptedKey("merchant_shard".into()),
-        };
-        let their_shards = MultisigSplitSecrets {
-            kes_shard: PartialEncryptedKey("kes_shard_from_merchant".into()),
-            peer_shard: PartialEncryptedKey("customer_shard".into()),
-        };
+        let my_shards = MultisigSplitSecrets::new(
+            GenericPoint::default(),
+            GenericPoint::default(),
+            PartialEncryptedKey(PartialEncryptedKeyConst::MerchantShard),
+            PartialEncryptedKey(PartialEncryptedKeyConst::KesShardFromCustomer),
+        );
+        let their_shards = MultisigSplitSecrets::new(
+            GenericPoint::default(),
+            GenericPoint::default(),
+            PartialEncryptedKey(PartialEncryptedKeyConst::CustomerShard),
+            PartialEncryptedKey(PartialEncryptedKeyConst::KesShardFromMerchant),
+        );
         let shards = ShardInfo { my_shards, their_shards };
         state.save_kes_shards(shards);
         // The funding transaction has been created and broadcast.

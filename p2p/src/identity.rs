@@ -362,7 +362,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use circuits::{make_keypair_bjj, make_keypair_ed25519};
+    use circuits::{make_keypair_bjj, make_keypair_ed25519, make_scalar_bjj};
     use log::info;
     use std::str::FromStr;
     use tempfile::TempPath;
@@ -374,7 +374,7 @@ mod test {
         let mut rng = rand::rng();
         let (private_key, public_key) = make_keypair_ed25519(&mut rng);
         let (_, public_key_bjj) = make_keypair_bjj(&mut rng);
-        let nonce = GenericScalar::random(&mut rng);
+        let nonce = make_scalar_bjj(&mut rng);
         let identity = ConversationIdentity::random(addr, public_key, public_key_bjj, private_key, nonce);
         let tmp = TempPath::from_path("test_id.yml");
         let s = identity.to_yml().expect("serialize identity");
@@ -392,7 +392,7 @@ mod test {
         let mut rng = rand::rng();
         let (private_key, public_key) = make_keypair_ed25519(&mut rng);
         let (_, public_key_bjj) = make_keypair_bjj(&mut rng);
-        let nonce = GenericScalar::random(&mut rng);
+        let nonce = make_scalar_bjj(&mut rng);
         let identity = ConversationIdentity::random(addr, public_key, public_key_bjj, private_key, nonce);
         let tmp = TempPath::from_path("test_id.ron");
         let s = identity.to_ron().expect("serialize identity");

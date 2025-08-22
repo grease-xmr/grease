@@ -1,10 +1,15 @@
 use crate::message_types::NewChannelProposal;
 use crate::Client;
+use circuits::make_keypair_bjj;
+use circuits::make_keypair_ed25519;
+use circuits::make_scalar_bjj;
+use circuits::make_scalar_ed25519;
 use circuits::BBError;
 use circuits::ZeroKnowledgeProofUpdate;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::crypto::zk_objects::PartialEncryptedKeyConst;
 use libgrease::crypto::zk_objects::{
     AdaptedSignature, Comm0PrivateInputs, Comm0PublicInputs, GenericPoint, GenericScalar, KesProof,
     PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof,
@@ -15,6 +20,7 @@ use libgrease::state_machine::error::InvalidProposal;
 use log::*;
 use num_bigint::BigUint;
 use std::future::Future;
+use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
 use wallet::watch_only::WatchOnlyWallet;
@@ -95,6 +101,7 @@ pub trait GreaseInitializer {
         input_public: &Comm0PublicInputs,
         input_private: &Comm0PrivateInputs,
         metadata: &ChannelMetadata,
+        nargo_path: &Path,
     ) -> impl Future<Output = Result<Proofs0, DelegateError>> + Send;
 
     fn verify_initial_proofs(
@@ -137,6 +144,7 @@ pub trait Updater {
         last_witness: &GenericScalar,
         blinding_dleq: &GenericScalar,
         metadata: &ChannelMetadata,
+        nargo_path: &Path,
     ) -> impl Future<Output = Result<UpdateProofs, DelegateError>> + Send;
 
     fn verify_update(
@@ -214,6 +222,7 @@ impl GreaseInitializer for DummyDelegate {
         _input_public: &Comm0PublicInputs,
         _input_private: &Comm0PrivateInputs,
         metadata: &ChannelMetadata,
+        _nargo_path: &Path,
     ) -> Result<Proofs0, DelegateError> {
         info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
 
@@ -271,9 +280,12 @@ impl VerifiableSecretShare for DummyDelegate {
         _peer: &Curve25519PublicKey,
     ) -> Result<MultisigSplitSecrets, DelegateError> {
         info!("DummyDelegate: Splitting secret share");
+        //TODO: Confirm that this always the customer.
         Ok(MultisigSplitSecrets {
-            peer_shard: PartialEncryptedKey("peer_shard".to_string()),
-            kes_shard: PartialEncryptedKey("kes_shard".to_string()),
+            peer_shard: PartialEncryptedKey(PartialEncryptedKeyConst::CustomerShard),
+            kes_shard: PartialEncryptedKey(PartialEncryptedKeyConst::KesShardFromCustomer),
+            t_0: GenericPoint::default(),
+            c_1: GenericPoint::default(),
         })
     }
 
@@ -340,27 +352,33 @@ impl Updater for DummyDelegate {
         _witness: &GenericScalar,
         _blinding_dleq: &GenericScalar,
         _metadata: &ChannelMetadata,
+        _nargo_path: &Path,
     ) -> Result<UpdateProofs, DelegateError> {
         info!("DummyDelegate: Generating update {index} proof for channel.  {}", delta.amount);
         let mut rng = rand::rng();
         // The witnesses need to be valid scalars
         let next_witness = Curve25519Secret::random(&mut rng);
         let witness_i = GenericScalar(next_witness.as_scalar().to_bytes());
+        let (_, t_prev) = make_keypair_bjj(&mut rng);
+        let (_, t_current) = make_keypair_bjj(&mut rng);
+        let (_, s_current) = make_keypair_ed25519(&mut rng);
+        let (_, r_bjj) = make_keypair_bjj(&mut rng);
+        let (_, r_ed) = make_keypair_ed25519(&mut rng);
         let public_outputs = PublicUpdateOutputs {
-            T_prev: GenericPoint::random(&mut rng),
-            T_current: GenericPoint::random(&mut rng),
-            S_current: GenericPoint::random(&mut rng),
-            challenge: GenericScalar::random(&mut rng),
-            rho_bjj: GenericScalar::random(&mut rng),
-            rho_ed: GenericScalar::random(&mut rng),
-            R_bjj: GenericPoint::random(&mut rng),
-            R_ed: GenericPoint::random(&mut rng),
+            T_prev: t_prev.into(),
+            T_current: t_current.into(),
+            S_current: s_current.into(),
+            challenge: GenericScalar::random256(&mut rng),
+            rho_bjj: make_scalar_bjj(&mut rng).into(),
+            rho_ed: make_scalar_ed25519(&mut rng).into(),
+            R_bjj: r_bjj.into(),
+            R_ed: r_ed.into(),
         };
         let private_outputs = PrivateUpdateOutputs {
             update_count: index,
             witness_i,
-            delta_bjj: GenericScalar::random(&mut rng),
-            delta_ed: GenericScalar::random(&mut rng),
+            delta_bjj: make_scalar_bjj(&mut rng).into(),
+            delta_ed: make_scalar_ed25519(&mut rng).into(),
         };
         let zero_knowledge_proof_update = ZeroKnowledgeProofUpdate::default();
         Ok(UpdateProofs { private_outputs, public_outputs, zero_knowledge_proof_update })

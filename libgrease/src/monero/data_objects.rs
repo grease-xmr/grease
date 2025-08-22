@@ -6,24 +6,51 @@ use std::str::FromStr;
 // re-export
 use crate::balance::Balances;
 use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
+use crate::crypto::zk_objects::{GenericPoint, KesProof, PartialEncryptedKey};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecrets {
+    pub t_0: GenericPoint,
+    pub c_1: GenericPoint,
     /// The encrypted secret shard for the peer
     pub peer_shard: PartialEncryptedKey,
     /// The encrypted secret shard for the KES
     pub kes_shard: PartialEncryptedKey,
 }
 
+impl MultisigSplitSecrets {
+    pub fn new(
+        t_0: GenericPoint,
+        c_1: GenericPoint,
+        peer_shard: PartialEncryptedKey,
+        kes_shard: PartialEncryptedKey,
+    ) -> MultisigSplitSecrets {
+        Self { t_0, c_1, peer_shard, kes_shard }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecretsResponse {
+    pub t_0: GenericPoint,
+    pub c_1: GenericPoint,
     /// The encrypted secret shard for the peer
     pub peer_shard: PartialEncryptedKey,
     /// The encrypted secret shard for the KES
     pub kes_shard: PartialEncryptedKey,
     /// The proof/signature that the KES was constructed correctly
     pub kes_proof: KesProof,
+}
+
+impl MultisigSplitSecretsResponse {
+    pub fn new(
+        t_0: GenericPoint,
+        c_1: GenericPoint,
+        peer_shard: PartialEncryptedKey,
+        kes_shard: PartialEncryptedKey,
+        kes_proof: KesProof,
+    ) -> MultisigSplitSecretsResponse {
+        Self { t_0, c_1, peer_shard, kes_shard, kes_proof }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

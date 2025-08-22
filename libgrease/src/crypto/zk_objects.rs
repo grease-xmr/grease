@@ -32,8 +32,11 @@ impl AdaptedSignature {
 }
 
 impl GenericScalar {
-    pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
-        GenericScalar(random_251_bits(rng))
+    pub fn random256<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+
+        GenericScalar(bytes)
     }
 
     /// Convert a hex-encoded string to a GenericScalar.
@@ -111,10 +114,6 @@ impl GenericPoint {
         let mut bytes = [0u8; 32];
         hex::decode_to_slice(hex, &mut bytes)?;
         Ok(Self(bytes))
-    }
-
-    pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
-        GenericPoint(random_251_bits(rng))
     }
 }
 
@@ -340,11 +339,21 @@ pub struct PublicProof0 {
 /// agreed KES public key.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct KesProof {
+    //TODO: implement the actual proof structure
     pub proof: Vec<u8>,
 }
 
+//TODO: implement the actual proof structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PartialEncryptedKey(pub String);
+pub enum PartialEncryptedKeyConst {
+    KesShardFromCustomer,
+    MerchantShard,
+    KesShardFromMerchant,
+    CustomerShard,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartialEncryptedKey(pub PartialEncryptedKeyConst);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShardInfo {
@@ -354,20 +363,10 @@ pub struct ShardInfo {
 
 pub fn generate_txc0_nonces<R: CryptoRng + RngCore>(rng: &mut R) -> Comm0PrivateInputs {
     Comm0PrivateInputs {
-        random_blinding: GenericScalar::random(rng),
-        a1: GenericScalar::random(rng),
-        r1: GenericScalar::random(rng),
-        r2: GenericScalar::random(rng),
-        blinding_dleq: GenericScalar::random(rng),
+        random_blinding: make_scalar_bjj(rng).into(),
+        a1: make_scalar_bjj(rng).into(),
+        r1: make_scalar_bjj(rng).into(),
+        r2: make_scalar_bjj(rng).into(),
+        blinding_dleq: make_scalar_bjj(rng).into(),
     }
-}
-
-pub fn random_251_bits<R: CryptoRng + RngCore>(rng: &mut R) -> [u8; 32] {
-    let mut bytes = [0u8; 32];
-    rng.fill_bytes(&mut bytes);
-
-    //The 251 bits are stored in byte-wise little endian format, so snip the top 5 bits from the last byte
-    bytes[31] = 0x1F & bytes[31];
-
-    bytes
 }

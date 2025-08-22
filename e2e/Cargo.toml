@@ -16,6 +16,7 @@ monero = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
 hex = { workspace = true }
 rand = { workspace = true }
+lazy_static = "1.5"
 
 [dependencies.monero-simple-request-rpc]
 version = "0.1"

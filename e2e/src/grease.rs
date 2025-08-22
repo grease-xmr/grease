@@ -7,6 +7,7 @@ use libgrease::balance::Balances;
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::ChannelSeedBuilder;
 use std::fmt::Debug;
+use std::path::Path;
 use std::time::Duration;
 
 pub struct GreaseInfra {
@@ -20,11 +21,16 @@ impl Debug for GreaseInfra {
 }
 
 impl GreaseInfra {
-    pub fn new(id: ConversationIdentity, config: GlobalOptions, monerod_rpc: &str) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        id: ConversationIdentity,
+        config: GlobalOptions,
+        monerod_rpc: &str,
+        nargo_path: &'static Path,
+    ) -> Result<Self, anyhow::Error> {
         let delegate = DummyDelegate::new(monerod_rpc.to_string());
         let channels = PaymentChannels::load(config.channel_directory())?;
         let options = EventHandlerOptions { tx_poll_interval: Duration::from_millis(10) };
-        let server = NetworkServer::new(id, channels, monerod_rpc, delegate, options)?;
+        let server = NetworkServer::new(id, channels, monerod_rpc, delegate, options, nargo_path)?;
         Ok(Self { server })
     }
 }

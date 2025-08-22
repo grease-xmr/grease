@@ -1,9 +1,15 @@
 use cucumber::World;
 use e2e::user::{create_users, User};
 use e2e::{GreaseInfra, MoneroNode, MoneroNodeConfig, NodeStatus, MONEROD_RPC};
+use lazy_static::lazy_static;
 use log::*;
 use monero_address::MoneroAddress;
 use std::collections::HashMap;
+use std::path::Path;
+
+lazy_static! {
+    static ref nargo_path: &'static std::path::Path = Path::new("../circuits");
+}
 
 #[derive(Debug, World)]
 pub struct GreaseWorld {
@@ -52,7 +58,8 @@ impl GreaseWorld {
         let address = config.server_address.clone().expect("Server address is not set in user config");
         debug!("{client_name} config: {config:?}");
         let id = user.identity.clone();
-        let mut server = GreaseInfra::new(id, config, MONEROD_RPC).expect("Failed to create Grease server");
+        let mut server =
+            GreaseInfra::new(id, config, MONEROD_RPC, &nargo_path).expect("Failed to create Grease server");
         info!("Starting server...");
         server.server.start_listening(address).await.unwrap();
         self.servers.insert(client_name.to_string(), server);

@@ -1,6 +1,7 @@
 use crate::interactive::menus::{top_menu, Menu};
 use grease_p2p::{ConversationIdentity, EventHandlerOptions, NetworkServer, OutOfBandMerchantInfo, PaymentChannels};
 use std::fmt::Display;
+use std::path::Path;
 use std::str::FromStr;
 
 pub mod formatting;
@@ -14,6 +15,7 @@ use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use grease_p2p::delegates::DummyDelegate;
 use grease_p2p::message_types::NewChannelProposal;
+use lazy_static::lazy_static;
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
 use libgrease::state_machine::lifecycle::LifecycleStage;
@@ -25,6 +27,9 @@ use rand::{Rng, RngCore};
 
 pub type MoneroNetworkServer = NetworkServer<DummyDelegate>;
 pub const RPC_ADDRESS: &str = "http://localhost:25070";
+lazy_static! {
+    static ref nargo_path: &'static std::path::Path = Path::new("../circuits");
+}
 
 pub struct InteractiveApp {
     identity: ConversationIdentity,
@@ -48,7 +53,7 @@ impl InteractiveApp {
         let delegate = DummyDelegate::default();
         let channels = PaymentChannels::load(config.channel_directory())?;
         let options = EventHandlerOptions::default();
-        let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate, options)?;
+        let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate, options, &nargo_path)?;
         let app =
             Self { identity, current_menu, breadcrumbs, config, current_channel: None, channel_status: None, server };
         Ok(app)
@@ -199,7 +204,7 @@ impl InteractiveApp {
         let proposal = self.create_channel_proposal(oob_info, address)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
-        let name = self.server.establish_new_channel(proposal.clone(), &mut rand::rng()).await?;
+        let name = self.server.establish_new_channel(proposal.clone(), &nargo_path, &mut rand::rng()).await?;
         self.save_channels().await?;
         info!("Channels saved.");
         self.current_channel = Some(name.clone());
@@ -221,7 +226,7 @@ impl InteractiveApp {
         let amount = MoneroAmount::from_xmr(&amount).ok_or_else(|| anyhow!("Invalid XMR value"))?;
         // We could easily add a check here to ensure the amount is not greater than the available balance
         // but let's test that the channel handles this edge case too.
-        let update = self.server.pay(name, amount).await?;
+        let update = self.server.pay(name, amount, &nargo_path).await?;
         let update_count = update.update_count;
         let merchant = update.new_balances.merchant;
         let customer = update.new_balances.customer;

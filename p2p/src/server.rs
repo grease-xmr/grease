@@ -9,6 +9,7 @@ use crate::{
     new_network, Client, ContactInfo, ConversationIdentity, GreaseRequest, GreaseResponse, PaymentChannel,
     PaymentChannels, PeerConnectionEvent,
 };
+use circuits::make_scalar_bjj;
 use futures::future::join;
 use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
@@ -63,6 +64,7 @@ where
         rpc_address: impl Into<String>,
         delegate: D,
         options: EventHandlerOptions,
+        nargo_path: &'static Path,
     ) -> Result<Self, PeerConnectionError> {
         let keypair = id.keypair().clone();
         // Create a new network client and event loop.
@@ -77,7 +79,7 @@ where
                 match ev {
                     PeerConnectionEvent::InboundRequest { request, response } => {
                         trace!("Inbound grease request received");
-                        inner_clone.handle_incoming_grease_request(request, response).await;
+                        inner_clone.handle_incoming_grease_request(request, response, nargo_path).await;
                     }
                 }
             }
@@ -168,25 +170,36 @@ where
     pub async fn establish_new_channel<R: CryptoRng + RngCore>(
         &self,
         proposal: NewChannelProposal,
+        nargo_path: &Path,
         rng: &mut R,
     ) -> Result<String, ChannelServerError> {
-        self.inner.customer_establish_new_channel(proposal, rng).await
+        self.inner.customer_establish_new_channel(proposal, nargo_path, rng).await
     }
 
     /// A convenience function for [`Self::update_balance`] that pays the given amount from customer to merchant.
     ///
     /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn pay(&self, channel: &str, amount: MoneroAmount) -> Result<FinalizedUpdate, ChannelServerError> {
+    pub async fn pay(
+        &self,
+        channel: &str,
+        amount: MoneroAmount,
+        nargo_path: &Path,
+    ) -> Result<FinalizedUpdate, ChannelServerError> {
         let delta = MoneroDelta::from(amount);
-        self.update_balance(channel, delta).await
+        self.update_balance(channel, delta, nargo_path).await
     }
 
     /// A convenience function for [`Self::update_balance`] that refunds the given amount from merchant to customer.
     ///
     /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn refund(&self, channel: &str, amount: MoneroAmount) -> Result<FinalizedUpdate, ChannelServerError> {
+    pub async fn refund(
+        &self,
+        channel: &str,
+        amount: MoneroAmount,
+        nargo_path: &Path,
+    ) -> Result<FinalizedUpdate, ChannelServerError> {
         let delta = -MoneroDelta::from(amount);
-        self.update_balance(channel, delta).await
+        self.update_balance(channel, delta, nargo_path).await
     }
 
     /// Start the co-operative close process for a channel.
@@ -218,9 +231,10 @@ where
         &self,
         channel: &str,
         delta: MoneroDelta,
+        nargo_path: &Path,
     ) -> Result<FinalizedUpdate, ChannelServerError> {
         self.ensure_connection(channel).await?;
-        self.inner.customer_channel_update(channel, delta).await
+        self.inner.customer_channel_update(channel, delta, nargo_path).await
     }
 
     pub async fn rescan_for_funding(&self, channel: &str) {
@@ -329,6 +343,7 @@ where
     pub async fn customer_establish_new_channel<R: CryptoRng + RngCore>(
         &self,
         proposal: NewChannelProposal,
+        nargo_path: &Path,
         rng: &mut R,
     ) -> Result<String, ChannelServerError> {
         // 1. Proposal phase
@@ -359,13 +374,17 @@ where
         debug!("👛️ Splitting, encrypting and sharing spend key with merchant for channel {name}");
         let public_key_peer = wallet.public_key_peer();
         let merchant_shards = self.split_secrets(wallet.my_spend_key(), &kes_public_key, public_key_peer).await?;
-        let shards_and_kes =
+        let shards_for_customer =
             self.customer_exchange_split_secrets(peer_id, &name, merchant_shards.clone(), &kes_public_key).await?;
         debug!("👛️ Merchant provided their encrypted shards for channel {name}");
-        let my_shards =
-            MultisigSplitSecrets { peer_shard: shards_and_kes.peer_shard, kes_shard: shards_and_kes.kes_shard };
+        let my_shards = MultisigSplitSecrets::new(
+            shards_for_customer.t_0,
+            shards_for_customer.c_1,
+            shards_for_customer.peer_shard,
+            shards_for_customer.kes_shard,
+        );
         let shards = ShardInfo { my_shards, their_shards: merchant_shards };
-        self.common_verify_and_store_shards(&name, shards, shards_and_kes.kes_proof).await?;
+        self.common_verify_and_store_shards(&name, shards, shards_for_customer.kes_proof).await?;
         debug!("👛️ Wallet shards are valid and are stored for channel {name}");
         // 2.3. Verify the wallet address with the peer.
         let address = wallet.address();
@@ -392,7 +411,7 @@ where
         let public_key_bjj_peer = channel.state().metadata().public_key_bjj_peer();
 
         let input_public = Comm0PublicInputs::new(nonce_peer, public_key_bjj_peer);
-        let peer_proof = self.generate_and_store_witness0(&name, &input_public, &input_private).await?;
+        let peer_proof = self.generate_and_store_witness0(&name, &input_public, &input_private, nargo_path).await?;
         info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {name} with merchant.");
 
         let nonce_self = channel.state().metadata().nonce_self();
@@ -830,6 +849,8 @@ where
             peer_shard: customer_shards.peer_shard,
             kes_shard: customer_shards.kes_shard,
             kes_proof: proof,
+            t_0: customer_shards.t_0,
+            c_1: customer_shards.c_1,
         };
         let envelope = MessageEnvelope::new(name, response);
         Ok(GreaseResponse::MsSplitSecretExchange(Ok(envelope)))
@@ -922,12 +943,14 @@ where
         name: &str,
         input_public: &Comm0PublicInputs,
         input_private: &Comm0PrivateInputs,
+        nargo_path: &Path,
     ) -> Result<PublicProof0, ChannelServerError> {
         let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
         let metadata = channel.state().metadata().clone();
         drop(channel);
         debug!("👁️‍🗨️ Generating witness_0 proof for channel {name}.");
-        let proof_self = self.delegate.generate_initial_proofs(&input_public, input_private, &metadata).await?;
+        let proof_self =
+            self.delegate.generate_initial_proofs(&input_public, input_private, &metadata, nargo_path).await?;
         let pub_proof = proof_self.public_only();
         debug!("👁️‍🗨️ Storing witness_0 proof for channel {name}.");
         let event = LifeCycleEvent::MyProof0Generated(Box::new(proof_self));
@@ -963,6 +986,7 @@ where
     async fn merchant_exchange_proof0(
         &self,
         envelope: MessageEnvelope<PeerProof0>,
+        nargo_path: &Path,
     ) -> Result<GreaseResponse, GreaseResponse> {
         debug!("👁️‍🗨️  Received witness_0 proof exchange request");
         let (name, peer_proof) = envelope.open();
@@ -995,7 +1019,7 @@ where
         let input_private = generate_txc0_nonces(&mut rand::rng());
 
         let pub_proof = self
-            .generate_and_store_witness0(&name, &peer_proof.comm0_public_inputs, &input_private)
+            .generate_and_store_witness0(&name, &peer_proof.comm0_public_inputs, &input_private, nargo_path)
             .await
             .map_err(|e| {
                 GreaseResponse::ExchangeProof0(Err(RemoteServerError::internal(format!(
@@ -1085,11 +1109,12 @@ where
         &self,
         name: &str,
         delta: MoneroDelta,
+        nargo_path: &Path,
     ) -> Result<FinalizedUpdate, ChannelServerError> {
         info!("💸️  Preparing new update for channel {name}.");
         let commit_info = self.send_preparation(name, delta).await?;
         debug!("💸️  Received update proofs for channel {name} from merchant");
-        let finalized = self.commit_update(name, commit_info).await?;
+        let finalized = self.commit_update(name, commit_info, nargo_path).await?;
         info!("💸️  Update {} successful on channel {name}.", finalized.update_count);
         Ok(finalized)
     }
@@ -1186,7 +1211,12 @@ where
     /// 3. Generate their own proofs for the update.
     /// 4. Send the proofs and adapted signature to the merchant and wait for an affirmative response
     /// 5. Update the state machine with the new update data.
-    async fn commit_update(&self, name: &str, info: CustomerUpdate2) -> Result<FinalizedUpdate, ChannelServerError> {
+    async fn commit_update(
+        &self,
+        name: &str,
+        info: CustomerUpdate2,
+        nargo_path: &Path,
+    ) -> Result<FinalizedUpdate, ChannelServerError> {
         debug!("💸️  Verifying update {} proof from merchant", info.update_count);
         let merchant_info = info.merchant_info;
         self.validate_update(
@@ -1209,7 +1239,7 @@ where
             .my_signing_share()
             .ok_or_else(|| UpdateError::WalletError(format!("No signing shares found for {name}")))?;
         let my_signature = signature_share_to_bytes(&secret);
-        let my_proofs = self.generate_next_witness(name, info.delta).await?;
+        let my_proofs = self.generate_next_witness(name, info.delta, nargo_path).await?;
         let public_update_proof = my_proofs.public_only();
         let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i)
             .map_err(|e| UpdateError::WalletError(format!("Could not extract adaptor. {e}")))?;
@@ -1262,6 +1292,7 @@ where
         &self,
         channel_name: &str,
         delta: MoneroDelta,
+        nargo_path: &Path,
     ) -> Result<UpdateProofs, ChannelServerError> {
         debug!("💸️  Fetching last update for channel {channel_name}.");
         let channel = self.channels.peek(channel_name).await.ok_or(ChannelServerError::ChannelNotFound)?;
@@ -1272,8 +1303,9 @@ where
         drop(channel);
         index += 1;
         info!("💸️  Generating witness_{index} for channel {channel_name}.");
-        let blinding_dleq = GenericScalar::random(&mut rand::rng());
-        let proofs = self.delegate.generate_update(index, delta, &last_witness, &blinding_dleq, &metadata).await?;
+        let blinding_dleq = make_scalar_bjj(&mut rand::rng()).into();
+        let proofs =
+            self.delegate.generate_update(index, delta, &last_witness, &blinding_dleq, &metadata, nargo_path).await?;
         info!("💸️  Witness_{index} for channel {channel_name} successfully generated.");
         Ok(proofs)
     }
@@ -1281,6 +1313,7 @@ where
     async fn merchant_exchange_update(
         &self,
         envelope: MessageEnvelope<PrepareUpdate>,
+        nargo_path: &Path,
     ) -> Result<GreaseResponse, GreaseResponse> {
         let (name, customer_info) = envelope.open();
         info!("💸️  Received new channel update request from customer for channel {name}");
@@ -1329,7 +1362,7 @@ where
             "💸️  Generating ZKPs & adapted signature for update {} on channel {name}",
             prep_info.update_count
         );
-        let my_proofs = self.generate_next_witness(&name, delta).await.map_err(|e| {
+        let my_proofs = self.generate_next_witness(&name, delta, nargo_path).await.map_err(|e| {
             GreaseResponse::UpdatePrepared(Err(RemoteServerError::internal(format!("Couldn't create ZK proofs: {e}"))))
         })?;
         let customer_proofs = my_proofs.public_only();
@@ -1612,10 +1645,11 @@ where
         &self,
         request: GreaseRequest,
         return_chute: ResponseChannel<GreaseResponse>,
+        nargo_path: &Path,
     ) {
         let name = request.channel_name();
         let response = if self.channels.exists(&name).await {
-            self.handle_request_for_existing_channel(request).await
+            self.handle_request_for_existing_channel(request, nargo_path).await
         } else {
             // Channel doesn't exist, so this must be a new proposal, or we can´t do anything about it
             match &request {
@@ -1632,7 +1666,7 @@ where
         }
     }
 
-    async fn handle_request_for_existing_channel(&self, request: GreaseRequest) -> GreaseResponse {
+    async fn handle_request_for_existing_channel(&self, request: GreaseRequest, nargo_path: &Path) -> GreaseResponse {
         // Note: The channel name has already been checked against the incoming message.
         match request {
             GreaseRequest::ProposeChannelRequest(_) => {
@@ -1655,10 +1689,10 @@ where
                 GreaseResponse::ConfirmMsAddress(Ok(envelope))
             }
             GreaseRequest::ExchangeProof0(envelope) => {
-                self.merchant_exchange_proof0(envelope).await.unwrap_or_else(|early| early)
+                self.merchant_exchange_proof0(envelope, nargo_path).await.unwrap_or_else(|early| early)
             }
             GreaseRequest::PrepareUpdate(envelope) => {
-                self.merchant_exchange_update(envelope).await.unwrap_or_else(|early| early)
+                self.merchant_exchange_update(envelope, nargo_path).await.unwrap_or_else(|early| early)
             }
             GreaseRequest::CommitUpdate(envelope) => {
                 self.merchant_finalize_update(envelope).await.unwrap_or_else(|early| early)

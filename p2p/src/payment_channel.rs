@@ -474,18 +474,27 @@ impl PaymentChannels {
 
 #[cfg(test)]
 mod test {
+    use crate::delegates::GreaseInitializer;
+    use crate::noir_delegate::NoirDelegate;
     use crate::{ContactInfo, PaymentChannel};
-    use blake2::Blake2b512;
+    use blake2::digest::consts::U16;
+    use blake2::{Blake2b, Blake2b512};
     use circuits::*;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
+    use libgrease::balance::Balances;
+    use libgrease::channel_id::ChannelId;
+    use libgrease::channel_metadata::ChannelMetadata;
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-    use libgrease::crypto::zk_objects::random_251_bits;
+    use libgrease::crypto::zk_objects::generate_txc0_nonces;
+    use libgrease::crypto::zk_objects::Comm0PublicInputs;
+    use libgrease::crypto::zk_objects::PartialEncryptedKeyConst;
     use libgrease::crypto::zk_objects::PeerProof0;
     use libgrease::crypto::zk_objects::{
-        AdaptedSignature, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo,
-        UpdateProofs,
+        AdaptedSignature, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
     };
-    use libgrease::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord};
+    use libgrease::monero::data_objects::{
+        ClosingAddresses, MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord,
+    };
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
     use libgrease::state_machine::{
@@ -493,8 +502,9 @@ mod test {
     };
     use libp2p::{Multiaddr, PeerId};
     use monero::Address;
-    use num_bigint::BigUint;
+    use monero::Network;
     use rand::{CryptoRng, RngCore};
+    use std::path::Path;
     use std::str::FromStr;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
@@ -509,8 +519,8 @@ mod test {
         let (_, public_key_peer) = make_keypair_ed25519(rng);
         let (_, kes_public_key) = make_keypair_ed25519(rng);
         let (_, public_key_bjj_peer) = make_keypair_bjj(rng);
-        let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
-        let nonce_peer = BigUint::from_bytes_be(&random_251_bits(rng));
+        let nonce_self = make_scalar_bjj(rng);
+        let nonce_peer = make_scalar_bjj(rng);
 
         // All this info is known, or can be scanned in from a QR code etc
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
@@ -532,13 +542,59 @@ mod test {
             .expect("Failed to build initial state");
         initial_state
     }
-    #[test]
-    fn happy_path() {
+
+    #[tokio::test]
+    async fn test_happy_path() {
+        let nargo_path: &Path = Path::new("../circuits");
+
         let rng = &mut rand::rng();
         env_logger::try_init().ok();
         let (_, public_key_self) = make_keypair_ed25519(rng);
         let (_, public_key_bjj_self) = make_keypair_bjj(rng);
-        let nonce_self = BigUint::from_bytes_be(&random_251_bits(rng));
+        let nonce_self = make_scalar_bjj(rng);
+        assert!(nonce_self <= *BABY_JUBJUB_ORDER);
+        let (_, kes_public_key) = make_keypair_bjj(rng);
+
+        let (_, public_key_peer) = make_keypair_ed25519(rng);
+        let (_, public_key_bjj_peer) = make_keypair_bjj(rng);
+        let nonce_peer = make_scalar_bjj(rng);
+        assert!(nonce_peer <= *BABY_JUBJUB_ORDER);
+
+        let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
+        let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
+        let id = ChannelId::new::<Blake2b<U16>>("merchant", "customer", balance, closing);
+
+        let channel_info = ChannelMetadata::new(
+            Network::Testnet,
+            ChannelRole::Merchant,
+            id,
+            kes_public_key.into(),
+            public_key_self.into(),
+            public_key_bjj_self.clone().into(),
+            nonce_self.clone().into(),
+            public_key_peer.into(),
+            public_key_bjj_peer.clone().into(),
+            nonce_peer.clone().into(),
+        );
+
+        let delegate = NoirDelegate::default();
+        let input_public_self: Comm0PublicInputs =
+            Comm0PublicInputs::new(&nonce_peer.into(), &public_key_bjj_peer.into());
+        let input_private_self = generate_txc0_nonces(rng);
+
+        let proof_self = delegate
+            .generate_initial_proofs(&input_public_self, &input_private_self, &channel_info, nargo_path)
+            .await
+            .unwrap();
+
+        let input_public_peer: Comm0PublicInputs =
+            Comm0PublicInputs::new(&nonce_self.clone().into(), &public_key_bjj_self.clone().into());
+        let input_private_peer = generate_txc0_nonces(rng);
+
+        let proof_peer = delegate
+            .generate_initial_proofs(&input_public_peer, &input_private_peer, &channel_info, nargo_path)
+            .await
+            .unwrap();
 
         let peer = ContactInfo {
             name: "Alice".to_string(),
@@ -570,12 +626,16 @@ mod test {
         let event = LifeCycleEvent::MultiSigWalletCreated(Box::new(wallet));
         channel.handle_event(event).unwrap();
         let my_shards = MultisigSplitSecrets {
-            peer_shard: PartialEncryptedKey("customer_peer_shard".into()),
-            kes_shard: PartialEncryptedKey("customer_kes_shard".into()),
+            peer_shard: PartialEncryptedKey(PartialEncryptedKeyConst::CustomerShard),
+            kes_shard: PartialEncryptedKey(PartialEncryptedKeyConst::KesShardFromCustomer),
+            t_0: proof_self.public_outputs.T_0.into(),
+            c_1: proof_self.public_outputs.c_1.into(),
         };
         let their_shards = MultisigSplitSecrets {
-            peer_shard: PartialEncryptedKey("merchant_peer_shard".into()),
-            kes_shard: PartialEncryptedKey("merchant_kes_shard".into()),
+            peer_shard: PartialEncryptedKey(PartialEncryptedKeyConst::MerchantShard),
+            kes_shard: PartialEncryptedKey(PartialEncryptedKeyConst::KesShardFromMerchant),
+            t_0: proof_peer.public_outputs.T_0.into(),
+            c_1: proof_peer.public_outputs.c_1.into(),
         };
         let event = LifeCycleEvent::KesShards(Box::new(ShardInfo { my_shards, their_shards }));
         channel.handle_event(event).unwrap();
@@ -603,11 +663,12 @@ mod test {
         let event = LifeCycleEvent::KesCreated(Box::new(KesProof { proof: vec![1, 2, 3] }));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
+
         let my_proofs = UpdateProofs {
             public_outputs: Default::default(),
             private_outputs: PrivateUpdateOutputs {
                 update_count: 1,
-                witness_i: GenericScalar::random(&mut rand::rng()),
+                witness_i: make_scalar_bjj(&mut rand::rng()).into(),
                 delta_bjj: Default::default(),
                 delta_ed: Default::default(),
             },
