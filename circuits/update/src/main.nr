@@ -36,7 +36,10 @@ fn VerifyCOF(
     let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
 
     let value_bignum = hash_bignum.umod(l_bignum);
-    let value_field = bignum::bignum::to_field(value_bignum);
+    let mut value_field = bignum::bignum::to_field(value_bignum);
+    if value_field == 0 {
+        value_field = library::BABY_JUBJUB_ORDER;
+    }
 
     assert_eq(value_field, witness_i);
 }

@@ -106,7 +106,8 @@ The ZKP protocols prove that the real private keys are used correctly and that i
 The Grease protocol requires the generation and sharing of the ZKPs. The public data and the small proofs are shared
 between peers, then are validated as a means to ensure protocol conformity before *MoNet* protocol stage 3 begins.
 
-Each peer generates a set of secret random values to ensure security of communications, listed in @tbl-init-input. These not shared with the peer.
+Each peer generates a set of secret random values to ensure security of communications, the *private* variables listed
+in @tbl-init-input. These are not shared with the peer.
 
 #figure(
     caption: "Inputs to ZKPs for the Grease Initialization Protocol",
@@ -118,6 +119,13 @@ Each peer generates a set of secret random values to ensure security of communic
       [$nu_1$], [Private], [Random 251 bit value (`r_1`)],
       [$nu_2$], [Private], [Random 251 bit value (`r_2`)],
       [$nu_"DLEQ"$], [Private], [Random 251 bit value (`blinding_DLEQ`)],
+      [$nu_"peer"$], [Public], [Random 251 bit value, provided by the peer (`nonce_peer`)],
+      [$PubBjj("peer")$], [Public], [The public key/curve point on Baby Jubjub for the peer],
+      [$PubBjj("KES")$], [Public], [The public key/curve point on Baby Jubjub for the KES],
+      [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
+      [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
+      [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
+      [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
     )
 ) <tbl-init-input>
 

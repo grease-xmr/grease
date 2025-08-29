@@ -22,6 +22,10 @@ impl AdaptedSignature {
 }
 
 impl GenericScalar {
+    /// Create a new GenericScalar from a 32-byte array.
+    pub fn new(bytes: [u8; 32]) -> Self {
+        GenericScalar(bytes)
+    }
     pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
         GenericScalar(random_256_bits(rng))
     }
@@ -34,6 +38,11 @@ pub struct GenericPoint(
 );
 
 impl GenericPoint {
+    /// Create a new GenericPoint from a 32-byte array.
+    pub fn new(bytes: [u8; 32]) -> Self {
+        GenericPoint(bytes)
+    }
+
     /// Convert a hex-encoded string to a GenericPoint.
     pub fn from_hex(hex: &str) -> Result<Self, FromHexError> {
         let mut bytes = [0u8; 32];

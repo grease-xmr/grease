@@ -10,7 +10,7 @@ mod payment_channel;
 mod pending_updates;
 mod server;
 
-pub use delegates::GreaseChannelDelegate;
+pub use delegates::traits::GreaseChannelDelegate;
 pub use event_loop::EventLoop;
 pub use identity::{ContactInfo, ConversationIdentity, IdentityError};
 pub use key_manager::KeyManager;

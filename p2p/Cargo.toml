@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 libgrease = { workspace = true }
 wallet = { workspace = true }
+circuits = { workspace = true }
 
+babyjubjub-rs = "0.0.11"
 blake2 = "0.10.6"
 futures = { workspace = true }
 hex = "0.4.3"

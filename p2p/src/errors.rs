@@ -1,4 +1,4 @@
-use crate::delegates::DelegateError;
+use crate::delegates::error::DelegateError;
 use crate::message_types::RejectChannelProposal;
 use futures::channel::{mpsc, oneshot};
 use libgrease::payment_channel::UpdateError;
