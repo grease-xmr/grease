@@ -351,17 +351,21 @@ end-to-end.
 
 The long laundry list of things to complete before this could even be considered ready for commercial use includes:
 
-* [ ] Implementing the KES on at least one suitable ZK blockchain.
-* [ ] Adding channel force closure and dispute resolution.
-* [ ] Streamline ZKP and P2P integration using native APIs rather than forked Shell calls.
-* [ ] A properly reliable, and encrypted persistence layer, vs storing things in plain text files :)
+* [ ] Ensure all unit and end-to-end tests (including Cucumber/Gherkin) pass in release mode.
+* [ ] Implement KES on Aztec or an equivalent ZK-rollup platform, including local simulation for testing.
+* [ ] Integrate channel force closure and dispute resolution mechanisms, contingent on KES implementation.
+* [ ] Optimize ZKP and P2P integrations by adopting native Rust APIs, eliminating forked shell processes.
+* [ ] Develop a secure, encrypted persistence layer for sensitive data, replacing plain text file storage.
 * [ ] Implementing Grease server on a point-of-sales device.
-* [ ] Lots of internal reviews. There are probably huge vulnerabilities in the current implementation.
-* [ ] External reviews and audits.
-* [ ] Handling timeouts and abandoned channels.
+* [ ] Conduct comprehensive internal code reviews to identify and mitigate vulnerabilities in cryptography and protocol logic.
+* [ ] Engage external auditors for security reviews post-MVP stabilization.
+* [ ] Implement robust handling for channel timeouts and abandonment, including automated recovery or closure protocols.
 * [ ] Mobile applications for customers (preferably integrated into existing Monero wallets).
-* [ ] ZK-Snark optimisations. Proofs current take around 500ms on a modern laptop. This can almost certainly be 
-    improved.
-* [ ] FCMP+ integration.
-* [ ] Removing lots of footguns and handle lots of edge cases
-* [ ] UX field testing
+* [ ] Optimize ZK-SNARK proof generation to reduce time below 500ms on modern laptops, exploring T25519 proof.
+* [ ] Evaluate and implement advanced DLEQ proofs (e.g., using T25519) to enhance security without sacrificing hiding properties.
+* [ ] Integrate with Monero's FCMP++ upgrade upon testnet stabilization and hard fork.
+* [ ] Eliminate security footguns and address edge cases, including atomicity bugs and intermittent signature failures.
+* [ ] UX field testing.
+* [ ] Embed Noir verification key files into the codebase to resolve runtime generation dependencies.
+* [ ] Develop extensions for channel value addition/re-allocation without full restarts.
+* [ ] Prepare for scalability features, such as multi-hop payments and routing (e.g., via DHT), as a post-MVP phase.
