@@ -1,36 +1,38 @@
-# NIZK Circuits for Grease interactive protocol
+# NIZK Circuits for Grease Interactive Protocol
+
+These circuits implement Non-Interactive Zero-Knowledge (NIZK) proofs for the Grease protocol. The `Grease` circuit handles channel initialization, while `GreaseUpdate` manages payment updates within the channel. Both leverage zk-SNARKs for privacy-preserving verifications.
 
 ## Prerequisites
+- A C++ compiler: GCC >=13.
+- Recommended OS: Ubuntu 24.04 LTS or later, which natively supports modern GCC versions. For older systems like Ubuntu 22.04, you may need to upgrade your compiler manually.
+- For reproducibility, consider using Docker (see optional section below).
 
-`gcc` version 13 is required to run Noir. Ubuntu 22.04 does not support this version, so you may need to look up how 
-to upgrade it.
-
-## Install the Noir compiler
+## Install the Noir Compiler
 ```bash
 curl -L https://raw.githubusercontent.com/noir-lang/noirup/refs/heads/main/install | bash
 ```
 
-## Install Noir proving system
+## Install Noir Proving System (Barretenberg)
 ```bash
 curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/master/barretenberg/bbup/install | bash
 bbup
 ```
+Ensure you are using Barretenberg version 0.82.2 or later for optimal performance and Solidity verifier compatibility.
 
 ### Install Noir nightly version
 ```bash
 noirup --version nightly
 ```
 
-### Verify Noir version
+### Verify Noir Version
 ```bash
 nargo --version
 ```
 
-## Preliminary testing
-`Prover.toml` has test vector values.
+## Preliminary Testing
+Use `Prover.toml` for test vector values. This file provides inputs for circuit execution and proof generation.
 
-## Noir proving system shell commands
-
+## Noir Proving System Shell Commands
 ### Information
 ```bash
 nargo info --workspace
@@ -52,13 +54,13 @@ nargo compile --workspace
 nargo execute -p Prover.toml --workspace
 ```
 
-#### Per-package execution
+#### Per-Package Execution
 ```bash
 nargo execute -p Prover.toml --package Grease
 nargo execute -p Prover.toml --package GreaseUpdate
 ```
 
-### Generate the verification keys and save to ./target/vk_init and ./target/vk_update
+### Generate the Verification Keys and Save to ./target/vk_init and ./target/vk_update
 ```bash
 mkdir target/vk_init
 bb write_vk -b ./target/Grease.json -o ./target/vk_init -v
@@ -66,7 +68,7 @@ mkdir target/vk_update
 bb write_vk -b ./target/GreaseUpdate.json -o ./target/vk_update -v
 ```
 
-### Prove and save to ./target/proof
+### Prove and Save to ./target/proof
 ```bash
 mkdir target/proof_init
 bb prove -b ./target/Grease.json -w ./target/Grease.gz -o ./target/proof_init -v
@@ -74,16 +76,16 @@ mkdir target/proof_update
 bb prove -b ./target/GreaseUpdate.json -w ./target/GreaseUpdate.gz -o ./target/proof_update -v
 ```
 
-### Verify the proofs
+### Verify the Proofs
 ```bash
 bb verify -v -k ./target/vk_init/vk -p ./target/proof_init/proof -i ./target/proof_init/public_inputs   # verify init proof
 bb verify -v -k ./target/vk_update/vk -p ./target/proof_update/proof -i ./target/proof_update/public_inputs   # verify update proof
 ```
 
 Hint: If you get a `bad_alloc` error, make sure that the `-k` and `-p` paths point to the proof and verification key 
-_files_ and not their enclosing folders.
+_files_ and not their enclosing directories.
 
-### Integrated
+### Integrated Workflow
 ```bash
 rm -rf target && \
 nargo compile --workspace && \
