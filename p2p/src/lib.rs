@@ -11,8 +11,8 @@
 //! networking, cryptography, and state machine logic behind simple asynchronous method calls.
 //!
 //! For example, to establish a new channel with a peer, you would call:
-//! ```rust, no_run
-//!  let proposal = create_channel_proposal(oob_info, address)?;
+//! ```no_compile
+//!  let proposal = create_channel_proposal(oob_info, return_address)?;
 //!  // Send the proposal to the merchant and wait for reply
 //!  let name = server.establish_new_channel(proposal).await?;
 //! ```
