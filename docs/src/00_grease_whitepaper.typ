@@ -24,6 +24,7 @@
 #include "01_introduction.typ"
 #include "10_channel_design.typ"
 #include "12_new_channel.typ"
+#include "14_establishing_channel.typ"
 #include "20_circuits.typ"
 #include "30_limitations.typ"
 
