@@ -157,10 +157,6 @@ where
     ///      3. Create a new multisig wallet with the public keys.
     ///   2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
     ///   3. Verify the wallet address with the peer.
-    ///
-    /// ## Sequence diagram
-    #[doc = include_str!("../../docs/diagrams/establish_channel_sequence.md")]
-
     pub async fn establish_new_channel(&self, proposal: NewChannelProposal) -> Result<String, ChannelServerError> {
         self.inner.customer_establish_new_channel(proposal).await
     }
@@ -387,10 +383,13 @@ where
         Ok(name)
     }
 
+    /// Rescan the blockchain for the funding transaction for the given channel. This can be used if the initial scan
+    /// or watch process was disrupted or there was a re-org, but we feel that the transaction should exist. The
+    /// scanning starts just before the wallet's birthday to the present and then continues to scan new blocks.
     async fn rescan_for_funding(&self, name: &str) -> Option<()> {
         let channel = self.channels.peek(name).await?;
         if !channel.is_establishing() {
-            debug!("Channel {name} is not establishing, so no need to scan for funding txnsaction.");
+            debug!("Channel {name} is not establishing, so no need to scan for funding txn.");
             return None;
         }
         let wallet_info = match channel.state().as_establishing().ok()?.wallet() {

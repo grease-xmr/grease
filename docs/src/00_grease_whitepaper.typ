@@ -1,4 +1,5 @@
 #import "@preview/ilm:1.4.1": *
+#import "@preview/pintorita:0.1.4"
 #import "metadata/nomenclature.typ":*
 
 #let title = "Grease: A Private Payment Channel Protocol for Monero"
@@ -18,9 +19,14 @@
 )
 #show link: underline
 
+#show raw.where(lang: "mermaid"): it => pintorita.render(it.text)
+
 #include "01_introduction.typ"
-#include "02_circuits.typ"
-#include "03_limitations.typ"
+#include "10_channel_design.typ"
+#include "12_new_channel.typ"
+#include "20_circuits.typ"
+#include "30_limitations.typ"
+
 
 = Nomenclature
 
