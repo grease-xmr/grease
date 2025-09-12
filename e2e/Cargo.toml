@@ -18,17 +18,17 @@ tokio = { workspace = true, features = ["full"]}
 [dependencies.monero-simple-request-rpc]
 version = "0.1"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
 [dependencies.monero-rpc]
 version = "0.1"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
 [dependencies.monero-address]
 version = "0.1"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
 [dev-dependencies]
 dotenvy = "0.15.0"

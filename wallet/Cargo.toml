@@ -21,44 +21,30 @@ serde_json = {workspace = true}
 thiserror = { workspace = true }
 tokio = { workspace = true }
 zeroize = {  version = "1.8.1" }
+modular-frost = { workspace = true }
+ciphersuite = { workspace = true }
+dalek-ff-group = { workspace = true }
 
 [dependencies.monero-wallet]
 version = "0.1"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 features = ["multisig"]
-
-[dependencies.monero-rpc]
-version = "0.1"
-git = "https://github.com/serai-dex/serai.git"
-branch = "next"
-
-[dependencies.monero-simple-request-rpc]
-version = "0.1"
-git = "https://github.com/serai-dex/serai.git"
-branch = "next"
 
 [dependencies.monero-serai]
 version = "0.1.4-alpha"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
-[dependencies.modular-frost]
-version = "0.8.1"
+[dependencies.monero-rpc]
+version = "0.1"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
-features = ["tests"]
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
-[dependencies.ciphersuite]
-version = "0.4.1"
+[dependencies.monero-simple-request-rpc]
+version = "0.1"
 git = "https://github.com/serai-dex/serai.git"
-branch = "next"
-features = ["dalek"]
-
-[dependencies.dalek-ff-group]
-version = "0.4.1"
-git = "https://github.com/serai-dex/serai.git"
-branch = "next"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
 [dev-dependencies]
 rand = { workspace = true }

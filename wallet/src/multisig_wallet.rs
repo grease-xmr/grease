@@ -265,7 +265,7 @@ impl MultisigWallet {
         rng: &mut R,
     ) -> Result<(), WalletError> {
         let signable = self.pre_process(payments, rng).await?;
-        let machine = signable.multisig(self.musig_keys.clone())?;
+        let machine = signable.multisig(&self.musig_keys)?;
         let (machine, preprocess) = machine.preprocess(rng);
         if preprocess.len() != 1 {
             return Err(WalletError::KeyError(format!(

@@ -14,12 +14,16 @@ digest = "0.10.7"
 hex = { workspace = true }
 monero = { workspace = true, features = ["serde"] }
 rand = { workspace = true }
+rand_core = { version = "0.6.4" }
 thiserror = "2.0.12"
 log = "0.4.27"
 ron = {  workspace = true }
 serde = { version = "1.0.219", features = ["derive"] }
 zeroize = {  workspace = true }
-
-
+# Serai dependencies
+ciphersuite = { workspace = true }
+flexible-transcript = { workspace = true }
+modular-frost = {  workspace = true }
+dalek-ff-group = { workspace = true }
 [dev-dependencies]
 env_logger = "0.11.8"
