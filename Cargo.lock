@@ -1374,6 +1374,7 @@ dependencies = [
  "multiexp",
  "rand_core 0.6.4",
  "rustversion",
+ "thiserror 1.0.69",
  "zeroize",
 ]
 
@@ -2005,6 +2006,7 @@ dependencies = [
  "prettytable-rs",
  "qrcode",
  "rand 0.9.2",
+ "rand_core 0.6.4",
  "serde",
  "serde_json",
  "serde_yml",
@@ -2026,6 +2028,7 @@ dependencies = [
  "monero",
  "paste",
  "rand 0.9.2",
+ "rand_core 0.6.4",
  "ron",
  "serde",
  "serde_yml",
@@ -2726,9 +2729,12 @@ dependencies = [
  "curve25519-dalek",
  "dalek-ff-group",
  "digest 0.10.7",
+ "dleq",
  "env_logger",
  "flexible-transcript",
+ "grease-babyjubjub",
  "hex",
+ "k256",
  "log",
  "modular-frost",
  "monero",
@@ -2736,7 +2742,9 @@ dependencies = [
  "rand_core 0.6.4",
  "ron",
  "serde",
+ "sha3",
  "thiserror 2.0.16",
+ "wallet",
  "zeroize",
 ]
 

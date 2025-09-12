@@ -15,13 +15,14 @@ use libgrease::balance::Balances;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use libgrease::crypto::zk_objects::{
-    generate_txc0_nonces, AdaptedSignature, GenericPoint, GenericScalar, KesProof, PublicProof0, PublicUpdateProof,
-    ShardInfo, UpdateProofs,
+    generate_txc0_nonces, GenericPoint, GenericScalar, KesProof, PublicProof0, PublicUpdateProof, ShardInfo,
+    UpdateProofs,
 };
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
     TransactionId, TransactionRecord,
 };
+use libgrease::multisig::AdaptedSignature;
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
@@ -32,7 +33,6 @@ use libp2p::request_response::ResponseChannel;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;
-use rand::rng;
 use std::path::Path;
 use std::time::Duration;
 use tokio::sync::OwnedRwLockWriteGuard;
@@ -335,7 +335,7 @@ where
         drop(channel);
         // 2.1.1. Create a new keypair for the wallet.
         info!("👛️ Creating new multisig wallet keys for channel {name}");
-        let (k, p) = Curve25519PublicKey::keypair(&mut rng());
+        let (k, p) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         // 2.1.2. Exchange the public keys with the merchant.
         debug!("👛️ Sharing public key with merchant for channel {name}");
         let peer_key_info = self.exchange_wallet_keys(peer_id, &name, &p).await?;
@@ -594,7 +594,7 @@ where
     ) -> Result<GreaseResponse, GreaseResponse> {
         let (name, peer_key_info) = envelope.open();
         info!("👛️ Received multisig pubkey from Customer. Creating new wallet keys for channel {name}.");
-        let (k, p) = Curve25519PublicKey::keypair(&mut rng());
+        let (k, p) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         let wallet = self.common_create_wallet_and_advance(&name, k, p, peer_key_info).await.map_err(|e| {
             GreaseResponse::MsKeyExchange(Err(RemoteServerError::internal(format!("Failed to create new wallet: {e}"))))
         })?;
@@ -879,7 +879,7 @@ where
         let metadata = channel.state().metadata().clone();
         drop(channel);
         debug!("👁️‍🗨️ Generating witness_0 proof for channel {name}.");
-        let inputs = generate_txc0_nonces(&mut rand::rng());
+        let inputs = generate_txc0_nonces(&mut rand_core::OsRng);
         let proof = self.delegate.generate_initial_proofs(inputs, &metadata).await?;
         let pub_proof = proof.public_only();
         debug!("👁️‍🗨️ Storing witness_0 proof for channel {name}.");
@@ -1186,7 +1186,7 @@ where
         drop(channel);
         index += 1;
         info!("💸️  Generating witness_{index} for channel {channel_name}.");
-        let blinding_dleq = GenericScalar::random(&mut rand::rng());
+        let blinding_dleq = GenericScalar::random(&mut rand_core::OsRng);
         let proofs = self.delegate.generate_update(index, delta, &last_witness, &blinding_dleq, &metadata).await?;
         info!("💸️  Witness_{index} for channel {channel_name} successfully generated.");
         Ok(proofs)

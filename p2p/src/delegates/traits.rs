@@ -7,10 +7,11 @@ use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    AdaptedSignature, Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, Proofs0,
-    PublicProof0, PublicUpdateProof, UpdateProofs,
+    Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, Proofs0, PublicProof0,
+    PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::MultisigSplitSecrets;
+use libgrease::multisig::AdaptedSignature;
 use libgrease::state_machine::error::InvalidProposal;
 use std::future::Future;
 use std::time::Duration;

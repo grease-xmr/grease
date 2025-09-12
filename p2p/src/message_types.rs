@@ -3,11 +3,12 @@ use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
-use libgrease::crypto::zk_objects::{AdaptedSignature, PublicProof0, PublicUpdateProof};
+use libgrease::crypto::zk_objects::{PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
     ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
     MultisigSplitSecretsResponse, TransactionId, TransactionRecord,
 };
+use libgrease::multisig::AdaptedSignature;
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, ProposedChannelInfo};
@@ -135,7 +136,7 @@ pub enum ClientCommand {
         addr: Multiaddr,
         sender: oneshot::Sender<Result<(), PeerConnectionError>>,
     },
-    /// Dial a peer at a given address. Executed via [`Client::dial`].
+    /// Dial a peer at a given address. Executed via [`crate::Client::dial`].
     Dial {
         peer_id: PeerId,
         peer_addr: Multiaddr,

@@ -9,21 +9,28 @@ edition = "2021"
 
 anyhow = { workspace = true }
 blake2 = { workspace = true }
+grease-babyjubjub = { workspace = true, features = ["serai"] }
 curve25519-dalek = { version = "4.1.3", features = ["digest"] }
 digest = "0.10.7"
 hex = { workspace = true }
+k256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
 monero = { workspace = true, features = ["serde"] }
 rand = { workspace = true }
-rand_core = { version = "0.6.4" }
+rand_core = { workspace = true }
 thiserror = "2.0.12"
 log = "0.4.27"
 ron = {  workspace = true }
 serde = { version = "1.0.219", features = ["derive"] }
 zeroize = {  workspace = true }
+
 # Serai dependencies
 ciphersuite = { workspace = true }
+dalek-ff-group = { workspace = true }
+dleq = { workspace = true, features = ["experimental"] }
 flexible-transcript = { workspace = true }
 modular-frost = {  workspace = true }
-dalek-ff-group = { workspace = true }
+
 [dev-dependencies]
 env_logger = "0.11.8"
+sha3 = "0.10"
+wallet = { workspace = true }

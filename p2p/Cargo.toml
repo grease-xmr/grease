@@ -15,6 +15,7 @@ log = { workspace = true }
 monero = { workspace = true }
 paste = { version = "1.0.15" }
 rand = { workspace = true }
+rand_core = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yml = {  workspace = true }

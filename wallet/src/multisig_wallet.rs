@@ -1,23 +1,18 @@
 use blake2::Digest;
-use dalek_ff_group::dalek::constants::ED25519_BASEPOINT_POINT;
-use dalek_ff_group::{dalek::Scalar as DScalar, EdwardsPoint, Scalar};
+use dalek_ff_group::dalek::Scalar as DScalar;
 use modular_frost::curve::Ed25519;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashMap;
 use std::mem;
 use std::path::Path;
-use zeroize::Zeroizing;
 
 use crate::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::errors::WalletError;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::crypto::zk_objects::AdaptedSignature;
-use libgrease::monero::data_objects::MultisigWalletData;
+use libgrease::multisig::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys, AdaptedSignature, MultisigWalletData};
 use log::*;
-use modular_frost::dkg::musig::musig;
-use modular_frost::dkg::DkgError;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
 use modular_frost::{Participant, ThresholdKeys};
 use monero::{Address as UAddress, AddressType as UAddressType};
@@ -63,8 +58,8 @@ impl MultisigWallet {
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
         let (jprv_vk, j_pub_vk) = musig_dh_viewkey(&spend_key, peer_pubkey);
         let joint_private_view_key = Curve25519Secret::from(jprv_vk.0);
-        let joint_public_view_key = Curve25519PublicKey::from(j_pub_vk.0);
-        let joint_public_spend_key = Curve25519PublicKey::from(musig_keys.group_key().0);
+        let joint_public_view_key = Curve25519PublicKey::from(j_pub_vk);
+        let joint_public_spend_key = Curve25519PublicKey::from(musig_keys.group_key());
         Ok(MultisigWallet {
             rpc,
             my_spend_key: spend_key,
@@ -115,9 +110,9 @@ impl MultisigWallet {
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
         let (joint_private_view_key, joint_public_view_key) = musig_dh_viewkey(&data.my_spend_key, peer_pubkey);
         let joint_private_view_key = Curve25519Secret::from(joint_private_view_key.0);
-        let joint_public_view_key = Curve25519PublicKey::from(joint_public_view_key.0);
+        let joint_public_view_key = Curve25519PublicKey::from(joint_public_view_key);
         let joint_public_spend_key = musig_keys.group_key();
-        let joint_public_spend_key = Curve25519PublicKey::from(joint_public_spend_key.0);
+        let joint_public_spend_key = Curve25519PublicKey::from(joint_public_spend_key);
         let known_outputs = data.known_outputs;
         let known_outputs =
             Self::read_outputs(known_outputs.as_slice()).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
@@ -143,8 +138,8 @@ impl MultisigWallet {
         MoneroAddress::new(
             Network::Mainnet,
             AddressType::Legacy,
-            self.joint_public_spend_key.as_point(),
-            self.joint_public_view_key.as_point(),
+            self.joint_public_spend_key.as_point().0,
+            self.joint_public_view_key.as_point().0,
         )
     }
 
@@ -165,8 +160,8 @@ impl MultisigWallet {
     }
 
     pub async fn scan(&mut self, start: Option<u64>) -> Result<usize, RpcError> {
-        let k = self.joint_private_view_key.as_zscalar().clone();
-        let pair = ViewPair::new(self.joint_public_spend_key.as_point(), k)
+        let k = self.joint_private_view_key.to_dalek_scalar();
+        let pair = ViewPair::new(self.joint_public_spend_key.as_point().0, k)
             .map_err(|e| RpcError::InternalError(e.to_string()))?;
         let mut scanner = Scanner::new(pair);
         let height = self.get_height().await?;
@@ -324,7 +319,7 @@ impl MultisigWallet {
             .my_signing_share()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
         let real_sig = signature_share_to_secret(real_sig);
-        let adapted = real_sig.as_scalar() + witness.as_scalar();
+        let adapted = real_sig.as_dalek_scalar() + witness.as_dalek_scalar();
         Ok(AdaptedSignature(Curve25519Secret::from(adapted)))
     }
 
@@ -348,7 +343,7 @@ impl MultisigWallet {
         adapted: &AdaptedSignature,
         offset: &Curve25519Secret,
     ) -> Result<SignatureShare<Ed25519>, WalletError> {
-        let sig = adapted.as_scalar() - offset.as_scalar();
+        let sig = *adapted.as_scalar() - **offset.as_scalar();
         let bytes = sig.as_bytes();
         let sig = self.bytes_to_signature_share(bytes)?;
         Ok(sig)
@@ -491,39 +486,4 @@ pub fn convert_address(address: UAddress) -> MoneroAddress {
     let spend = address.public_spend.point.decompress().expect("Addresses weren't compatible?");
     let view = address.public_view.point.decompress().expect("Addresses weren't compatible?");
     MoneroAddress::new(network, kind, spend, view)
-}
-
-fn musig_context(keys: &[Curve25519PublicKey; 2]) -> [u8; 64 + 5] {
-    let mut result = [0u8; 64 + 5];
-    result[..5].copy_from_slice(b"Musig");
-    result[5..5 + 32].copy_from_slice(keys[0].as_compressed().as_bytes());
-    result[5 + 32..5 + 64].copy_from_slice(keys[1].as_compressed().as_bytes());
-    result
-}
-
-fn sort_pubkeys(keys: &mut [Curve25519PublicKey; 2]) {
-    keys.sort_unstable_by(|a, b| a.as_compressed().as_bytes().cmp(b.as_compressed().as_bytes()));
-}
-
-fn musig_2_of_2(
-    secret: &Curve25519Secret,
-    sorted_pubkeys: &[Curve25519PublicKey; 2],
-) -> Result<ThresholdKeys<Ed25519>, DkgError<()>> {
-    let context = musig_context(sorted_pubkeys);
-    let secret = Zeroizing::new(Scalar(*secret.as_scalar()));
-    let pubkeys: [EdwardsPoint; 2] =
-        [EdwardsPoint(sorted_pubkeys[0].as_point()), EdwardsPoint(sorted_pubkeys[1].as_point())];
-    let core = musig(&context[..], &secret, &pubkeys)?;
-    Ok(ThresholdKeys::new(core))
-}
-
-fn musig_dh_viewkey(secret: &Curve25519Secret, other_key: &Curve25519PublicKey) -> (Zeroizing<Scalar>, EdwardsPoint) {
-    let shared = other_key.as_point() * secret.as_scalar();
-    let hashed =
-        blake2::Blake2b512::new().chain_update(b"MuSigViewKey").chain_update(shared.compress().as_bytes()).finalize();
-    let mut bytes = [0u8; 64];
-    bytes[..].copy_from_slice(hashed.as_slice());
-    let private_view_key = Scalar(DScalar::from_bytes_mod_order_wide(&bytes));
-    let public_view_key = EdwardsPoint(private_view_key.0 * ED25519_BASEPOINT_POINT);
-    (Zeroizing::new(private_view_key), public_view_key)
 }

@@ -11,6 +11,7 @@ members = [
 ]
 
 [workspace.dependencies]
+grease-babyjubjub = { version = "0.1.0", path = "./babyjubjub" }
 grease-p2p = { version = "0.1.0", path = "./p2p" }
 libgrease = { version = "0.1.0", path = "./libgrease" }
 wallet = { version = "0.1.0", path = "./wallet" }
@@ -28,6 +29,7 @@ log = { version = "0.4" }
 monero = { version = "0.21.0", features = ["serde"] }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 rand = { version = "0.9.0" }
+rand_core = { version = "0.6.4" }
 ron = {  version = "0.10.1" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0.140" }
@@ -40,10 +42,17 @@ zeroize = {  version = "1.8.1" }
 dalek-ff-group = {  version = "0.4", git = "https://github.com/serai-dex/serai.git", rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5" }
 flexible-transcript = { version = "0.3", git = "https://github.com/serai-dex/serai.git", rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5" }
 
+[workspace.dependencies.dleq]
+version = "0.4.1"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+features = ["std", "experimental"]
+
 [workspace.dependencies.ciphersuite]
 version = "0.4.1"
 git = "https://github.com/serai-dex/serai.git"
 rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+features = ["dalek", "ed25519", "secp256k1"]
 
 [workspace.dependencies.modular-frost]
 version = "0.8"

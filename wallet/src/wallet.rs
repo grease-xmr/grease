@@ -82,7 +82,7 @@ impl MoneroWallet {
         }
         let outputs = self.inner.find_spendable_outputs(amount)?;
         let signable = create_signable_tx(self.rpc(), &mut rng, outputs.clone(), payments, change, vec![]).await?;
-        let tx = signable.sign(&mut rng, self.private_spend_key.as_zscalar())?;
+        let tx = signable.sign(&mut rng, &self.private_spend_key.to_dalek_scalar())?;
         let hash = tx.hash();
         debug!("Signable transaction successfully created. {amount} to {to}");
         self.rpc().publish_transaction(&tx).await?;

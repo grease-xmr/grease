@@ -16,6 +16,7 @@ log = { workspace = true }
 monero = { workspace = true }
 prettytable-rs = { version = "0.10.0" }
 rand = { workspace = true }
+rand_core = { workspace = true }
 qrcode = {  version = "0.14.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

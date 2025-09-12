@@ -116,10 +116,10 @@ async fn main() -> Result<(), WalletError> {
 
     info!("Creating adaptor signatures for Alice and Bob");
     // Create adaptor signature
-    let offset_b = Curve25519Secret::random(&mut rand::rng());
+    let offset_b = Curve25519Secret::random(&mut rand_core::OsRng);
     let adapted_b = wallet_b.adapt_signature(&offset_b)?;
 
-    let offset_a = Curve25519Secret::random(&mut rand::rng());
+    let offset_a = Curve25519Secret::random(&mut rand_core::OsRng);
     let adapted_a = wallet_a.adapt_signature(&offset_a)?;
 
     // Alice signs with an adaptor signature

@@ -10,11 +10,12 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{
-    AdaptedSignature, GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0,
-    PublicUpdateOutputs, PublicUpdateProof, ShardInfo, UpdateProofs,
+    GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs,
+    PublicUpdateProof, ShardInfo, UpdateProofs,
 };
 use crate::lifecycle_impl;
-use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
+use crate::monero::data_objects::{TransactionId, TransactionRecord};
+use crate::multisig::{AdaptedSignature, MultisigWalletData};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;

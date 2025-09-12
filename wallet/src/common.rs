@@ -27,9 +27,9 @@ pub async fn scan_wallet(
     public_spend_key: &Curve25519PublicKey,
     private_view_key: &Curve25519Secret,
 ) -> Result<(Vec<WalletOutput>, u64), RpcError> {
-    let k = private_view_key.as_zscalar().clone();
+    let k = private_view_key.to_dalek_scalar();
     let p = public_spend_key.as_point();
-    let pair = ViewPair::new(p, k).map_err(|e| RpcError::InternalError(e.to_string()))?;
+    let pair = ViewPair::new(p.0, k).map_err(|e| RpcError::InternalError(e.to_string()))?;
     let mut scanner = Scanner::new(pair);
     let height = match end {
         Some(h) => h,
@@ -153,7 +153,7 @@ pub async fn create_signable_tx<R: Send + Sync + RngCore + CryptoRng>(
 
 pub(crate) fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<DScalar> {
     let mut data = [0u8; 32 + 8];
-    data[..32].copy_from_slice(spend_key.as_compressed().as_bytes());
+    data[..32].copy_from_slice(spend_key.to_compressed().as_bytes());
     data[32..].copy_from_slice(&index.to_le_bytes());
     let k = Ed25519::hash_to_F(b"Grease Wallet", &data);
     Zeroizing::new(k.0)
@@ -161,7 +161,7 @@ pub(crate) fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing
 
 pub(crate) fn create_change(public_spend_key: &Curve25519PublicKey) -> Result<Change, WalletError> {
     let vk = view_key(public_spend_key, 0);
-    let pair = ViewPair::new(public_spend_key.as_point(), vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
+    let pair = ViewPair::new(public_spend_key.as_point().0, vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
     let index = SubaddressIndex::new(0, 1).expect("not to fail with valid hardcoded params");
     Ok(Change::new(pair, Some(index)))
 }
