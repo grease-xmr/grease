@@ -44,21 +44,38 @@ When closing the channel, the two peers will:
 === Channel Dispute
 
 In case of a *dispute* a plaintiff will:
-+ provide the unadapted signatures of the closing transaction to the KES.
++ provide the unadapted signatures of the closing transaction to the KES,
++ monitor the KES public state for the dispute status.
 
-If a dispute is detected the other peer will:
-+ respond with the adapted signature of the closing transaction to the KES,
-+ or simply broadcast the closing transaction to Monero.
+After verifying the dispute provided by the plaintiff the KES will:
++ signal the dispute on its public state,
++ monitor Monero for the closing transaction,
++ create a timer to await for the dispute response window to expire.
 
-If a dispute is lodged and the other peer does not respond within the dispute period:
-+ the KES will provide the saved root secret share of the violating peer to the wronged peer,
-+ the wronged peer will reconstruct the violating peer's root secret,
-+ the wronged peer may deterministically update the the secret to find _any_ shared secret that can be used to create a valid Monero transaction.
-#footnote[Under CLSAG, older transactions may become stale and be rejected by the network. This limitation will be lifted post-FCMP++.],
-+ the wronged peer will adapt the unadapted signature of the closing transaction using the most recent secret to gain the 4-of-4 pieces of information needed to broadcast the transaction,
-+ and finally the wronged will broadcast the closing transaction to Monero.
+The defendant will monitor the KES public state for a dispute. If the defendant detects the dispute, the defendant will:
++ accept the dispute and send the adapted signature of the closing transaction to the KES,
++ accept the dispute and broadcast the closing transaction to Monero,
++ protest the dispute and send the unadapted signatures of a future transaction to the KES,
++ ignore the dispute and allow the KES to find for the plaintiff.
 
+The KES reacts to the defendant by:
++ verifying the adapted signature:
+  + if verified the KES will close the dispute and update public state with the adapted signature,
+  + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
++ observing the closing transaction on Monero and close the dispute,
++ processing the protest by verifying the unadapted signatures of the future transaction:
+  + if verified the KES will find that the defendant is wronged and proceed with the unlock process,
+  + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
++ recognizing that the dispute response window has expired and find that the plaintiff is wronged and proceed with the unlock process.
 
+The KES may start the unlock process for the wronged peer against the violating peer:
++ the KES will close the dispute and update public state with the saved root secret share of the violating peer encrypted to the wronged peer.
+
+The wronged peer will monitor the KES public state for the dispute closure. If the wronged peer detects the unlock process, the wronged peer will:
++ reconstruct the violating peer's root secret,
++ choose to deterministically update the secret to find _any_ shared secret that can be used to create a valid Monero transaction #footnote[Under CLSAG, older transactions may quickly become stale and be rejected by the network. This time window will be relaxed post-FCMP++.],
++ adapt the unadapted signature of the closing transaction using the most recent violating peer's secret to gain the 4-of-4 pieces of information needed to broadcast the transaction,
++ broadcast the closing transaction to Monero.
 
 == Grease Protocol
 
@@ -93,7 +110,7 @@ At the start of the initialization stage the peers provide each other with the f
 )
 
 The peers will also agree on a third party agent to host the Key Escrow Service (KES). When the peers agree on the
-particular KES, the publicly known public key to this service is shared as $PubBjj("KES")$.
+particular KES, the public key to this service is shared as $PubBjj("KES")$.
 
 Each participant will create a new one-time key pair to use for communication with the KES in the case of a dispute. The peers share the public keys with each other, referring to the other's as $PubBjj("peer")$.
 
@@ -122,10 +139,6 @@ in @tbl-init-input. These are not shared with the peer.
       [$nu_"peer"$], [Public], [Random 251 bit value, provided by the peer (`nonce_peer`)],
       [$PubBjj("peer")$], [Public], [The public key/curve point on Baby Jubjub for the peer],
       [$PubBjj("KES")$], [Public], [The public key/curve point on Baby Jubjub for the KES],
-      [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
-      [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
-      [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
-      [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
     )
 ) <tbl-init-input>
 
@@ -151,7 +164,7 @@ use.
       [C], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
       [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
       [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
-      [$Delta_ed$], [Private], [Optimization parameter (`response_div_BabyJubJub`)],
+      [$Delta_ed$], [Private], [Optimization parameter (`response_div_ed25519`)],
       [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
     )
 ) <tbl-init-output>
@@ -169,7 +182,7 @@ Particular details about these operations can be found in #ref(<zkp-operations>)
 
 After receiving the publicly visible values and ZK proofs from the peer, the Grease protocol requires the ZKP verification operations to ensure protocol conformity.
 
-Once verified, the variables listed in @tbl-init-after must be stored. With these outputs the the initialization stage is complete and the channel is open. The peers can now transact and update the channel state or close the channel and receive the locked XMR value in the *Monero Refund Wallet*.
+Once verified, the variables listed in @tbl-init-after must be stored. With these outputs the initialization stage is complete and the channel is open. The peers can now transact and update the channel state or close the channel and receive the locked XMR value in the *Monero Refund Wallet*.
 
 
 #figure(
@@ -239,7 +252,7 @@ the peer in addition to the generated proofs while the private values are stored
       [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
       [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
       [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
-      [$Delta_ed$], [Private], [Optimization parameter (`response_div_BabyJubJub`)],
+      [$Delta_ed$], [Private], [Optimization parameter (`response_div_ed25519`)],
       [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
       [$C$], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
       [$R_bjj$], [Public], [DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`)],
@@ -271,7 +284,7 @@ Once verified, the variables listed in @tbl-update-post must be stored:
     )
 ) <tbl-update-post>
 
-With these outputs the the update stage is complete and the channel remains open. The peers can now transact further updates or close the channel and receive the locked XMR value *Channel Balance* in the *Monero Refund Wallet*.
+With these outputs the update stage is complete and the channel remains open. The peers can now transact further updates or close the channel and receive the locked XMR value *Channel Balance* in the *Monero Refund Wallet*.
 
 = Grease ZKP Operations <zkp-operations>
 
@@ -350,9 +363,12 @@ $
   omega_0 = "ReconstructFeldmanSecretShare_2_of_2"(sigma_1, sigma_2)
 $
 
+The negative $sigma_1$ is non-standard compared to typical Shamir/Feldman schemes. We use this to make the mathematics more clear and to ignore subtraction to allow for certain legacy circuit implementations.
+
 === Methods
 
 $
+  T_0 = witness_0 dot.c G_bjj \
   c_1 = a_1 dot.c G_bjj \
   sigma_1 = -(omega_0 + a_1) mod L_bjj \
   sigma_2 = 2*omega_0 + a_1 mod L_bjj
@@ -455,7 +471,7 @@ $
 
 === Summary
 
-The *VerifyEncryptMessage* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The output are the perfectly binding public key commitment and the perfectly hiding encrypted scaler value to send to the destinations. The circuit is ZK across the inputs since the outputs are publicly visible.
+The *VerifyEncryptMessage* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The outputs are the perfectly binding public key commitment and the perfectly hiding encrypted scaler value to send to the destinations. The circuit is ZK across the inputs since the outputs are publicly visible.
 
 The method of encryption is the ECDH (Elliptic-curve Diffie–Hellman) key agreement protocol. The operation uses the *blake2s* hashing function for its shared secret commitment simulation. Note that the unpacked form of the ephemeral key is used for hashing, instead of the standard $"PACKED"()$ function.
 
@@ -541,7 +557,7 @@ $
 
 === Summary
 
-The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the the provided inputs and calls the *FeldmanSecretShare_2_of_2* and *VerifyEncryptMessage* operations.
+The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the provided inputs and calls the *FeldmanSecretShare_2_of_2* and *VerifyEncryptMessage* operations.
 
 === Methods
 
@@ -601,7 +617,7 @@ $
   [C], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
   [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
   [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
-  [$Delta_ed$], [Private], [Optimization parameter (`response_div_BabyJubJub`)],
+  [$Delta_ed$], [Private], [Optimization parameter (`response_div_ed25519`)],
   [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
 )
 
