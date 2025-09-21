@@ -43,7 +43,7 @@ When closing the channel, the two peers will:
 
 === Channel Dispute
 
-In case of a *dispute* a plaintiff will:
+In case of a *dispute*, a plaintiff will:
 + provide the unadapted signatures of the closing transaction to the KES,
 + monitor the KES public state for the dispute status.
 
@@ -62,11 +62,11 @@ The KES reacts to the defendant by:
 + verifying the adapted signature:
   + if verified the KES will close the dispute and update public state with the adapted signature,
   + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
-+ observing the closing transaction on Monero and close the dispute,
++ observing the closing transaction on Monero and closing the dispute,
 + processing the protest by verifying the unadapted signatures of the future transaction:
   + if verified the KES will find that the defendant is wronged and proceed with the unlock process,
   + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
-+ recognizing that the dispute response window has expired and find that the plaintiff is wronged and proceed with the unlock process.
++ recognizing that the dispute response window has expired, finding that the plaintiff is wronged and proceeding with the unlock process.
 
 The KES may start the unlock process for the wronged peer against the violating peer:
 + the KES will close the dispute and update public state with the saved root secret share of the violating peer encrypted to the wronged peer.
@@ -248,7 +248,7 @@ the peer in addition to the generated proofs while the private values are stored
       table.header([*Output*], [*Visibility*], []),
       [$T_(i-1)$], [Public], [The public key/curve point on Baby Jubjub for $witness_(i-1)$],
       [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
-      [$witness_i$], [Private], [The next private private key protecting access to close the payment channel (`witness_i`)],
+      [$witness_i$], [Private], [The next private key protecting access to close the payment channel (`witness_i`)],
       [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
       [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
       [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
@@ -278,7 +278,7 @@ Once verified, the variables listed in @tbl-update-post must be stored:
     caption: "Variables to be stored after every channel update",
     table(
       columns: 2,
-      table.header([*Resource*], []),
+      table.header([*Resource/Variable*], []),
       [$witness_i$], [The current private key protecting access to close the payment channel (`witness_i`)],
       [$S_i$], [The public key/curve point on Ed25519 for the peer's $witness_i$],
     )
@@ -342,7 +342,7 @@ $
 
 === Summary
 
-The *FeldmanSecretShare_2_of_2* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The output are the two perfectly binding Feldman commitments and the two encoded split shares to send to the destinations. The circuit is not ZK across the inputs so that full knowledge of the private outputs can reconstruct the private inputs.
+The *FeldmanSecretShare_2_of_2* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The outputs are the two perfectly binding Feldman commitments and the two encoded split shares to send to the destinations. The circuit is not ZK across the inputs so that full knowledge of the private outputs can reconstruct the private inputs.
 
 The outputs are used for the further *VerifyEncryptMessage*, *VerifyFeldmanSecretShare_peer*, *VerifyFeldmanSecretShare_KES*, and *ReconstructFeldmanSecretShare_2_of_2* operations.
 
@@ -471,7 +471,7 @@ $
 
 === Summary
 
-The *VerifyEncryptMessage* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The outputs are the perfectly binding public key commitment and the perfectly hiding encrypted scaler value to send to the destinations. The circuit is ZK across the inputs since the outputs are publicly visible.
+The *VerifyEncryptMessage* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The outputs are the perfectly binding public key commitment and the perfectly hiding encrypted scalar value to send to the destinations. The circuit is ZK across the inputs since the outputs are publicly visible.
 
 The method of encryption is the ECDH (Elliptic-curve Diffie–Hellman) key agreement protocol. The operation uses the *blake2s* hashing function for its shared secret commitment simulation. Note that the unpacked form of the ephemeral key is used for hashing, instead of the standard $"PACKED"()$ function.
 
@@ -580,7 +580,7 @@ $
   [*Output*], [*Visibility*], [],
   [$T_(i-1)$], [Public], [The public key/curve point on Baby Jubjub for $witness_(i-1)$],
   [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
-  [$witness_i$], [Private], [The next private private key protecting access to close the payment channel (`witness_i`)],
+  [$witness_i$], [Private], [The next private key protecting access to close the payment channel (`witness_i`)],
 )
 
 === Summary

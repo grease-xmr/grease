@@ -265,8 +265,8 @@ Grease logs:
 The channel is now open and ready for use.
 
 ```console
-[^1]: This is a Monero requirement. When FCMP goes live, participants will be able to transact immediately. 
-      If FCMP is heavily delayed, there are workarounds we can look into, but our efforts are better spent elswhere 
+[^1]: This is a Monero requirement. When FCMP++ goes live, participants will be able to transact immediately. 
+      If FCMP++ is heavily delayed, there are workarounds we can look into, but our efforts are better spent elswhere 
       for the moment.  
 ```
 
