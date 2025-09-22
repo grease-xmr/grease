@@ -20,12 +20,12 @@
 
   table(columns: 2, align: (left, left),
     table.header( [*Symbol*], [*Description*]),
-    Gbjj, [Generator point for BabyJubJub curve],
+    Gbjj, [Generator point for curve Baby JubJub],
     Ged, [Generator point for curve Ed25519],
-    Lbjj, [The prime order of the BabyJubJubCurve],
+    Lbjj, [The prime order of curve Baby JubJub],
     Led, [The prime order for curve Ed25519],
     $witness_i$, [The witness value for party $i$],
-    $T_i$, [The public point corresponding to $witness_i$ on curve BabyJubJub],
+    $T_i$, [The public point corresponding to $witness_i$ on curve Baby JubJub],
     $S_i$, [The public point corresponding to $witness_i$ on curve Ed25519],
   )
 
@@ -45,7 +45,7 @@
 
 table(columns: 2, align: (left, left),
     table.header( [*Subscript*], [*Referent*]),
-    bjj, [BabyJubJub curve],
+    bjj, [Curve Baby JubJub],
     ed, [Curve Ed25519],
     ..rows
 
