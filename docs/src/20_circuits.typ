@@ -50,31 +50,31 @@ In case of a *dispute*, a plaintiff will:
 After verifying the dispute provided by the plaintiff the KES will:
 + signal the dispute on its public state,
 + monitor Monero for the closing transaction,
-+ create a timer to await for the dispute response window to expire.
++ start a timer for the dispute‑response window ($Delta_"dispute"$) and wait for it to expire.
 
 The defendant will monitor the KES public state for a dispute. If the defendant detects the dispute, the defendant will:
-+ accept the dispute and send the adapted signature of the closing transaction to the KES,
-+ accept the dispute and broadcast the closing transaction to Monero,
-+ protest the dispute and send the unadapted signatures of a future transaction to the KES,
-+ ignore the dispute and allow the KES to find for the plaintiff.
+1. accept the dispute and send the adapted signature of the closing transaction to the KES,
+2. accept the dispute and broadcast the closing transaction to Monero,
+3. protest the dispute and send the unadapted signatures of a newer closing transaction to the KES,
+4. ignore the dispute and allow the KES to rule in favor of the plaintiff.
 
 The KES reacts to the defendant by:
-+ verifying the adapted signature:
-  + if verified the KES will close the dispute and update public state with the adapted signature,
-  + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
-+ observing the closing transaction on Monero and closing the dispute,
-+ processing the protest by verifying the unadapted signatures of the future transaction:
-  + if verified the KES will find that the defendant is wronged and proceed with the unlock process,
-  + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
-+ recognizing that the dispute response window has expired, finding that the plaintiff is wronged and proceeding with the unlock process.
+1. verifying the adapted signature:
+  + if verified the KES will close the dispute and update the public state with the adapted signature,
+  + if not verified the KES will rule in favor of the plaintiff and proceed with the unlock process.
+2. observing the closing transaction on Monero and closing the dispute,
+3. processing the protest by verifying the unadapted signatures of the future transaction:
+  + if verified the KES will rule in favor of the defendant and proceed with the unlock process,
+  + if not verified the KES will rule in favor of the plaintiff and proceed with the unlock process.
+4. recognizing that the dispute response window has expired, finding that the plaintiff is wronged and proceeding with the unlock process.
 
 The KES may start the unlock process for the wronged peer against the violating peer:
-+ the KES will close the dispute and update public state with the saved root secret share of the violating peer encrypted to the wronged peer.
++ the KES will close the dispute and update the public state with the violating peer’s saved root‑secret share, encrypted to the wronged peer.
 
 The wronged peer will monitor the KES public state for the dispute closure. If the wronged peer detects the unlock process, the wronged peer will:
 + reconstruct the violating peer's root secret,
-+ choose to deterministically update the secret to find _any_ shared secret that can be used to create a valid Monero transaction #footnote[Under CLSAG, older transactions may quickly become stale and be rejected by the network. This time window will be relaxed post-FCMP++.],
-+ adapt the unadapted signature of the closing transaction using the most recent violating peer's secret to gain the 4-of-4 pieces of information needed to broadcast the transaction,
++ deterministically advance the secret until a valid closing transaction can be formed #footnote[Under CLSAG, older transactions may quickly become stale and be rejected by the network. This time window will be relaxed post‑FCMP++.],
++ adapt the unadapted signature of the closing transaction using the violating peer’s most recent secret to gain the 4‑of‑4 pieces of information needed to broadcast the transaction,
 + broadcast the closing transaction to Monero.
 
 == Grease Protocol
@@ -284,7 +284,7 @@ Once verified, the variables listed in @tbl-update-post must be stored:
     )
 ) <tbl-update-post>
 
-With these outputs the update stage is complete and the channel remains open. The peers can now transact further updates or close the channel and receive the locked XMR value *Channel Balance* in the *Monero Refund Wallet*.
+With these outputs, the update stage is complete and the channel remains open. The peers can now transact further updates or close the channel and receive the *Channel Balance* (locked XMR) in the *Monero Refund Wallet*.
 
 = Grease ZKP Operations <zkp-operations>
 
@@ -363,7 +363,7 @@ $
   omega_0 = "ReconstructFeldmanSecretShare_2_of_2"(sigma_1, sigma_2)
 $
 
-The negative $sigma_1$ is non-standard compared to typical Shamir/Feldman schemes. We use this to make the mathematics more clear and to ignore subtraction to allow for certain legacy circuit implementations.
+The negative $sigma_1$ is non-standard compared to typical Shamir/Feldman schemes. We use this to make the mathematics clearer and to avoid subtraction operations in certain legacy circuit implementations.
 
 === Methods
 
