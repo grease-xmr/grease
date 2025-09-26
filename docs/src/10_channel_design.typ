@@ -4,7 +4,7 @@
 
 == Overall design description
 
-Grease largely follows the MoNet@monet design, which is a payment channel protocol that uses a key escrow service (KES)
+Grease largely follows the Monet@monet design, which is a payment channel protocol that uses a key escrow service (KES)
 to manage the funds in the channel.
 
 A grease payment channel is a 2-party bidirectional channel. The most common use case is in a multi-payment

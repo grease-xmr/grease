@@ -5,7 +5,7 @@ best currency in circulation, but the user _experience_ remains less than ideal.
 This comment is not necessarily aimed at user _interfaces_ -- for example, there are Monero wallets that are very attractive
 and easy to use -- but the fundamental design of Monero means that:
 
-- many, especially new, users find they can make only one payment roughly every ~20 minutes when their wallet holds a single spendable output (the change from the first payment typically requires ~10 confirmations before it can be spent again),
+- many, especially new, users find they can make only one payment roughly every ~20 minutes when their wallet holds a single spendable output (the change from the first payment typically requires about 10 confirmations before it can be spent again),
 - due to the lack of scripting capabilities, use-cases that capture the public imagination, like DeFi, are not possible in vanilla Monero.
 
 Therefore, the _experience_ of using Monero tends to be one of waiting, and limited functionality.
@@ -49,8 +49,8 @@ that there is no way that privacy can be compromised. Each channel lifecycle req
 effectively unlimited near-instant updates to the channel balance in between these two transactions. This dramatically
 improves the scalability of Monero.
 
-The Grease protocol is based on the original AuxChannel@aux-channel paper and MoNet@monet protocol. These papers
-introduced new cryptography primitives that are useful for trustlessly proving conformity by untrusted peers. These primitives are useful abstractly, but the means of implementation were based on innovative and non-standard cryptographic methods that have not gained the general acceptance of the cryptographic community. This may change in time, while the Grease protocol bypasses this limitation by the use of generally accepted methods for the primitives' implementation.
+The Grease protocol is based on the original AuxChannel@aux-channel paper and Monet@monet protocol. These papers
+introduced new cryptographic primitives that are useful for trustlessly proving conformity by untrusted peers. These primitives are useful abstractly, but the means of implementation were based on innovative and non-standard cryptographic methods that have not gained the general acceptance of the cryptographic community. This may change in time, while the Grease protocol bypasses this limitation by the use of generally accepted methods for the primitives' implementation.
 
 Every update and the final closure of the channel require an online interaction over the Grease network. In order to
 prevent the accidental or intentional violation of the protocol by a peer not interacting and thus jamming the channel

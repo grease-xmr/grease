@@ -93,7 +93,7 @@ The state does not have to be managed on the same chain though. Any place where 
 
 will suffice.
 
-The [AuxChannel] and [MoNet] papers (summarized in [Payment Channel Network for Scriptless Blockchains]) provide a
+The [AuxChannel] and [Monet] papers (summarized in [Payment Channel Network for Scriptless Blockchains]) provide a
 workable demonstration of this, using Ethereum as the state management chain. However, by using Ethereum, the channel
 metadata, including the peer's public keys and the channel state (open, disputed) is scrutable by the public.
 
@@ -101,7 +101,7 @@ Grease aims to improve on this by making the payment channel metadata private as
 way to do this.
 
 [AuxChannel]: https://eprint.iacr.org/2022/117.pdf
-[MoNet]: https://eprint.iacr.org/2022/744.pdf
+[Monet]: https://eprint.iacr.org/2022/744.pdf
 [Payment Channel Network for Scriptless Blockchains]: https://bridges.monash.edu/articles/thesis/Payment_Channel_Network_for_Scriptless_Blockchains/23909907
 
 ## Design principles

@@ -50,7 +50,7 @@ In case of a *dispute*, a plaintiff will:
 After verifying the dispute provided by the plaintiff the KES will:
 + signal the dispute on its public state,
 + monitor Monero for the closing transaction,
-+ start a timer for the dispute‑response window ($Delta_"dispute"$) and wait for it to expire.
++ start and enforce a dispute‑response window of length $Delta_"dispute"$; accept and process defendant responses during this window, and if it expires without resolution, proceed with the unlock process.
 
 The defendant will monitor the KES public state for a dispute. If the defendant detects the dispute, the defendant will:
 1. accept the dispute and send the adapted signature of the closing transaction to the KES,
@@ -66,10 +66,10 @@ The KES reacts to the defendant by:
 3. processing the protest by verifying the unadapted signatures of the future transaction:
   + if verified the KES will rule in favor of the defendant and proceed with the unlock process,
   + if not verified the KES will rule in favor of the plaintiff and proceed with the unlock process.
-4. recognizing that the dispute response window has expired, finding that the plaintiff is wronged and proceeding with the unlock process.
+4. recognizing that the dispute‑response window has expired, ruling in favor of the plaintiff and proceeding with the unlock process.
 
-The KES may start the unlock process for the wronged peer against the violating peer:
-+ the KES will close the dispute and update the public state with the violating peer’s saved root‑secret share, encrypted to the wronged peer.
+The KES will start the unlock process for the wronged peer against the violating peer:
++ the KES will close the dispute and update the public state with the violating peer’s saved root‑secret share $sigma_2$, encrypted to the wronged peer.
 
 The wronged peer will monitor the KES public state for the dispute closure. If the wronged peer detects the unlock process, the wronged peer will:
 + reconstruct the violating peer's root secret,
@@ -121,7 +121,7 @@ The ZKP protocols prove that the real private keys are used correctly and that i
 ==== Initialization protocol
 
 The Grease protocol requires the generation and sharing of the ZKPs. The public data and the small proofs are shared
-between peers, then are validated as a means to ensure protocol conformity before *MoNet* protocol stage 3 begins.
+between peers, then are validated as a means to ensure protocol conformity before *Monet* protocol stage 3 begins.
 
 Each peer generates a set of secret random values to ensure security of communications, the *private* variables listed
 in @tbl-init-input. These are not shared with the peer.
@@ -223,7 +223,7 @@ For the update stage to begin, the peers must agree upon a small amount of infor
 
 ==== Update protocol
 
-Grease replaces the MoNet update protocol completely with the generation and sharing of update ZKPs. The public data
+Grease replaces the Monet update protocol completely with the generation and sharing of update ZKPs. The public data
 and the small proofs are shared between peers, then are validated as a means to ensure protocol conformity.
 
 The ZKP operations require the previous $witness_i$ (now $witness_(i-1)$) and a random value to ensure security of
