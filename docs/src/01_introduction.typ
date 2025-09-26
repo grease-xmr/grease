@@ -73,7 +73,7 @@ The state does not have to be managed on the same chain though. Any place where 
 
 will suffice.
 
-The initial implementation uses any Noir-compatible execution environment that supports the Barretenberg Plonky
+The initial implementation uses any Noir-compatible execution environment that supports the Barretenberg PLONK
 proving system, the Aztec blockchain being one candidate.
 
 The KES acts as a third‑party judge in disputes. At initialization, each peer splits a secret using a 2‑of‑2 scheme and encrypts one share for the counterparty and one for the KES. Any single share is useless on its own. If a dispute arises, the KES identifies the violating peer and releases its share of that peer’s secret to the wronged peer. Combined with the counterparty‑held share already in their possession, the wronged peer can reconstruct the secret and simulate the missing online interaction to close the channel with the latest agreed balance. Only valid channel states can be unilaterally closed; fabricated updates cannot be simulated.

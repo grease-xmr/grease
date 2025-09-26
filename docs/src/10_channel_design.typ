@@ -81,7 +81,7 @@ On a high level, the payment channel lifecycle goes through 6 phases:
   and the channel moves to the `Disputing` state.
   If the counterparty stops responding to updates or for whatever other reason, you can trigger a force close (an
   `onTriggerForceClose` event), and the channel will move to the `Disputing` state.
-- `Closing` - The channel is being closed. This phase includes the KES closing, sharing of adaptor sharing secrets and
+- `Closing` - The channel is being closed. This phase includes the KES closing, sharing of adaptor secrets and
   signing of the final commitment transaction. The merchant is responsible for closing down the KES. Once both
   parties have signed the final commitment transaction, any party will be able to broadcast it, but by convention
   it will be the merchant that does so. If all communications have resolved amicably, the peers will share an
