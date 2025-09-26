@@ -44,13 +44,13 @@ The Grease protocol is a new bi-directional payment channel design with unlimite
 Using the Grease protocol, two peers may trustlessly cooperate to share, divide and reclaim a common locked amount of Monero XMR while minimizing the online transaction costs and with minimal use of outside trusted third parties.
 
 The Grease protocol maintains all of Monero's security.
-No identifiable information about the peers' privately owned Monero wallets are shared between the peers. This means
+No identifiable information about the peers' privately owned Monero wallets is shared between the peers. This means
 that there is no way that privacy can be compromised. Each channel lifecycle requires two Monero transactions, with
 effectively unlimited near-instant updates to the channel balance in between these two transactions. This dramatically
 improves the scalability of Monero.
 
 The Grease protocol is based on the original AuxChannel@aux-channel paper and Monet@monet protocol. These papers
-introduced new cryptographic primitives that are useful for trustlessly proving conformity by untrusted peers. These primitives are useful abstractly, but the means of implementation were based on innovative and non-standard cryptographic methods that have not gained the general acceptance of the cryptographic community. This may change in time, while the Grease protocol bypasses this limitation by the use of generally accepted methods for the primitives' implementation.
+introduced new cryptographic primitives that are useful for trustlessly proving conformity by untrusted peers. These primitives are useful abstractly, but the means of implementation were based on innovative and non-standard cryptographic methods that have not gained the general acceptance of the cryptographic community. This may change in time, whereas the Grease protocol bypasses this limitation by the use of generally accepted methods for the primitives' implementation.
 
 Every update and the final closure of the channel require an online interaction over the Grease network. In order to
 prevent the accidental or intentional violation of the protocol by a peer not interacting and thus jamming the channel
@@ -68,12 +68,12 @@ for maintaining privacy.)
 The state does not have to be managed on the same chain though. Any place where the state is:
 
 - available,
-- reliable and verifiable,
+- reliable,
 - trustless,
 
 will suffice.
 
-The initial implementation uses the any Noir-compatible execution environment that supports the Barretenberg Plonky
+The initial implementation uses any Noir-compatible execution environment that supports the Barretenberg Plonky
 proving system, the Aztec blockchain being one candidate.
 
 The KES acts as a third‑party judge in disputes. At initialization, each peer splits a secret using a 2‑of‑2 scheme and encrypts one share for the counterparty and one for the KES. Any single share is useless on its own. If a dispute arises, the KES identifies the violating peer and releases its share of that peer’s secret to the wronged peer. Combined with the counterparty‑held share already in their possession, the wronged peer can reconstruct the secret and simulate the missing online interaction to close the channel with the latest agreed balance. Only valid channel states can be unilaterally closed; fabricated updates cannot be simulated.
@@ -96,7 +96,7 @@ Grease embraces this use case and optimizes the design and UX based on the follo
 - In the vast majority of cases, the client opens a channel with _m_ XMR and the public peer starts with a zero XMR balance
   (since the public peer is providing assets or services and not monetary value).
 - Usually, both parties mutually close the channel. Either party _may_ force close the channel, and are able to claim their
-  funds after a predetermined time-out. In this case, the forcing party is usually the merchant since they have the
+  funds after a predetermined timeout. In this case, the forcing party is usually the merchant since they have the
   greater incentive to do so in the case where a channel has been abandoned by the client.
 
 == Anti-principles

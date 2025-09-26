@@ -15,8 +15,7 @@ At *initialization*, two peers will:
 + create proofs of using that root secret for an adaptor signature,
 + create proofs of sharing that root secret with the KES,
 + verify those proofs from the peer,
-+ create a shared closing transaction where both peers receive a $v_"out"$ output to their private Monero wallet with
-the exact amount of their starting balance using the adaptor signature, so that each peer has 3-of-4 pieces of information needed to broadcast the transaction,
++ create a shared closing transaction where both peers receive a $v_"out"$ output to their private Monero wallet with the exact amount of their starting balance using the adaptor signature, so that each peer has 3-of-4 pieces of information needed to broadcast the transaction,
 + verify the correctness of the closing transaction using the shared view key, the unadapted signatures and the adaptor statements,
 + create a shared funding transaction where both peers provide a $v_"in"$ input from their private Monero wallet with the exact amount of their balance,
 + verify the correctness of the funding transaction using the shared view key,
@@ -203,11 +202,11 @@ Once verified, the variables listed in @tbl-init-after must be stored. With thes
 
 Once a channel is open the peers may decide to transact and update the XMR balance between the peers. The only requirement is that the peers agree on the change in ownership of the *Locked Amount*.
 
-Note that with an open channel there is no internal reason to perform an update outside of a peer-initiated change. However, the current Monero protocol requires that a newly broadcast transaction be created within a reasonable timeframe. As such, existing open channel should create a "zero delta" update at reasonable timeframes to ensure the channel may be closed arbitrarily. The specifics on this are outside of current scope.
+Note that with an open channel there is no internal reason to perform an update outside of a peer-initiated change. However, the current Monero protocol requires that a newly broadcast transaction be created within a reasonable timeframe. As such, existing open channels should create a "zero delta" update at reasonable timeframes to ensure the channel may be closed arbitrarily. The specifics on this are outside of current scope.
 
 Note that post-FCMP++, the signing mechanism for Monero transactions will be such that decoy selection can be deferred
 until channel closing@jeffro25. This will simplify channel updates in two important ways:
-- Updates will not need to query the Monero blockchain to select decoys at update time, which present a significant performance improvement.
+- Updates will not need to query the Monero blockchain to select decoys at update time, which presents a significant performance improvement.
 - Channels can stay open indefinitely, without risk of the closing transaction becoming stale.
 
 ==== Preliminary
