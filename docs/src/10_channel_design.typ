@@ -4,10 +4,10 @@
 
 == Overall design description
 
-Grease largely follows the MoNet@monet design, which is a payment channel protocol that uses a key escrow service (KES)
+Grease largely follows the Monet@monet design, which is a payment channel protocol that uses a key escrow service (KES)
 to manage the funds in the channel.
 
-A grease payment channel is a 2-party bidirectional channel. The most common use case is in a multi-payment
+A Grease payment channel is a 2-party bidirectional channel. The most common use case is in a multi-payment
 arrangement between a customer and a merchant, and so we will label the parties as such.
 
 To set up a new channel, the customer and merchant agree on the funds to be locked in the channel. It's usually all
@@ -19,7 +19,7 @@ that spends the funds out of the multisig wallet back to the customer and mercha
 rapidly updated many thousands of times by the customer and merchant without having to go on-chain.
 
 Every time the channel is updated, the customer and merchant provide signatures that can't be used to
-spend the funds out of the multisig wallet, but prove that, minus a small piece of data, will be able to spend the
+spend the funds out of the multisig wallet, but prove that, minus a small piece of data, they will be able to spend the
 funds if that data were provided. When the channel is closed, the customer gives the merchant that little piece of
 data and the funds are spent out of the multisig wallet to the customer and merchant, closing the channel.
 
@@ -81,7 +81,7 @@ On a high level, the payment channel lifecycle goes through 6 phases:
   and the channel moves to the `Disputing` state.
   If the counterparty stops responding to updates or for whatever other reason, you can trigger a force close (an
   `onTriggerForceClose` event), and the channel will move to the `Disputing` state.
-- `Closing` - The channel is being closed. This phase includes the KES closing, sharing of adapter sharing secrets and
+- `Closing` - The channel is being closed. This phase includes the KES closing, sharing of adaptor secrets and
   signing of the final commitment transaction. The merchant is responsible for closing down the KES. Once both
   parties have signed the final commitment transaction, any party will be able to broadcast it, but by convention
   it will be the merchant that does so. If all communications have resolved amicably, the peers will share an

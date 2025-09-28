@@ -15,8 +15,7 @@ At *initialization*, two peers will:
 + create proofs of using that root secret for an adaptor signature,
 + create proofs of sharing that root secret with the KES,
 + verify those proofs from the peer,
-+ create a shared closing transaction where both peers receive a $v_"out"$ output to their private Monero wallet with
-the exact amount of their starting balance using the adaptor signature, so that each peer has 3-of-4 pieces of information needed to broadcast the transaction,
++ create a shared closing transaction where both peers receive a $v_"out"$ output to their private Monero wallet with the exact amount of their starting balance using the adaptor signature, so that each peer has 3-of-4 pieces of information needed to broadcast the transaction,
 + verify the correctness of the closing transaction using the shared view key, the unadapted signatures and the adaptor statements,
 + create a shared funding transaction where both peers provide a $v_"in"$ input from their private Monero wallet with the exact amount of their balance,
 + verify the correctness of the funding transaction using the shared view key,
@@ -50,31 +49,31 @@ In case of a *dispute*, a plaintiff will:
 After verifying the dispute provided by the plaintiff the KES will:
 + signal the dispute on its public state,
 + monitor Monero for the closing transaction,
-+ create a timer to await for the dispute response window to expire.
++ start and enforce a dispute‑response window of length $Delta_"dispute"$; accept and process defendant responses during this window, and if it expires without resolution, proceed with the unlock process.
 
 The defendant will monitor the KES public state for a dispute. If the defendant detects the dispute, the defendant will:
-+ accept the dispute and send the adapted signature of the closing transaction to the KES,
-+ accept the dispute and broadcast the closing transaction to Monero,
-+ protest the dispute and send the unadapted signatures of a future transaction to the KES,
-+ ignore the dispute and allow the KES to find for the plaintiff.
+1. accept the dispute and send the adapted signature of the closing transaction to the KES,
+2. accept the dispute and broadcast the closing transaction to Monero,
+3. protest the dispute and send the unadapted signatures of a newer closing transaction to the KES,
+4. ignore the dispute and allow the KES to rule in favor of the plaintiff.
 
 The KES reacts to the defendant by:
-+ verifying the adapted signature:
-  + if verified the KES will close the dispute and update public state with the adapted signature,
-  + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
-+ observing the closing transaction on Monero and closing the dispute,
-+ processing the protest by verifying the unadapted signatures of the future transaction:
-  + if verified the KES will find that the defendant is wronged and proceed with the unlock process,
-  + if not verified the KES will find that the plaintiff is wronged and proceed with the unlock process.
-+ recognizing that the dispute response window has expired, finding that the plaintiff is wronged and proceeding with the unlock process.
+1. verifying the adapted signature:
+  + if verified the KES will close the dispute and update the public state with the adapted signature,
+  + if not verified the KES will rule in favor of the plaintiff and proceed with the unlock process.
+2. observing the closing transaction on Monero and closing the dispute,
+3. processing the protest by verifying the unadapted signatures of the future transaction:
+  + if verified the KES will rule in favor of the defendant and proceed with the unlock process,
+  + if not verified the KES will rule in favor of the plaintiff and proceed with the unlock process.
+4. recognizing that the dispute‑response window has expired, ruling in favor of the plaintiff and proceeding with the unlock process.
 
-The KES may start the unlock process for the wronged peer against the violating peer:
-+ the KES will close the dispute and update public state with the saved root secret share of the violating peer encrypted to the wronged peer.
+The KES will start the unlock process for the wronged peer against the violating peer:
++ the KES will close the dispute and update the public state with the violating peer’s saved root‑secret share $sigma_2$, encrypted to the wronged peer.
 
 The wronged peer will monitor the KES public state for the dispute closure. If the wronged peer detects the unlock process, the wronged peer will:
 + reconstruct the violating peer's root secret,
-+ choose to deterministically update the secret to find _any_ shared secret that can be used to create a valid Monero transaction #footnote[Under CLSAG, older transactions may quickly become stale and be rejected by the network. This time window will be relaxed post-FCMP++.],
-+ adapt the unadapted signature of the closing transaction using the most recent violating peer's secret to gain the 4-of-4 pieces of information needed to broadcast the transaction,
++ deterministically advance the secret until a valid closing transaction can be formed #footnote[Under CLSAG, older transactions may quickly become stale and be rejected by the network. This time window will be relaxed post‑FCMP++.],
++ adapt the unadapted signature of the closing transaction using the violating peer’s most recent secret to gain the 4‑of‑4 pieces of information needed to broadcast the transaction,
 + broadcast the closing transaction to Monero.
 
 == Grease Protocol
@@ -121,7 +120,7 @@ The ZKP protocols prove that the real private keys are used correctly and that i
 ==== Initialization protocol
 
 The Grease protocol requires the generation and sharing of the ZKPs. The public data and the small proofs are shared
-between peers, then are validated as a means to ensure protocol conformity before *MoNet* protocol stage 3 begins.
+between peers, then are validated as a means to ensure protocol conformity before *Monet* protocol stage 3 begins.
 
 Each peer generates a set of secret random values to ensure security of communications, the *private* variables listed
 in @tbl-init-input. These are not shared with the peer.
@@ -203,11 +202,11 @@ Once verified, the variables listed in @tbl-init-after must be stored. With thes
 
 Once a channel is open the peers may decide to transact and update the XMR balance between the peers. The only requirement is that the peers agree on the change in ownership of the *Locked Amount*.
 
-Note that with an open channel there is no internal reason to perform an update outside of a peer-initiated change. However, the current Monero protocol requires that a newly broadcast transaction be created within a reasonable timeframe. As such, existing open channel should create a "zero delta" update at reasonable timeframes to ensure the channel may be closed arbitrarily. The specifics on this are outside of current scope.
+Note that with an open channel there is no internal reason to perform an update outside of a peer-initiated change. However, the current Monero protocol requires that a newly broadcast transaction be created within a reasonable timeframe. As such, existing open channels should create a "zero delta" update at reasonable timeframes to ensure the channel may be closed arbitrarily. The specifics on this are outside of current scope.
 
 Note that post-FCMP++, the signing mechanism for Monero transactions will be such that decoy selection can be deferred
 until channel closing@jeffro25. This will simplify channel updates in two important ways:
-- Updates will not need to query the Monero blockchain to select decoys at update time, which present a significant performance improvement.
+- Updates will not need to query the Monero blockchain to select decoys at update time, which presents a significant performance improvement.
 - Channels can stay open indefinitely, without risk of the closing transaction becoming stale.
 
 ==== Preliminary
@@ -223,7 +222,7 @@ For the update stage to begin, the peers must agree upon a small amount of infor
 
 ==== Update protocol
 
-Grease replaces the MoNet update protocol completely with the generation and sharing of update ZKPs. The public data
+Grease replaces the Monet update protocol completely with the generation and sharing of update ZKPs. The public data
 and the small proofs are shared between peers, then are validated as a means to ensure protocol conformity.
 
 The ZKP operations require the previous $witness_i$ (now $witness_(i-1)$) and a random value to ensure security of
@@ -284,7 +283,7 @@ Once verified, the variables listed in @tbl-update-post must be stored:
     )
 ) <tbl-update-post>
 
-With these outputs the update stage is complete and the channel remains open. The peers can now transact further updates or close the channel and receive the locked XMR value *Channel Balance* in the *Monero Refund Wallet*.
+With these outputs, the update stage is complete and the channel remains open. The peers can now transact further updates or close the channel and receive the *Channel Balance* (locked XMR) in the *Monero Refund Wallet*.
 
 = Grease ZKP Operations <zkp-operations>
 
@@ -363,7 +362,7 @@ $
   omega_0 = "ReconstructFeldmanSecretShare_2_of_2"(sigma_1, sigma_2)
 $
 
-The negative $sigma_1$ is non-standard compared to typical Shamir/Feldman schemes. We use this to make the mathematics more clear and to ignore subtraction to allow for certain legacy circuit implementations.
+The negative $sigma_1$ is non-standard compared to typical Shamir/Feldman schemes. We use this to make the mathematics clearer and to avoid subtraction operations in certain legacy circuit implementations.
 
 === Methods
 

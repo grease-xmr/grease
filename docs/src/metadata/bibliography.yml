@@ -37,7 +37,7 @@ sui23:
   url:  https://bridges.monash.edu/articles/thesis/Payment_Channel_Network_for_Scriptless_Blockchains/23909907
 monet:
   type: proceedings
-  title: "MoNet: A Fast Payment Channel Network for Scriptless Cryptocurrency Monero"
+  title: "Monet: A Fast Payment Channel Network for Scriptless Cryptocurrency Monero"
   author:
    - Sui, Zhimei
    - Liu, Joseph K.
