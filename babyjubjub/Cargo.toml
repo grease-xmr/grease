@@ -1,0 +1,21 @@
+[package]
+name = "grease-babyjubjub"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ff = {version="0.13", features = ["derive", "bits", "derive_bits"]}
+hex = { version = "0.4.3" }
+zeroize = {  version = "1.8.1", optional = true }
+
+[features]
+default = []
+zeroize = ["zeroize/zeroize_derive"]
+
+[dev-dependencies]
+rand = { version = "0.8" }
+
+[dev-dependencies.ff-group-tests]
+version = "0.13.1"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
