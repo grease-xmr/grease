@@ -34,3 +34,19 @@ serde_yml = {  version = "0.0.12" }
 thiserror = { version = "2.0.11" }
 tokio = { version = "1.38", default-features = false }
 zeroize = {  version = "1.8.1" }
+
+# Serai dependencies
+dalek-ff-group = {  version = "0.4", git = "https://github.com/serai-dex/serai.git", rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5" }
+flexible-transcript = { version = "0.3", git = "https://github.com/serai-dex/serai.git", rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5" }
+
+[workspace.dependencies.ciphersuite]
+version = "0.4.1"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+
+[workspace.dependencies.modular-frost]
+version = "0.8"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+features = ["ed25519", "ristretto", "secp256k1"]
+
