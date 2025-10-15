@@ -14,12 +14,13 @@ group = { version = "0.13.0", optional = true }
 subtle = { version = "2.2.1", default-features = false, optional = true }
 ciphersuite = { workspace = true, optional = true }
 elliptic-curve = { version = "0.13", default-features = false, features = ["hash2curve"], optional = true }
+modular-frost = {  workspace = true, optional = true }
 
 [features]
 default = ["serai"]
 asm = ["ark-ff/asm"]
 zeroize = ["zeroize/zeroize_derive"]
-serai = ["zeroize/zeroize_derive", "subtle", "group", "ciphersuite", "blake2", "elliptic-curve"]
+serai = ["zeroize/zeroize_derive", "subtle", "group", "ciphersuite", "blake2", "elliptic-curve", "modular-frost"]
 
 [dev-dependencies]
 ark-algebra-test-templates = { version = "0.5.0" }
