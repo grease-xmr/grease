@@ -1480,17 +1480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ff-group-tests"
-version = "0.13.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-dependencies = [
- "ff",
- "group",
- "rand_core 0.6.4",
- "subtle",
-]
-
-[[package]]
 name = "ff_ce"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1849,10 +1838,8 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "ark-std",
- "ff-group-tests",
- "hex",
- "rand 0.8.5",
- "rand_core 0.6.4",
+ "group",
+ "subtle",
  "zeroize",
 ]
 
