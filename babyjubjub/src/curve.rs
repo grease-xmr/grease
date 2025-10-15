@@ -30,8 +30,9 @@ impl Ciphersuite for BabyJubJub {
         // First, convert the modulus to a 48-byte number
         // This is done by getting -1 as bytes, parsing it into a U384, and then adding back one
         let mut modulus = [0; 48];
-        // The byte repr of scalars will be 32 big-endian bytes. Set the lower 32 bytes of our 48-byte array accordingly
-        modulus[16..].copy_from_slice(&(Self::F::ZERO - Self::F::ONE).to_repr());
+        // The byte repr of scalars will be 32 little-endian bytes. Set the first 32 bytes of our 48-byte array
+        // accordingly
+        modulus[..32].copy_from_slice(&(Self::F::ZERO - Self::F::ONE).to_repr());
         // Use a checked_add + unwrap since this addition cannot fail (being a 32-byte value with 48-bytes of space)
         // While a non-panicking saturating_add/wrapping_add could be used, they'd likely be less performant
         let modulus = U384::from_be_slice(&modulus).checked_add(&U384::ONE).unwrap();
@@ -45,7 +46,7 @@ impl Ciphersuite for BabyJubJub {
 
         // Now that this has been reduced back to a 32-byte value, grab the lower 32-bytes
         let mut array = [0u8; 32];
-        array.copy_from_slice(&wide[16..]);
+        array.copy_from_slice(&wide[..32]);
         let res = Scalar::from_repr(array).unwrap();
         // Zeroize the temp values
         wide.zeroize();

@@ -2,7 +2,7 @@
 
 use crate::{BjjConfig, Fq, Fr, ProjectivePoint, constants::*};
 use ark_ec::{CurveConfig, CurveGroup, PrimeGroup};
-use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, Fp256, One, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::rand::RngCore;
@@ -361,7 +361,7 @@ impl SeraiPrimeField for Scalar {
     fn to_repr(&self) -> Self::Repr {
         let mut bytes = Self::Repr::default();
         let mut writer = Cursor::new(&mut bytes[..]);
-        self.0.serialize_compressed(&mut writer).expect("Serialization failed");
+        self.0.serialize_uncompressed(&mut writer).expect("Serialization failed");
         bytes
     }
 
@@ -443,6 +443,8 @@ impl PrimeFieldBits for Scalar {
 #[cfg(test)]
 mod tests {
     use crate::{BjjPoint, Scalar};
+    use elliptic_curve::Field;
+    use group::ff::PrimeField;
 
     #[test]
     fn serai_group_tests() {
@@ -454,5 +456,16 @@ mod tests {
     fn serai_scalar_tests() {
         let mut rng = ark_std::test_rng();
         ff_group_tests::prime_field::test_prime_field_bits::<_, Scalar>(&mut rng);
+    }
+
+    #[test]
+    fn repr_roundtrip() {
+        let mut rng = ark_std::test_rng();
+        for _ in 0..100 {
+            let k = Scalar::random(&mut rng);
+            let bytes = k.to_repr();
+            let k2 = Scalar::from_repr(bytes).unwrap();
+            assert_eq!(k, k2);
+        }
     }
 }
