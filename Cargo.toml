@@ -1,12 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "libgrease",
+    "babyjubjub",
+    "circuits",
+    "e2e",
     "grease_cli",
+    "libgrease",
     "p2p",
     "wallet",
-    "e2e",
-    "circuits",
 ]
 
 [workspace.dependencies]

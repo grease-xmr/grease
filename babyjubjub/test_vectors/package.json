@@ -1,0 +1,15 @@
+{
+  "name": "test_vectors",
+  "version": "1.0.0",
+  "description": "Creates a set of test vector for grease-babyjubjub",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "create_vectors.mjs",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@zk-kit/baby-jubjub": "latest"
+  }
+}
