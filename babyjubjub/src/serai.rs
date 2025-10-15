@@ -16,7 +16,7 @@ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, Default, Clone, Copy, Zeroize, PartialEq, Eq)]
-pub struct Scalar(<BjjConfig as CurveConfig>::ScalarField);
+pub struct Scalar(pub <BjjConfig as CurveConfig>::ScalarField);
 
 impl From<u64> for Scalar {
     fn from(value: u64) -> Self {
@@ -166,7 +166,7 @@ impl MulAssign<&Scalar> for Scalar {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroize)]
 pub struct BjjPoint(ProjectivePoint);
 
 impl From<ProjectivePoint> for BjjPoint {
@@ -352,17 +352,16 @@ impl SeraiPrimeField for Scalar {
     type Repr = [u8; SCALAR_SIZE];
 
     fn from_repr(repr: Self::Repr) -> CtOption<Self> {
-        let reader = Cursor::new(repr);
-        match Fr::deserialize_compressed(reader) {
-            Ok(s) => CtOption::new(Scalar(s), Choice::from(1)),
-            Err(_) => CtOption::new(Self::ZERO, Choice::from(0)),
+        match Fr::from_random_bytes(&repr) {
+            None => CtOption::new(Self::ZERO, Choice::from(0)),
+            Some(k) => CtOption::new(Self(k), Choice::from(1)),
         }
     }
 
     fn to_repr(&self) -> Self::Repr {
         let mut bytes = Self::Repr::default();
         let mut writer = Cursor::new(&mut bytes[..]);
-        self.0.serialize_compressed(&mut writer).expect("Serialization failed");
+        self.0.serialize_uncompressed(&mut writer).expect("Serialization failed");
         bytes
     }
 
@@ -444,6 +443,8 @@ impl PrimeFieldBits for Scalar {
 #[cfg(test)]
 mod tests {
     use crate::{BjjPoint, Scalar};
+    use elliptic_curve::Field;
+    use group::ff::PrimeField;
 
     #[test]
     fn serai_group_tests() {
@@ -455,5 +456,16 @@ mod tests {
     fn serai_scalar_tests() {
         let mut rng = ark_std::test_rng();
         ff_group_tests::prime_field::test_prime_field_bits::<_, Scalar>(&mut rng);
+    }
+
+    #[test]
+    fn repr_roundtrip() {
+        let mut rng = ark_std::test_rng();
+        for _ in 0..100 {
+            let k = Scalar::random(&mut rng);
+            let bytes = k.to_repr();
+            let k2 = Scalar::from_repr(bytes).unwrap();
+            assert_eq!(k, k2);
+        }
     }
 }
