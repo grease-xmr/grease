@@ -5,6 +5,7 @@ use elliptic_curve::bigint::{CheckedAdd, Encoding, NonZero, U384};
 use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
 use group::Group;
 use group::ff::{Field, PrimeField};
+use modular_frost::curve::Curve as FrostCurve;
 use zeroize::Zeroize;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
@@ -53,4 +54,8 @@ impl Ciphersuite for BabyJubJub {
         array.zeroize();
         res
     }
+}
+
+impl FrostCurve for BabyJubJub {
+    const CONTEXT: &'static [u8] = b"FROST-BabyJubJub-Blake2b-v1";
 }

@@ -1855,6 +1855,7 @@ dependencies = [
  "elliptic-curve",
  "ff-group-tests",
  "group",
+ "modular-frost",
  "serde_json",
  "subtle",
  "zeroize",
