@@ -2,18 +2,18 @@
 
 use crate::{BjjConfig, Fq, Fr, ProjectivePoint, constants::*};
 use ark_ec::{CurveConfig, CurveGroup, PrimeGroup};
-use ark_ff::{AdditiveGroup, FftField, Field, One, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::rand::RngCore;
 use group::ff::helpers::sqrt_ratio_generic;
-use group::ff::{Field as SeraiField, PrimeField as SeraiPrimeField};
+use group::ff::{Field as SeraiField, FieldBits, PrimeField as SeraiPrimeField, PrimeFieldBits};
 use group::{Group as SeraiGroup, GroupEncoding, prime::PrimeGroup as SeraiPrimeGroup};
 use std::io::Cursor;
 use std::iter::{Product, Sum};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, Default, Clone, Copy, Zeroize, PartialEq, Eq)]
 pub struct Scalar(<BjjConfig as CurveConfig>::ScalarField);
@@ -32,7 +32,17 @@ impl ConstantTimeEq for Scalar {
 
 impl ConditionallySelectable for Scalar {
     fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
-        if choice.ct_eq(&Choice::from(0)).into() { *a } else { *b }
+        // Use the bit value directly without branching
+        let mask = -(choice.unwrap_u8() as i64) as u64;
+        let mut a_bigint = Zeroizing::new(a.0.into_bigint());
+        let mut b_bigint = Zeroizing::new(b.0.into_bigint());
+        let mut result = [0u64; 4];
+        for i in 0..4 {
+            result[i] = a_bigint.0[i] ^ (mask & (a_bigint.0[i] ^ b_bigint.0[i]));
+        }
+        a_bigint.zeroize();
+        b_bigint.zeroize();
+        Self(Fr::from_bigint(ark_ff::BigInt(result)).unwrap())
     }
 }
 
@@ -149,6 +159,7 @@ impl MulAssign for Scalar {
         self.0 = self.0 * rhs.0;
     }
 }
+
 impl MulAssign<&Scalar> for Scalar {
     fn mul_assign(&mut self, rhs: &Self) {
         self.0 = self.0 * rhs.0;
@@ -224,9 +235,9 @@ impl GroupEncoding for BjjPoint {
     }
 
     fn to_bytes(&self) -> Self::Repr {
-        let bytes = [0u8; 32];
-        let writer = Cursor::new(bytes);
-        self.0.serialize_compressed(writer).expect("Serialization failed");
+        let mut bytes = [0u8; 32];
+        let mut writer = Cursor::new(&mut bytes[..]);
+        self.0.serialize_compressed(&mut writer).expect("Serialization failed");
         bytes
     }
 }
@@ -349,9 +360,9 @@ impl SeraiPrimeField for Scalar {
     }
 
     fn to_repr(&self) -> Self::Repr {
-        let bytes = Self::Repr::default();
-        let writer = Cursor::new(bytes);
-        self.0.serialize_compressed(writer).expect("Serialization failed");
+        let mut bytes = Self::Repr::default();
+        let mut writer = Cursor::new(&mut bytes[..]);
+        self.0.serialize_compressed(&mut writer).expect("Serialization failed");
         bytes
     }
 
@@ -359,12 +370,12 @@ impl SeraiPrimeField for Scalar {
         Choice::from(self.to_repr()[0] & 1)
     }
 
-    const MODULUS: &'static str = MODULUS_STR;
-    const NUM_BITS: u32 = 254;
-    const CAPACITY: u32 = 253;
+    const MODULUS: &'static str = MODULUS_STR_FR;
+    const NUM_BITS: u32 = 251;
+    const CAPACITY: u32 = 250;
     const TWO_INV: Self = Self(INV_2);
     const MULTIPLICATIVE_GENERATOR: Self = Self(Fr::GENERATOR);
-    const S: u32 = 28;
+    const S: u32 = 4;
     const ROOT_OF_UNITY: Self = Self(ROOT_OF_UNITY);
     const ROOT_OF_UNITY_INV: Self = Self(ROOT_OF_UNITY_INV);
     const DELTA: Self = Self(DELTA);
@@ -413,5 +424,36 @@ impl SeraiField for Scalar {
 
     fn pow_vartime<S: AsRef<[u64]>>(&self, exp: S) -> Self {
         self.0.pow(exp.as_ref()).into()
+    }
+}
+
+impl PrimeFieldBits for Scalar {
+    type ReprBits = [u8; 32];
+
+    fn to_le_bits(&self) -> FieldBits<Self::ReprBits> {
+        self.to_repr().into()
+    }
+
+    fn char_le_bits() -> FieldBits<Self::ReprBits> {
+        let mut bits = Self::ReprBits::default();
+        bits.copy_from_slice(&SUBORDER_BJJ.to_bytes_le());
+        bits.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BjjPoint, Scalar};
+
+    #[test]
+    fn serai_group_tests() {
+        let mut rng = ark_std::test_rng();
+        ff_group_tests::group::test_group::<_, BjjPoint>(&mut rng);
+    }
+
+    #[test]
+    fn serai_scalar_tests() {
+        let mut rng = ark_std::test_rng();
+        ff_group_tests::prime_field::test_prime_field_bits::<_, Scalar>(&mut rng);
     }
 }

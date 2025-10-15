@@ -56,6 +56,9 @@ mod bjj_tests {
     use ark_ec::{AffineRepr, CurveGroup, PrimeGroup};
     use ark_ff::{Field, MontFp, Zero};
     use ark_serialize::{CanonicalDeserializeWithFlags, CanonicalSerialize, CanonicalSerializeWithFlags, Compress};
+    use std::fs::File;
+    use std::io::Read;
+    use std::str::FromStr;
 
     test_group!(te; ProjectivePoint; te);
     test_group!(curve; ProjectivePoint; curve);
@@ -66,14 +69,17 @@ mod bjj_tests {
             MontFp!("17777552123799933955779906779655732241715742912184938656739573121738514868268"),
             MontFp!("2626589144620713026669568689430873010625803728049924121243784502389097019475"),
         );
+        assert!(p1.is_on_curve());
         let p2 = Affine::<BjjConfig>::new(
             MontFp!("16540640123574156134436876038791482806971768689494387082833631921987005038935"),
             MontFp!("20819045374670962167435360035096875258406992893633759881276124905556507972311"),
         );
+        assert!(p2.is_on_curve());
         let p3 = Affine::<BjjConfig>::new(
             MontFp!("7916061937171219682591368294088513039687205273691143098332585753343424131937"),
             MontFp!("14035240266687799601661095864649209771790948434046947201833777492504781204499"),
         );
+        assert!(p3.is_on_curve());
         assert_eq!(p1 + p2, p3);
     }
 
@@ -83,14 +89,16 @@ mod bjj_tests {
             MontFp!("17777552123799933955779906779655732241715742912184938656739573121738514868268"),
             MontFp!("2626589144620713026669568689430873010625803728049924121243784502389097019475"),
         );
+        assert!(p1.is_on_curve());
         let p2 = Affine::<BjjConfig>::new(
             MontFp!("6890855772600357754907169075114257697580319025794532037257385534741338397365"),
             MontFp!("4338620300185947561074059802482547481416142213883829469920100239455078257889"),
         );
+        assert!(p2.is_on_curve());
         assert_eq!(p1 + p1, p2);
         assert_eq!(p1.mul_bigint(&[2u64]), p2);
 
-        let id = Fq::zero();
+        let id = Affine::<BjjConfig>::zero();
         assert_eq!(id + id, id);
     }
 
@@ -107,5 +115,37 @@ mod bjj_tests {
         let inf = g - g;
         assert_eq!(inf, ProjectivePoint::zero());
         assert_eq!(g.mul_bigint(&SUBORDER_BJJ).into_affine(), ProjectivePoint::zero());
+    }
+
+    fn deserialize_point(arr: &serde_json::Value) -> Point {
+        let x = Fq::from_str(arr[0].as_str().unwrap()).unwrap();
+        let y = Fq::from_str(arr[1].as_str().unwrap()).unwrap();
+        Point::new(x, y)
+    }
+
+    fn deserialize_case(case: &serde_json::Value) -> (Fr, Point, Point, Point) {
+        let k = Fr::from_str(&case[0].as_str().unwrap()).unwrap();
+        let p1 = deserialize_point(&case[1]);
+        let p2 = deserialize_point(&case[2]);
+        let p3 = deserialize_point(&case[3]);
+        (k, p1, p2, p3)
+    }
+
+    #[test]
+    fn load_test_vectors() {
+        let mut f = File::open("./test_vectors/test_vectors.json").unwrap();
+        let mut buf = String::new();
+        f.read_to_string(&mut buf).unwrap();
+        let data = serde_json::from_str::<serde_json::Value>(&buf).unwrap();
+        let cases = data.as_array().unwrap();
+        for case in cases {
+            let (k, p1, p2, p3) = deserialize_case(case);
+            let p1_calc = ProjectivePoint::generator() * k;
+            let p2_calc = p1_calc * k;
+            let p3_calc = p1 + p2;
+            assert_eq!(p1_calc.into_affine(), p1);
+            assert_eq!(p2_calc.into_affine(), p2);
+            assert_eq!(p3_calc.into_affine(), p3);
+        }
     }
 }
