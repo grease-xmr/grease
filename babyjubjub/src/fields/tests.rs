@@ -27,3 +27,31 @@ fn serialization_size() {
     assert_eq!(s.serialized_size(Compress::Yes), SCALAR_SIZE);
     assert_eq!(s.serialized_size(Compress::No), SCALAR_SIZE);
 }
+
+#[test]
+fn hash_to_fq() {
+    let msg = b"Hello, World!";
+    let elems: [Fq; 2] = super::hash_to_fq(msg);
+    assert_eq!(
+        elems[0].to_string(),
+        "7902606182048578660389777045020343910782629982389567686397286624274568409573"
+    );
+    assert_eq!(
+        elems[1].to_string(),
+        "8039809235765642334910189346221311706232212386441248790318087536716405903319"
+    );
+}
+
+#[test]
+fn hash_to_fr() {
+    let msg = b"Hello, World!";
+    let elems: [Fr; 2] = super::hash_to_fr(msg);
+    assert_eq!(
+        elems[0].to_string(),
+        "731150853953985181655208374830668176031668198075341157136715258944788578683"
+    );
+    assert_eq!(
+        elems[1].to_string(),
+        "889931313573050842348294786004079739575884208304950175386400570029816794733"
+    );
+}

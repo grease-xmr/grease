@@ -1,61 +1,54 @@
-use crate::{BjjPoint, Scalar};
-use blake2::Blake2b512;
-use ciphersuite::Ciphersuite;
-use elliptic_curve::bigint::{CheckedAdd, Encoding, NonZero, U384};
-use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
-use group::Group;
-use group::ff::{Field, PrimeField};
-use modular_frost::curve::Curve as FrostCurve;
-use zeroize::Zeroize;
+use crate::fields::FqHasher;
+use crate::{BjjConfig, Fq, Point, ProjectivePoint};
+use ark_ec::hashing::curve_maps::elligator2::{Elligator2Config, Elligator2Map};
+use ark_ec::hashing::map_to_curve_hasher::MapToCurveBasedHasher;
+use ark_ec::hashing::{HashToCurve, HashToCurveError};
+use ark_ff::MontFp;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
-pub struct BabyJubJub;
-
-impl Ciphersuite for BabyJubJub {
-    type F = Scalar;
-    type G = BjjPoint;
-    type H = Blake2b512;
-
-    const ID: &'static [u8] = b"BJJ-255-Blake2b-v1";
-
-    fn generator() -> Self::G {
-        BjjPoint::generator()
-    }
-
-    #[allow(non_snake_case)]
-    fn hash_to_F(dst: &[u8], data: &[u8]) -> Self::F {
-        // This method is adapted from Serai, which in turns follows
-        // https://www.ietf.org/archive/id/draft-irtf-cfrg-hash-to-curve-16.html#name-hashing-to-a-finite-field
-
-        // In order to perform this reduction securely, 64-byte numbers are sufficient.
-        // First, convert the modulus to a 48-byte number
-        // This is done by getting -1 as bytes, parsing it into a U384, and then adding back one
-        let mut modulus = [0; 48];
-        // The byte repr of scalars will be 32 little-endian bytes. Set the first 32 bytes of our 48-byte array
-        // accordingly
-        modulus[..32].copy_from_slice(&(Self::F::ZERO - Self::F::ONE).to_repr());
-        // Use a checked_add + unwrap since this addition cannot fail (being a 32-byte value with 48-bytes of space)
-        // While a non-panicking saturating_add/wrapping_add could be used, they'd likely be less performant
-        let modulus = U384::from_be_slice(&modulus).checked_add(&U384::ONE).unwrap();
-        let mut wide = U384::from_be_bytes({
-            let mut bytes = [0; 48];
-            ExpandMsgXmd::<Blake2b512>::expand_message(&[data], &[Self::ID, dst], 48).unwrap().fill_bytes(&mut bytes);
-            bytes
-        })
-        .rem(&NonZero::new(modulus).unwrap())
-        .to_be_bytes();
-
-        // Now that this has been reduced back to a 32-byte value, grab the lower 32-bytes
-        let mut array = [0u8; 32];
-        array.copy_from_slice(&wide[..32]);
-        let res = Scalar::from_repr(array).unwrap();
-        // Zeroize the temp values
-        wide.zeroize();
-        array.zeroize();
-        res
-    }
+impl Elligator2Config for BjjConfig {
+    /// Calculated using [the recommended algorithm](https://www.rfc-editor.org/rfc/rfc9380.html#elligator-z-code)
+    const Z: Fq = MontFp!("5");
+    const ONE_OVER_COEFF_B_SQUARE: Fq = MontFp!("1");
+    const COEFF_A_OVER_COEFF_B: Fq = MontFp!("168698");
 }
 
-impl FrostCurve for BabyJubJub {
-    const CONTEXT: &'static [u8] = b"FROST-BabyJubJub-Blake2b-v1";
+pub type ToBjjCurveHasher = MapToCurveBasedHasher<ProjectivePoint, FqHasher, Elligator2Map<BjjConfig>>;
+
+const HASH_TO_CURVE_DOMAIN: &[u8] = b"BabyJubJub_XMD:Blake2b-512_ELL2_RO";
+pub fn hash_to_curve(msg: &[u8]) -> Result<Point, HashToCurveError> {
+    let hasher = ToBjjCurveHasher::new(HASH_TO_CURVE_DOMAIN)?;
+    hasher.hash(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BjjConfig, hash_to_curve};
+    use ark_ec::hashing::curve_maps::elligator2::Elligator2Config;
+    use ark_ec::twisted_edwards::MontCurveConfig;
+    use ark_ff::Field;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn check_parameters() {
+        let A = <BjjConfig as MontCurveConfig>::COEFF_A;
+        let B = <BjjConfig as MontCurveConfig>::COEFF_B;
+        assert_eq!(A / B, BjjConfig::COEFF_A_OVER_COEFF_B);
+        assert_eq!(B.square().inverse().unwrap(), BjjConfig::ONE_OVER_COEFF_B_SQUARE);
+        assert!(<BjjConfig as Elligator2Config>::Z.sqrt().is_none());
+    }
+
+    #[test]
+    fn message_to_curve() {
+        let msg = b"Hello, world!";
+        let p = hash_to_curve(msg).unwrap();
+        assert!(p.is_on_curve());
+        assert_eq!(
+            p.x.to_string(),
+            "13006301608839310497391545708168326660349991855066312545305121243630835537998"
+        );
+        assert_eq!(
+            p.y.to_string(),
+            "19431021847877467251427999331976814757933307956599515132869127447508428432163"
+        );
+    }
 }
