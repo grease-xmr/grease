@@ -6,6 +6,7 @@ mod point;
 #[cfg(feature = "serai")]
 mod serai;
 
+pub use curve::*;
 pub use fields::*;
 pub use point::*;
 
