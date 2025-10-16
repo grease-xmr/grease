@@ -34,6 +34,7 @@ mod tests {
         let B = <BjjConfig as MontCurveConfig>::COEFF_B;
         assert_eq!(A / B, BjjConfig::COEFF_A_OVER_COEFF_B);
         assert_eq!(B.square().inverse().unwrap(), BjjConfig::ONE_OVER_COEFF_B_SQUARE);
+        assert!(<BjjConfig as Elligator2Config>::Z.sqrt().is_none());
     }
 
     #[test]

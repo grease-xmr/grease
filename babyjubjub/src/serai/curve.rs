@@ -21,7 +21,7 @@ impl Ciphersuite for BabyJubJub {
 
     #[allow(non_snake_case)]
     fn hash_to_F(dst: &[u8], data: &[u8]) -> Self::F {
-        // hash_to_curve already uses proper DST, but we will mix in the dst here as well
+        // hash_to_fr already uses proper DST, but we will mix in the dst here as well
         let p = hash_to_fr::<1>(&[dst, data].concat())[0];
         p.into()
     }

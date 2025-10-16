@@ -1,6 +1,6 @@
-use crate::{Fq, ProjectivePoint, Scalar};
+use crate::{ProjectivePoint, Scalar};
 use ark_ec::{CurveGroup, PrimeGroup};
-use ark_ff::{AdditiveGroup, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::rand::RngCore;
@@ -22,15 +22,7 @@ impl From<ProjectivePoint> for BjjPoint {
 
 impl ConstantTimeEq for BjjPoint {
     fn ct_eq(&self, other: &Self) -> Choice {
-        #[inline]
-        fn cmp_ct(a: &Fq, b: &Fq) -> Choice {
-            let a = a.into_bigint();
-            let b = b.into_bigint();
-            a.0.ct_eq(&b.0)
-        }
-        let r = self.0.into_affine();
-        let s = other.0.into_affine();
-        cmp_ct(&r.x, &s.x) & cmp_ct(&r.y, &s.y)
+        self.to_bytes().ct_eq(&other.to_bytes())
     }
 }
 
@@ -66,11 +58,17 @@ impl GroupEncoding for BjjPoint {
     fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
         let reader = Cursor::new(bytes);
         match ProjectivePoint::deserialize_compressed(reader) {
-            Ok(p) => CtOption::new(BjjPoint(p), Choice::from(1)),
+            Ok(p) => {
+                let p2 = p.into_affine();
+                let is_subgroup = p2.is_in_correct_subgroup_assuming_on_curve();
+                CtOption::new(BjjPoint(p), Choice::from(is_subgroup as u8))
+            }
             Err(_) => CtOption::new(BjjPoint(ProjectivePoint::zero()), Choice::from(0)),
         }
     }
 
+    /// This does not check if the point is on the curve and in the correct subgroup.
+    /// Use with caution.
     fn from_bytes_unchecked(bytes: &Self::Repr) -> CtOption<Self> {
         let reader = Cursor::new(bytes);
         match ProjectivePoint::deserialize_compressed_unchecked(reader) {
