@@ -51,3 +51,6 @@ git = "https://github.com/serai-dex/serai.git"
 rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 features = ["ed25519", "ristretto", "secp256k1"]
 
+[workspace.dependencies.criterion]
+version = "0.7.0"
+

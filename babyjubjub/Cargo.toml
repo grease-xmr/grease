@@ -23,6 +23,13 @@ zeroize = ["zeroize/zeroize_derive"]
 serai = ["zeroize/zeroize_derive", "subtle", "group", "ciphersuite", "blake2", "elliptic-curve", "modular-frost"]
 
 [dev-dependencies]
+ark-algebra-bench-templates = { version = "0.5.0", features = ["asm", "parallel"] }
 ark-algebra-test-templates = { version = "0.5.0" }
+criterion = { workspace = true }
 ff-group-tests = { version = "0.13.0" }
 serde_json = "1.0.145"
+
+[[bench]]
+name = "babyjubjub_benchmarks"
+harness = false
+path = "bench/babyjubjub.rs"
