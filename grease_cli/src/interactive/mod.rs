@@ -349,7 +349,7 @@ impl InteractiveApp {
 }
 
 fn print_logo() {
-    const LOGO: &str = include_str!("../../../assets/logo.txt");
+    const LOGO: &str = include_str!("../../../assets/grease_with_logo.txt");
     println!("{LOGO}");
 }
 

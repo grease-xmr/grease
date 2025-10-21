@@ -99,32 +99,32 @@ $ grease-cli serve
 $ ./target/debug/grease-cli serve
 [2025-05-17T12:11:54Z INFO  grease_cli::launch_app] Starting interactive server
 [2025-05-17T12:11:54Z INFO  grease_cli::id_management] Loading identities from /home/code/.grease/identities.yml
-_____________/\\\_______/\\\__/\\\\____________/\\\\____/\\\\\\\\\___________________________________                 
-_____________\///\\\___/\\\/__\/\\\\\\________/\\\\\\__/\\\///////\\\_________________________________                
-________________\///\\\\\\/____\/\\\//\\\____/\\\//\\\_\/\\\_____\/\\\_________________________________              
-___________________\//\\\\______\/\\\\///\\\/\\\/_\/\\\_\/\\\\\\\\\\\/__________________________________              
-_____________________\/\\\\______\/\\\__\///\\\/___\/\\\_\/\\\//////\\\__________________________________             
-______________________/\\\\\\_____\/\\\____\///_____\/\\\_\/\\\____\//\\\_________________________________            
-_____________________/\\\////\\\___\/\\\_____________\/\\\_\/\\\_____\//\\\________________________________           
-____________________/\\\/___\///\\\_\/\\\_____________\/\\\_\/\\\______\//\\\_______________________________          
-_____/\\\\\\\\\\\\____/\\\\\\\\\______/\\\\\\\\\\\\\\\_____/\\\\\\\\\________/\\\\\\\\\\\____/\\\\\\\\\\\\\\\_        
- ___/\\\//////////___/\\\///////\\\___\/\\\///////////____/\\\\\\\\\\\\\____/\\\/////////\\\_\/\\\///////////__       
-  __/\\\_____________\/\\\_____\/\\\___\/\\\______________/\\\/////////\\\__\//\\\______\///__\/\\\_____________      
-   _\/\\\____/\\\\\\\_\/\\\\\\\\\\\/____\/\\\\\\\\\\\_____\/\\\_______\/\\\___\////\\\_________\/\\\\\\\\\\\_____     
-    _\/\\\___\/////\\\_\/\\\//////\\\____\/\\\///////______\/\\\\\\\\\\\\\\\______\////\\\______\/\\\///////______    
-     _\/\\\_______\/\\\_\/\\\____\//\\\___\/\\\_____________\/\\\/////////\\\_________\////\\\___\/\\\_____________   
-       _\/\\\_______\/\\\_\/\\\_____\//\\\__\/\\\_____________\/\\\_______\/\\\__/\\\______\//\\\__\/\\\_____________  
-        _\//\\\\\\\\\\\\/__\/\\\______\//\\\_\/\\\\\\\\\\\\\\\_\/\\\_______\/\\\_\///\\\\\\\\\\\/___\/\\\\\\\\\\\\\\\_
-         __\////////////____\///________\///__\///////////////__\///________\///____\///////////_____\///////////////__
+          ++++++++++++                      *   .   *           .       *       .       *          .        *
+      +++++++++++++++++++                                 .    *     .    *  *      .       *           *
+    +++++++++++++++++++++++                   ;;;;;;;;                                              .
+   ++++++++++++++++++++++++++              ;&&&&&&&&&&;  ;&&&&&;   ;&&&&&&&&; ;&&&&&&;    ;&&&&&; ;;;;;;;;;
+  +++++++++++++++++++++++ ++++            ;&&&&&&&&&&&; ;&&&&&&&&; ;&&&&&&&+  ;&&&&&&;  ;&&&&&&&&;&&&&&&&&;
+ +++++  +++++++++++++++   +++++          ;&&&&x;  ;&&&; ;&&&;;;&&&;;&&&;      ;&&&&&&&  ;&&&&;;;; &&&&;;;;;
+++++++    ++++++++++++    +++++         ;&&&&&;    ;;;;  &&&; ;&&&;;&&&;;;;   ;&&; &&&; ;&&&&;    &&&&;
+++++++      ++++++++      ++++++        ;&&&&;           &&&;;&&&&;;&&&&&&;   x&&; ;&&;  ;&&&&;   &&&&&&&;
+++++++   #    ++++    #   ++++++        ;&&&&;  ;&&&&&&&;&&&&&&&;; ;&&&;;.   ;&&&&&&&&;   ;X&&&&; &&&&&&&;
+++++++   ##    +    ###   +++++         ;&&&&;  ;&&&&&&&;&&&&&&&;  ;&&&;     ;&&&&&&&&;     ;&&&&;&&&&;     &
+++++++   ####     #####   +++++         ;&&&&&: ;;;;&&&; +&&&;&&&; ;&&&&&&&&;&&&&  ;&&&.;&   ;&&&&;&&&;     .
+         ###### #######                  ;&&&&;    &&&&; ;&&& ;&&&&;&&&&&&&&;&&&;  ;&&&;&&&+;&&&&&;&&&&&&&&;
+         ##############                   ;&&&&&&&&&&&&; ;&&&; ;&&&&&;;     &&&&;  ;&&&;&&&&&&&&&;;&&&&&&&&
+   ##########################              ;&&&&&&&&&&;  ;;;;;   ;&&&&&&&;         ;&&&&;;&&&&&&;        .
+    #######################                  ;;&&&&;;              ;;X&;;        &  ;;;;;   ;     *   .
+       ##################                 .               *     .    .   .      .     *      .  *      *
+          ###########                         *  .   *       .    *        *  .         *          .      .
 
-
-?
+? 
 Main                          No active channel                                           Bob@12D3KooWLLFZAuusef2zws9er5e5cTziLd66EKKGiqTa6mZaJr2R    
 [Ready] ›  
-For Customers
-For Merchants
-Manage Identities
-Exit
+  For Customers
+  For Merchants
+  Manage Identities
+  Exit
+
 ```
 
 ## Establishing a new channel
@@ -351,21 +351,24 @@ end-to-end.
 
 The long laundry list of things to complete before this could even be considered ready for commercial use includes:
 
-* [ ] Ensure all unit and end-to-end tests (including Cucumber/Gherkin) pass in release mode.
-* [ ] Implement KES on Aztec or an equivalent ZK-rollup platform, including local simulation for testing.
+## Core
+
+* [x] Ensure all unit and end-to-end tests (including Cucumber/Gherkin) pass in release mode.
+* [x] Develop generic DLEQ proofs for arbitrary curves to support future upgrades (e.g., T25519).
+* [ ] Implement a centralized Key Escrow Service (KES) with high-availability and secure key storage as a proof of concept.
 * [ ] Integrate channel force closure and dispute resolution mechanisms, contingent on KES implementation.
-* [ ] Optimize ZKP and P2P integrations by adopting native Rust APIs, eliminating forked shell processes.
+* [ ] Implement robust handling for channel timeouts and abandonment, including automated recovery or closure protocols.
+* [ ] Integrate with Monero's FCMP++ upgrade upon testnet stabilization and hard fork.
 * [ ] Develop a secure, encrypted persistence layer for sensitive data, replacing plain text file storage.
-* [ ] Implementing Grease server on a point-of-sales device.
+* [ ] Implement KES on Aztec or an equivalent ZK-rollup platform, including local simulation for testing.
 * [ ] Conduct comprehensive internal code reviews to identify and mitigate vulnerabilities in cryptography and protocol logic.
 * [ ] Engage external auditors for security reviews post-MVP stabilization.
-* [ ] Implement robust handling for channel timeouts and abandonment, including automated recovery or closure protocols.
+* [ ] Implement Grease server as a bitcart plugin.
+* [ ] UX field testing.
+
+## Possibly
+
 * [ ] Mobile applications for customers (preferably integrated into existing Monero wallets).
 * [ ] Optimize ZK-SNARK proof generation to reduce time below 500ms on modern laptops, exploring T25519 proof.
-* [ ] Evaluate and implement advanced DLEQ proofs (e.g., using T25519) to enhance security without sacrificing hiding properties.
-* [ ] Integrate with Monero's FCMP++ upgrade upon testnet stabilization and hard fork.
-* [ ] Eliminate security footguns and address edge cases, including atomicity bugs and intermittent signature failures.
-* [ ] UX field testing.
-* [ ] Embed Noir verification key files into the codebase to resolve runtime generation dependencies.
+* [ ] Optimize ZKP and P2P integrations by adopting native Rust APIs, eliminating forked shell processes.
 * [ ] Develop extensions for channel value addition/re-allocation without full restarts.
-* [ ] Prepare for scalability features, such as multi-hop payments and routing (e.g., via DHT), as a post-MVP phase.
