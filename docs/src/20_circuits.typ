@@ -321,6 +321,132 @@ $
   T_0 = omega_0 dot.c G_bjj
 $
 
+== VerifyWitnessSharing <verify-witness-sharing>
+
+=== Inputs
+#table( columns: 3,
+  [*Input*], [*Visibility*], [],
+  [$witness_0$], [Private], [The root private key protecting access to the user's locked value (`witness_0`)],
+  [$a_1$], [Private], [Random 251 bit value],
+  [$nu_1$], [Private], [Random 251 bit value (`r_1`)],
+  [$PubBjj("peer")$], [Public], [The public key/curve point on Baby Jubjub for the peer],
+  [$nu_2$], [Private], [Random 251 bit value (`r_2`)],
+  [$PubBjj("KES")$], [Public], [The public key/curve point on Baby Jubjub for the KES],
+)
+
+=== Outputs
+#table( columns: 3,
+  [*Output*], [*Visibility*], [],
+  [$c_1$], [Public], [`Feldman commitment 1` (used in tandem with `Feldman commitment 0` $=T_0$), which is a public key/curve point on Baby Jubjub],
+  [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
+  [$Phi_1$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer (`fi_1`)],
+  [$chi_1$], [Public], [The encrypted value of $sigma_1$ (`enc_1`)],
+  [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
+  [$Phi_2$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES (`fi_2`)],
+  [$chi_2$], [Public], [The encrypted value of $sigma_2$ (`enc_2`)],
+)
+
+=== Summary
+
+The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the the provided inputs and calls the *FeldmanSecretShare_2_of_2* and *VerifyEncryptMessage* operations.
+
+=== Methods
+
+$
+  (c_1,sigma_1,sigma_2) = "FeldmanSecretShare_2_of_2"(omega_0,a_1) \
+  (Phi_1,chi_1) = "VerifyEncryptMessage"(sigma_1,nu_1,Pi_"peer") \
+  (Phi_2,chi_2) = "VerifyEncryptMessage"(sigma_2,nu_2,Pi_"KES") \
+$
+
+
+== VerifyEquivalentModulo <verify-equivalent-modulo>
+
+=== Inputs
+#table( columns: 3,
+  [*Input*], [*Visibility*], [],
+  [$witness_i$], [Private], [The current private key protecting access to close the payment channel (`witness_i`)],
+  [$nu_"DLEQ"$], [Private], [Random 251 bit value (`blinding_DLEQ`)],
+)
+
+=== Outputs
+#table( columns: 3,
+  [*Output*], [*Visibility*], [],
+  [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
+  [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
+  [C], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
+  [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
+  [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
+  [$Delta_ed$], [Private], [Optimization parameter (`response_div_BabyJubJub`)],
+  [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
+)
+
+=== Summary
+
+The *VerifyEquivalentModulo* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided deterministic and random entropy inputs and produces the random outputs. The circuit is not ZK across the inputs since part of the private outputs can be used to reveal information about the private input. The $T_i$, $S_i$, $rho_bjj$, and $rho_ed$ outputs are used for the further *VerifyDLEQ* operation.
+
+This operation proves that the two separate ephemeral $rho$ outputs are both modulo equivalent values determined from the same root value. This ensures that there is no need to compress the embedded size of secret data values transported across the different group orders of the Baby Jubjub and Ed25519 curves, and also avoids the need for the random abort process as specified here: https://eprint.iacr.org/2022/1593.pdf
+
+Note that the $Delta_bjj$ and $Delta_ed$ outputs are used only for optimization of the Noir ZK circuit and may be removed as part of information leakage prevention.
+
+The operation uses the *blake2s* hashing function for its Fiat–Shamir heuristic random oracle model simulation.
+
+The scalar order of the Baby Jubjub curve is represented here by $L_bjj$. The scalar order of the Ed25519 curve is represented here by $L_ed$.
+
+=== Methods
+
+$
+  T_i = omega_i dot.c G_bjj \
+  S_i = omega_i dot.c G_ed \
+  C = hashOf("blake2s", "HEADER" || "PACKED"(T_i) || "PACKED"(S_i)) \
+  rho = omega_i * C - nu_"DLEQ" \
+  rho_bjj = rho mod L_bjj \
+  Delta_bjj = (rho - rho_bjj) / L_bjj \
+  rho_ed = rho mod L_ed \
+  Delta_ed = (rho - rho_ed) / L_ed \
+$
+
+== VerifyDLEQ <verify-dleq>
+
+=== Inputs
+#table( columns: 3,
+  [*Input*], [*Visibility*], [],
+  [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
+  [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
+  [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
+  [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
+)
+
+=== Outputs
+#table( columns: 3,
+  [*Output*], [*Visibility*], [],
+  [$C$], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
+  [$R_bjj$], [Public], [DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`)],
+  [$R_ed$], [Public], [DLEQ commitment 2, which is a public key/curve point on Ed25519 (`R_2`)],
+)
+
+=== Summary
+
+The *VerifyDLEQ* operation is a verification protocol and is language independent. This operation is not redundant, in that the successful verification of the previous *VerifyEquivalentModulo* operation with the same publicly visible parameters implies that this operation will succeed, but the conditions are different.
+
+This operation will be implemented by the peers outside of a ZK circuit in its own native implementation language where the successful verification of the previous *VerifyEquivalentModulo* operation cannot be assumed complete. As such, this operation will exist and can called independently of any other operations.
+
+This operation proves that the $T_i$ and $S_i$ public key/curve points were generated by the same secret key $witness_i$
+. Given that the two separate ephemeral $rho$ output values are both modulo equivalent values determined from the same root value, the reconstruction of the two separate $R$ commitments proves this statement. The use of two separate ephemeral $rho$ output values ensures that there is no need to compress the embedded size of the secret data $witness_i$ transported across the different group orders of the Baby Jubjub and Ed25519 curves, and also avoids the need for the random abort process as specified here: https://eprint.iacr.org/2022/1593.pdf
+
+The operation uses the *blake2s* hashing function for its Fiat–Shamir heuristic random oracle model simulation.
+
+=== Methods
+
+$
+  C = hashOf("blake2s", "HEADER" || "PACKED"(T_i) || "PACKED"(S_i)) \
+  Rho_bjj = rho_bjj dot.c G_bjj \
+  C_T_i = C dot.c G_bjj \
+  R_bjj = C_T_i - Rho_bjj \
+  Rho_ed = rho_ed dot.c G_ed \
+  C_S_i = C dot.c G_ed \
+  R_ed = C_S_i - Rho_ed \
+$
+
 == FeldmanSecretShare_2_of_2
 
 === Inputs
@@ -529,43 +655,6 @@ $
   sigma = chi - s mod L_bjj \
 $
 
-== VerifyWitnessSharing <verify-witness-sharing>
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$witness_0$], [Private], [The root private key protecting access to the user's locked value (`witness_0`)],
-  [$a_1$], [Private], [Random 251 bit value],
-  [$nu_1$], [Private], [Random 251 bit value (`r_1`)],
-  [$PubBjj("peer")$], [Public], [The public key/curve point on Baby Jubjub for the peer],
-  [$nu_2$], [Private], [Random 251 bit value (`r_2`)],
-  [$PubBjj("KES")$], [Public], [The public key/curve point on Baby Jubjub for the KES],
-)
-
-=== Outputs
-#table( columns: 3,
-  [*Output*], [*Visibility*], [],
-  [$c_1$], [Public], [`Feldman commitment 1` (used in tandem with `Feldman commitment 0` $=T_0$), which is a public key/curve point on Baby Jubjub],
-  [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
-  [$Phi_1$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer (`fi_1`)],
-  [$chi_1$], [Public], [The encrypted value of $sigma_1$ (`enc_1`)],
-  [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
-  [$Phi_2$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES (`fi_2`)],
-  [$chi_2$], [Public], [The encrypted value of $sigma_2$ (`enc_2`)],
-)
-
-=== Summary
-
-The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the provided inputs and calls the *FeldmanSecretShare_2_of_2* and *VerifyEncryptMessage* operations.
-
-=== Methods
-
-$
-  (c_1,sigma_1,sigma_2) = "FeldmanSecretShare_2_of_2"(omega_0,a_1) \
-  (Phi_1,chi_1) = "VerifyEncryptMessage"(sigma_1,nu_1,Pi_"peer") \
-  (Phi_2,chi_2) = "VerifyEncryptMessage"(sigma_2,nu_2,Pi_"KES") \
-$
-
 == VerifyCOF <verify-cof>
 
 === Inputs
@@ -597,92 +686,4 @@ $
   C = hashOf("blake2s", "HEADER" || omega_(i-1)) \
   omega_i = C mod L_bjj \
   T_i = omega_i dot.c G_bjj \
-$
-
-== VerifyEquivalentModulo <verify-equivalent-modulo>
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$witness_i$], [Private], [The current private key protecting access to close the payment channel (`witness_i`)],
-  [$nu_"DLEQ"$], [Private], [Random 251 bit value (`blinding_DLEQ`)],
-)
-
-=== Outputs
-#table( columns: 3,
-  [*Output*], [*Visibility*], [],
-  [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
-  [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
-  [C], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
-  [$Delta_bjj$], [Private], [Optimization parameter (`response_div_BabyJubjub`)],
-  [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
-  [$Delta_ed$], [Private], [Optimization parameter (`response_div_ed25519`)],
-  [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
-)
-
-=== Summary
-
-The *VerifyEquivalentModulo* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided deterministic and random entropy inputs and produces the random outputs. The circuit is not ZK across the inputs since part of the private outputs can be used to reveal information about the private input. The $T_i$, $S_i$, $rho_bjj$, and $rho_ed$ outputs are used for the further *VerifyDLEQ* operation.
-
-This operation proves that the two separate ephemeral $rho$ outputs are both modulo equivalent values determined from the same root value. This ensures that there is no need to compress the embedded size of secret data values transported across the different group orders of the Baby Jubjub and Ed25519 curves, and also avoids the need for the random abort process as specified here: https://eprint.iacr.org/2022/1593.pdf
-
-Note that the $Delta_bjj$ and $Delta_ed$ outputs are used only for optimization of the Noir ZK circuit and may be removed as part of information leakage prevention.
-
-The operation uses the *blake2s* hashing function for its Fiat–Shamir heuristic random oracle model simulation.
-
-The scalar order of the Baby Jubjub curve is represented here by $L_bjj$. The scalar order of the Ed25519 curve is represented here by $L_ed$.
-
-=== Methods
-
-$
-  T_i = omega_i dot.c G_bjj \
-  S_i = omega_i dot.c G_ed \
-  C = hashOf("blake2s", "HEADER" || "PACKED"(T_i) || "PACKED"(S_i)) \
-  rho = omega_i * C - nu_"DLEQ" \
-  rho_bjj = rho mod L_bjj \
-  Delta_bjj = (rho - rho_bjj) / L_bjj \
-  rho_ed = rho mod L_ed \
-  Delta_ed = (rho - rho_ed) / L_ed \
-$
-
-== VerifyDLEQ <verify-dleq>
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$T_i$], [Public], [The public key/curve point on Baby Jubjub for $witness_i$],
-  [$rho_bjj$], [Public], [The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`)],
-  [$S_i$], [Public], [The public key/curve point on Ed25519 for $witness_i$],
-  [$rho_ed$], [Public], [The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`)],
-)
-
-=== Outputs
-#table( columns: 3,
-  [*Output*], [*Visibility*], [],
-  [$C$], [Public], [The Fiat–Shamir heuristic challenge (`challenge_bytes`)],
-  [$R_bjj$], [Public], [DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`)],
-  [$R_ed$], [Public], [DLEQ commitment 2, which is a public key/curve point on Ed25519 (`R_2`)],
-)
-
-=== Summary
-
-The *VerifyDLEQ* operation is a verification protocol and is language independent. This operation is not redundant, in that the successful verification of the previous *VerifyEquivalentModulo* operation with the same publicly visible parameters implies that this operation will succeed, but the conditions are different.
-
-This operation will be implemented by the peers outside of a ZK circuit in its own native implementation language where the successful verification of the previous *VerifyEquivalentModulo* operation cannot be assumed complete. As such, this operation will exist and can called independently of any other operations.
-
-This operation proves that the $T_i$ and $S_i$ public key/curve points were generated by the same secret key $witness_i$
-. Given that the two separate ephemeral $rho$ output values are both modulo equivalent values determined from the same root value, the reconstruction of the two separate $R$ commitments proves this statement. The use of two separate ephemeral $rho$ output values ensures that there is no need to compress the embedded size of the secret data $witness_i$ transported across the different group orders of the Baby Jubjub and Ed25519 curves, and also avoids the need for the random abort process as specified here: https://eprint.iacr.org/2022/1593.pdf
-
-The operation uses the *blake2s* hashing function for its Fiat–Shamir heuristic random oracle model simulation.
-
-=== Methods
-
-$
-  C = hashOf("blake2s", "HEADER" || "PACKED"(T_i) || "PACKED"(S_i)) \
-  Rho_bjj = rho_bjj dot.c G_bjj \
-  C_T_i = C dot.c G_bjj \
-  R_bjj = C_T_i - Rho_bjj \
-  Rho_ed = rho_ed dot.c G_ed \
-  C_S_i = C dot.c G_ed \
-  R_ed = C_S_i - Rho_ed \
 $

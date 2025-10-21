@@ -1,0 +1,276 @@
+use crate::grease_protocol::error::WitnessError;
+use blake2::Blake2b512;
+use ciphersuite::group::ff::Field;
+use ciphersuite::group::GroupEncoding;
+use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
+use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};
+use digest::{Digest, Update};
+use dleq::cross_group::{ConciseLinearDLEq, Generators};
+use flexible_transcript::{RecommendedTranscript, Transcript};
+use grease_babyjubjub::{BabyJubJub, BjjPoint};
+use k256::ProjectivePoint;
+use log::*;
+use modular_frost::algorithm::SchnorrSignature;
+use modular_frost::curve::Curve;
+use rand_core::{CryptoRng, OsRng, RngCore};
+use zeroize::{Zeroize, Zeroizing};
+
+pub trait Dleq<C: Curve>: Curve {
+    type Proof: Clone;
+    type Error: Into<WitnessError>;
+
+    /// Generate a new set of scalars (x, y) such that they are equivalent on both curves, in a sense that they stem
+    /// from the same binary representation. Returns the proof and the scalars (x, y).
+    fn generate_dleq<R: RngCore + CryptoRng>(
+        rng: &mut R,
+    ) -> Result<(Self::Proof, (XmrScalar, <C as Ciphersuite>::F)), Self::Error>;
+
+    /// Verify that the provided proof shows that the discrete log of x in Ed25519 is the same as the discrete log of y in curve C.
+    /// and that the prover possesses knowledge of both discrete logs.
+    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<C as Ciphersuite>::G) -> bool;
+}
+
+impl Dleq<Ed25519> for Ed25519 {
+    type Proof = SchnorrSignature<Ed25519>;
+    type Error = ();
+
+    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<(Self::Proof, (XmrScalar, XmrScalar)), ()> {
+        let secret = XmrScalar::random(&mut *rng);
+        let nonce = <Ed25519 as Ciphersuite>::random_nonzero_F(rng);
+        let nonce_pub = Ed25519::generator() * nonce;
+        let public_point = Ed25519::generator() * secret;
+        let challenge = ownership_challenge(&nonce_pub, &public_point);
+        // C::F is already Zeroize. Maybe this gets cleaned up upstream at some point
+        let mut zs = Zeroizing::new(secret.clone());
+        let proof = SchnorrSignature::sign(&zs, Zeroizing::new(nonce), challenge);
+        zs.zeroize();
+        Ok((proof, (secret.clone(), secret)))
+    }
+
+    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &XmrPoint) -> bool {
+        x.eq(y) && {
+            let challenge = ownership_challenge(&proof.R, &x);
+            proof.verify(x.clone(), challenge)
+        }
+    }
+}
+
+pub type DleqMoneroBjj = ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <BabyJubJub as Ciphersuite>::G>;
+
+impl Dleq<BabyJubJub> for Ed25519 {
+    type Proof = DleqMoneroBjj;
+    type Error = ();
+
+    fn generate_dleq<R: RngCore + CryptoRng>(
+        rng: &mut R,
+    ) -> Result<(Self::Proof, (XmrScalar, <BabyJubJub as Ciphersuite>::F)), Self::Error> {
+        let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
+        let mut nonce = Zeroizing::new([0u8; 64]);
+        rng.fill_bytes(nonce.as_mut_slice());
+        let digest = Blake2b512::new().chain(&nonce);
+        nonce.zeroize();
+        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_bjj_generators(), digest);
+        // Unwraps one layer of Zeroizing:
+        let xmr = *xmr;
+        let foreign_key = <BabyJubJub as Ciphersuite>::F::from(fk.0);
+        Ok((proof, (xmr, foreign_key)))
+    }
+
+    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<BabyJubJub as Ciphersuite>::G) -> bool {
+        let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
+        let mut rng = OsRng;
+        match proof.verify(&mut rng, &mut transcript, xmr_bjj_generators()) {
+            Ok((x_rec, y_rec)) => x.eq(&x_rec) && y.eq(&y_rec),
+            Err(e) => {
+                warn!("Error verifying DLEQ proof: {e}");
+                false
+            }
+        }
+    }
+}
+
+pub type DleqMoneroBitcoin = ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <Secp256k1 as Ciphersuite>::G>;
+
+impl Dleq<Secp256k1> for Ed25519 {
+    type Proof = DleqMoneroBitcoin;
+    type Error = ();
+    fn generate_dleq<R: RngCore + CryptoRng>(
+        rng: &mut R,
+    ) -> Result<(Self::Proof, (XmrScalar, <Secp256k1 as Ciphersuite>::F)), ()> {
+        let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
+        let mut nonce = Zeroizing::new([0u8; 64]);
+        rng.fill_bytes(nonce.as_mut_slice());
+        let digest = Blake2b512::new().chain(&nonce);
+        nonce.zeroize();
+        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_btc_generators(), digest);
+        Ok((proof, (*xmr, *fk)))
+    }
+
+    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<Secp256k1 as Ciphersuite>::G) -> bool {
+        let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
+        let mut rng = OsRng;
+        match proof.verify(&mut rng, &mut transcript, xmr_btc_generators()) {
+            Ok((x_rec, y_rec)) => x.eq(&x_rec) && y.eq(&y_rec),
+            Err(e) => {
+                warn!("Error verifying DLEQ proof: {e}");
+                false
+            }
+        }
+    }
+}
+
+fn xmr_bjj_generators() -> (Generators<XmrPoint>, Generators<BjjPoint>) {
+    let monero_gen = Generators::new(
+        Ed25519::generator(),
+        str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
+    )
+    .expect("Hardcoded generators for Monero failed to generate");
+    let bjj_gen = grease_babyjubjub::generators();
+    let bjj_gen =
+        Generators::new(bjj_gen[0], bjj_gen[1]).expect("Hardcoded generators for BabyJubJub failed to generate");
+    (monero_gen, bjj_gen)
+}
+
+fn xmr_btc_generators() -> (Generators<XmrPoint>, Generators<ProjectivePoint>) {
+    let monero_gen = Generators::new(
+        Ed25519::generator(),
+        str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
+    )
+    .expect("Hardcoded generators for Monero failed to generate");
+    let btc_gen = Generators::new(
+        Secp256k1::generator(),
+        str_to_g("0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"),
+    )
+    .expect("Hardcoded generators for Bitcoin failed to generate");
+    (monero_gen, btc_gen)
+}
+
+fn str_to_g<G: GroupEncoding>(s: &str) -> G {
+    let mut encoding = <G as GroupEncoding>::Repr::default();
+    if let Err(e) = hex::decode_to_slice(s, encoding.as_mut()) {
+        panic!("Hardcoded generator point is not valid hex: {e}");
+    }
+    G::from_bytes(&encoding).unwrap()
+}
+
+fn ownership_challenge(nonce_pub: &XmrPoint, public_point: &XmrPoint) -> XmrScalar {
+    let mut t = RecommendedTranscript::new(b"Witness Ownership");
+    t.append_message(b"nonce", nonce_pub.to_bytes());
+    t.append_message(b"point", public_point.to_bytes());
+    <Ed25519 as Ciphersuite>::hash_to_F(b"message_challenge", &t.challenge(b"challenge"))
+}
+
+pub struct DleqProof<C, D>
+where
+    C: Curve,
+    D: Dleq<C>,
+{
+    pub proof: D::Proof,
+    pub xmr_point: XmrPoint,
+    pub foreign_point: <C as Ciphersuite>::G,
+}
+
+impl<C, D> DleqProof<C, D>
+where
+    C: Curve,
+    D: Dleq<C>,
+{
+    pub fn new(proof: D::Proof, xmr_point: XmrPoint, foreign_point: <C as Ciphersuite>::G) -> Self {
+        Self { proof, xmr_point, foreign_point }
+    }
+
+    pub fn verify(&self) -> bool {
+        D::verify_dleq(&self.proof, &self.xmr_point, &self.foreign_point)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::grease_protocol::dleq::Dleq;
+    use ciphersuite::group::ff::PrimeFieldBits;
+    use ciphersuite::group::GroupEncoding;
+    use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
+    use grease_babyjubjub::BabyJubJub;
+    use rand_core::OsRng;
+    use std::ops::Add;
+
+    #[test]
+    fn test_equivalence_ed25519_ed25519() {
+        let mut rng = OsRng;
+        let (proof, (x, y)) = <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng).unwrap();
+        let x_point = Ed25519::generator() * x;
+        let y_point = Ed25519::generator() * y;
+        println!("x: {}, y: {}", hex::encode(x_point.to_bytes()), hex::encode(y_point.to_bytes()));
+        assert_eq!(x_point, y_point);
+        assert!(
+            <Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &x_point, &y_point),
+            "DLEQ Proof did not verify"
+        );
+        assert_eq!(
+            proof.serialize().len(),
+            64,
+            "Proof is not 64 bytes, but {}",
+            proof.serialize().len()
+        );
+        let y_point = x_point.add(&x_point);
+        assert!(
+            !<Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &x_point, &y_point),
+            "DLEQ should not verify"
+        );
+        assert_eq!(x.to_bytes(), y.to_bytes());
+    }
+
+    #[test]
+    fn test_equivalence_ed25519_secp256k() {
+        let mut rng = OsRng;
+        let (proof, (x, y)) = <Ed25519 as Dleq<Secp256k1>>::generate_dleq(&mut rng).unwrap();
+        let x_point = Ed25519::generator() * x;
+        let y_point = Secp256k1::generator() * y;
+        let mut v = Vec::<u8>::with_capacity(64 * 1024);
+        proof.write(&mut v).expect("Writing proof to vec cannot fail");
+        assert_eq!(v.len(), 44607);
+        println!(
+            "proof: {} bytes xmr: {}, btc: {}",
+            v.len(),
+            hex::encode(x_point.to_bytes()),
+            hex::encode(y_point.to_bytes())
+        );
+        assert!(
+            <Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &x_point, &y_point),
+            "XMR<>BTC DLEQ Proof did not verify"
+        );
+        let x_point = x_point.add(&x_point);
+        assert!(
+            !<Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &x_point, &y_point),
+            "XMR<>BTC DLEQ should not verify"
+        );
+        assert_eq!(x.to_le_bits(), y.to_le_bits());
+    }
+
+    #[test]
+    fn test_equivalence_ed25519_babyjubjub() {
+        let mut rng = OsRng;
+        let (proof, (x, y)) = <Ed25519 as Dleq<BabyJubJub>>::generate_dleq(&mut rng).unwrap();
+        let x_point = Ed25519::generator() * x;
+        let y_point = BabyJubJub::generator() * y;
+        let mut v = Vec::<u8>::with_capacity(64 * 1024);
+        proof.write(&mut v).expect("Writing proof to vec cannot fail");
+        assert_eq!(v.len(), 44128);
+        println!(
+            "proof: {} bytes xmr: {}, bjj: {}",
+            v.len(),
+            hex::encode(x_point.to_bytes()),
+            hex::encode(y_point.to_bytes())
+        );
+        assert!(
+            <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point),
+            "XMR<>BTC DLEQ Proof did not verify"
+        );
+        let x_point = x_point.add(&x_point);
+        assert!(
+            !<Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point),
+            "XMR<>BTC DLEQ should not verify"
+        );
+        assert_eq!(x.to_le_bits(), y.to_le_bits());
+    }
+}

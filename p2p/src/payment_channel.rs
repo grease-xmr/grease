@@ -2,7 +2,8 @@ use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroDelta;
 use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
-use libgrease::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
+use libgrease::monero::data_objects::{TransactionId, TransactionRecord};
+use libgrease::multisig::MultisigWalletData;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
@@ -163,7 +164,7 @@ impl PaymentChannel {
                 LifeCycleEvent::MyProof0Generated(proof) => self.on_my_proof0(*proof),
                 LifeCycleEvent::PeerProof0Received(proof) => self.on_peer_proof0(*proof),
                 _ => Err(LifeCycleError::InvalidState(format!(
-                    "Received event {event} in New state, which is not allowed"
+                    "Received event {event} in Establishing state, which is not allowed"
                 ))),
             }
         } else if self.is_open() {
@@ -171,20 +172,20 @@ impl PaymentChannel {
                 LifeCycleEvent::ChannelUpdate(updates) => self.on_channel_update(*updates),
                 LifeCycleEvent::CloseChannel(info) => self.on_cooperative_close(*info),
                 _ => Err(LifeCycleError::InvalidState(format!(
-                    "Received event {event} in New state, which is not allowed"
+                    "Received event {event} in Open state, which is not allowed"
                 ))),
             }
         } else if self.is_closing() {
             match event {
                 LifeCycleEvent::FinalTxConfirmed(tx) => self.on_final_tx_confirmed(*tx),
                 _ => Err(LifeCycleError::InvalidState(format!(
-                    "Received event {event} in New state, which is not allowed"
+                    "Received event {event} in Closing state, which is not allowed"
                 ))),
             }
         } else if self.is_closed() {
             match event {
                 _ => Err(LifeCycleError::InvalidState(format!(
-                    "Received event {event} in New state, which is not allowed"
+                    "Received event {event} in Closed state, which is not allowed"
                 ))),
             }
         } else {
@@ -479,10 +480,10 @@ mod test {
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
     use libgrease::crypto::zk_objects::{
-        AdaptedSignature, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo,
-        UpdateProofs,
+        GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
     };
-    use libgrease::monero::data_objects::{MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord};
+    use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
+    use libgrease::multisig::{AdaptedSignature, MultisigWalletData};
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
     use libgrease::state_machine::{
@@ -532,7 +533,7 @@ mod test {
             my_public_key: some_pub.clone(),
             sorted_pubkeys: [some_pub.clone(), some_pub.clone()],
             joint_public_spend_key: some_pub.clone(),
-            joint_private_view_key: Curve25519Secret::random(&mut rand::rng()),
+            joint_private_view_key: Curve25519Secret::random(&mut rand_core::OsRng),
             birthday: 0,
             known_outputs: Default::default(),
         };
@@ -570,7 +571,7 @@ mod test {
             public_outputs: Default::default(),
             private_outputs: PrivateUpdateOutputs {
                 update_count: 1,
-                witness_i: GenericScalar::random(&mut rand::rng()),
+                witness_i: GenericScalar::random(&mut rand_core::OsRng),
                 delta_bjj: Default::default(),
                 delta_ed: Default::default(),
             },
@@ -578,8 +579,8 @@ mod test {
         };
         let info = UpdateRecord {
             my_signature: b"my_signature".to_vec(),
-            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
-            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
+            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
             my_preprocess: b"my_prepared_info".to_vec(),
             peer_preprocess: b"peer_prepared_info".to_vec(),
             my_proofs,

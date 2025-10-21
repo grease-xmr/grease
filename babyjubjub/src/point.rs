@@ -23,7 +23,7 @@ impl CurveConfig for BjjConfig {
     const COFACTOR_INV: Fr = MontFp!("2394026564107420727433200628387514462817212225638746351800188703329891451411");
 }
 
-/// As per https://eips.ethereum.org/EIPS/eip-2494
+/// As per [EIP-2494](https://eips.ethereum.org/EIPS/eip-2494)
 ///
 /// The twisted Edwards elliptic curve defined over F_r described by equation
 ///

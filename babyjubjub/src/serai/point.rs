@@ -1,9 +1,10 @@
-use crate::{ProjectivePoint, Scalar};
+use crate::{BabyJubJub, ProjectivePoint, Scalar, hash_to_curve};
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::{AdditiveGroup, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::rand::RngCore;
+use ciphersuite::Ciphersuite;
 use group::{Group as SeraiGroup, GroupEncoding, prime::PrimeGroup as SeraiPrimeGroup};
 use std::io::Cursor;
 use std::iter::Sum;
@@ -188,5 +189,32 @@ impl MulAssign<Scalar> for BjjPoint {
 impl MulAssign<&Scalar> for BjjPoint {
     fn mul_assign(&mut self, rhs: &Scalar) {
         self.0.mul_assign(&rhs.0);
+    }
+}
+
+pub fn generators() -> [BjjPoint; 2] {
+    [BabyJubJub::generator(), {
+        let p = hash_to_curve(b"generatorH").expect("hash to curve to to fail here");
+        let p: ProjectivePoint = p.into();
+        BjjPoint::from(p)
+    }]
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::serai::point::generators;
+    use ark_ec::CurveGroup;
+
+    #[test]
+    fn check_generators() {
+        let gens = generators();
+        assert_eq!(
+            gens[0].0.into_affine().x.to_string(),
+            "5299619240641551281634865583518297030282874472190772894086521144482721001553"
+        );
+        assert_eq!(
+            gens[1].0.into_affine().x.to_string(),
+            "9841060058308345780925765014991942161616262921351049057566852381813453307315"
+        );
     }
 }

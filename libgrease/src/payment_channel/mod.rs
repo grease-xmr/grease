@@ -4,6 +4,16 @@ pub use error::UpdateError;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
+/// Trait for types that have an associated channel role (Merchant or Customer)
+pub trait HasRole {
+    /// Returns the channel role associated with the implementing type
+    fn role(&self) -> ChannelRole;
+
+    fn is_other_role(&self, other: &ChannelRole) -> bool {
+        self.role() != *other
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelRole {
     Merchant,

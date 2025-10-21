@@ -1,6 +1,7 @@
 use libgrease::amount::MoneroDelta;
 use libgrease::crypto::keys::Curve25519Secret;
-use libgrease::crypto::zk_objects::{AdaptedSignature, UpdateProofs};
+use libgrease::crypto::zk_objects::UpdateProofs;
+use libgrease::multisig::AdaptedSignature;
 use log::*;
 use std::collections::HashMap;
 use std::sync::Arc;

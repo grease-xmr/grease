@@ -206,12 +206,10 @@ pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::crypto::zk_objects::{
-        AdaptedSignature, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo,
-        UpdateProofs,
+        KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo, UpdateProofs,
     };
-    use crate::monero::data_objects::{
-        ClosingAddresses, MultisigSplitSecrets, MultisigWalletData, TransactionId, TransactionRecord,
-    };
+    use crate::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
+    use crate::multisig::{AdaptedSignature, MultisigWalletData};
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
@@ -269,7 +267,7 @@ pub mod test {
             my_public_key: some_pub.clone(),
             sorted_pubkeys: [some_pub.clone(), some_pub.clone()],
             joint_public_spend_key: some_pub.clone(),
-            joint_private_view_key: Curve25519Secret::random(&mut rand::rng()),
+            joint_private_view_key: Curve25519Secret::random(&mut rand_core::OsRng),
             birthday: 0,
             known_outputs: Default::default(),
         }
@@ -341,8 +339,8 @@ pub mod test {
         };
         let update_info = UpdateRecord {
             my_signature: b"signature".to_vec(),
-            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
-            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand::rng())),
+            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
+            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
             my_preprocess: vec![],
             peer_preprocess: vec![],
             my_proofs,

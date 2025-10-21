@@ -1,11 +1,11 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
-use monero::{Address, Error as AddressError, Network, PrivateKey, PublicKey, ViewPair};
+use monero::{Address, Error as AddressError};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 // re-export
 use crate::balance::Balances;
-use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::crypto::keys::Curve25519PublicKey;
 use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -90,52 +90,6 @@ pub struct FinalizedUpdate {
     pub update_count: u64,
     /// The change that was effected in the merchant's balance
     pub delta: MoneroDelta,
-}
-
-/// A struct to make it easier to persist and pass wallet info around. Obviously it needs to be made more secure for
-/// a production environment.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct MultisigWalletData {
-    pub my_spend_key: Curve25519Secret,
-    pub my_public_key: Curve25519PublicKey,
-    pub sorted_pubkeys: [Curve25519PublicKey; 2],
-    pub joint_private_view_key: Curve25519Secret,
-    pub joint_public_spend_key: Curve25519PublicKey,
-    pub birthday: u64,
-    pub known_outputs: Vec<Vec<u8>>,
-}
-
-impl MultisigWalletData {
-    pub fn peer_public_key(&self) -> &Curve25519PublicKey {
-        if self.my_public_key == self.sorted_pubkeys[0] {
-            &self.sorted_pubkeys[1]
-        } else {
-            &self.sorted_pubkeys[0]
-        }
-    }
-
-    pub fn address(&self, network: Network) -> Address {
-        let spend = PublicKey { point: *self.joint_public_spend_key.as_compressed() };
-        let view = PrivateKey { scalar: *self.joint_private_view_key.as_scalar() };
-        let keys = ViewPair { spend, view };
-        Address::from_viewpair(network, &keys)
-    }
-}
-
-impl Debug for MultisigWalletData {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MultisigWalletData( ")?;
-        write!(f, "my_public_key: {}, ", self.my_public_key.as_hex())?;
-        write!(
-            f,
-            "sorted_pubkeys: [{}, {}], ",
-            self.sorted_pubkeys[0].as_hex(),
-            self.sorted_pubkeys[1].as_hex()
-        )?;
-        write!(f, "birthday: {}, ", self.birthday)?;
-        write!(f, "known_outputs: {}, ", self.known_outputs.len())?;
-        write!(f, ")")
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

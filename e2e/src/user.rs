@@ -27,8 +27,8 @@ pub struct User {
 impl User {
     pub fn address(&self) -> MoneroAddress {
         let view_key = self.private_view_key();
-        let view = Curve25519PublicKey::from_secret(&view_key).as_point();
-        let spend = self.public_key.as_point();
+        let view = Curve25519PublicKey::from_secret(&view_key).as_point().0;
+        let spend = self.public_key.as_point().0;
         MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend, view)
     }
 

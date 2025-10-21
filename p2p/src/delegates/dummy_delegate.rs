@@ -11,10 +11,11 @@ use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::crypto::zk_objects::{
-    AdaptedSignature, Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey,
-    PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
+    Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0,
+    PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
+use libgrease::multisig::AdaptedSignature;
 use libgrease::state_machine::error::InvalidProposal;
 use log::{debug, info, warn};
 use std::time::Duration;
@@ -173,7 +174,7 @@ impl Updater for DummyDelegate {
         metadata: &ChannelMetadata,
     ) -> Result<UpdateProofs, DelegateError> {
         info!("DummyDelegate: Generating update {index} proof for channel.  {}", delta.amount);
-        let mut rng = rand::rng();
+        let mut rng = rand_core::OsRng;
         // The witnesses need to be valid scalars
         let next_witness = Curve25519Secret::random(&mut rng);
         let witness_i = GenericScalar(next_witness.as_scalar().to_bytes());

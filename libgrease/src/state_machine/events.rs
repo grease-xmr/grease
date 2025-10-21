@@ -1,6 +1,7 @@
 use crate::amount::MoneroDelta;
 use crate::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
-use crate::monero::data_objects::{MultisigWalletData, TransactionId, TransactionRecord};
+use crate::monero::data_objects::{TransactionId, TransactionRecord};
+use crate::multisig::MultisigWalletData;
 use crate::state_machine::closing_channel::ChannelCloseRecord;
 use crate::state_machine::new_channel::RejectNewChannelReason;
 use crate::state_machine::open_channel::UpdateRecord;

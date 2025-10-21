@@ -61,8 +61,8 @@ impl WatchOnlyWallet {
     }
 
     pub fn address(&self) -> MoneroAddress {
-        let view_key = self.public_view_key().as_point();
-        let spend_key = self.public_spend_key().as_point();
+        let view_key = self.public_view_key().as_point().0;
+        let spend_key = self.public_spend_key().as_point().0;
         MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_key, view_key)
     }
 

@@ -1,5 +1,5 @@
 use ark_algebra_bench_templates::*;
-use grease_babyjubjub::{ProjectivePoint, Fq, Fr};
+use grease_babyjubjub::{Fq, Fr, ProjectivePoint};
 
 bench!(
     Name = "BabyJubJub",
