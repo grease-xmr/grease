@@ -3,7 +3,7 @@ _This project is being developed in public. The documents, code, design specific
 this repository are a reflection of this process and are all subject to change. The end-goal is to result in something
 that can be implemented in production, but as of now, consider this a proof-of-concept only._
 
-# Grease
+![Grease Logo](assets/logo2.webp)
 
 > This car is automatic\
 > It's systematic\
