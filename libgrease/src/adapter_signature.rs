@@ -2,9 +2,10 @@ use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
 use paste::paste;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, CryptoRngCore, RngCore};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::ops::Deref;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 macro_rules! schnorr_def {
@@ -19,7 +20,7 @@ macro_rules! schnorr_def {
                     b"P",
                     pubkey.to_bytes().as_ref(),
                     b"MSG",
-                    msg.as_ref().len().to_le_bytes().as_ref(),
+                    (msg.as_ref().len() as u64).to_le_bytes().as_ref(),
                     msg.as_ref(),
                 ]
                 .concat();
@@ -58,7 +59,10 @@ impl<C: Ciphersuite> SchnorrSignature<C> {
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
     #[allow(non_snake_case)]
     pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, msg: B, rng: &mut R) -> Self {
-        let mut nonce = C::F::random(rng);
+        let mut nonce = C::F::random(rng.as_rngcore());
+        while nonce == C::F::ZERO {
+            nonce = C::F::random(rng.as_rngcore());
+        }
         let R = C::generator() * &nonce;
         let pubkey = C::generator() * secret;
         let e = Self::challenge(&R, &pubkey, msg);
@@ -97,7 +101,10 @@ impl<C: Ciphersuite> AdaptedSignature<C> {
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
     #[allow(non_snake_case)]
     pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, payload: &C::F, msg: B, rng: &mut R) -> Self {
-        let mut nonce = C::F::random(rng);
+        let mut nonce = C::F::random(rng.as_rngcore());
+        while nonce == C::F::ZERO {
+            nonce = C::F::random(rng.as_rngcore());
+        }
         let pubkey = C::generator() * secret;
         let R = C::generator() * &nonce;
         let Q = C::generator() * payload;
@@ -192,7 +199,7 @@ macro_rules! schnorr_impl {
 
                                 $(
                                     stringify!($s_field) => {
-                                        let bytes: Vec<u8> = map.next_value()?;
+                                        let mut bytes: Vec<u8> = map.next_value()?;
                                         let mut repr = <C::F as PrimeField>::Repr::default();
                                         if bytes.len() != repr.as_ref().len() {
                                             return Err(Error::custom(concat!("invalid scalar length for ", stringify!($s_field))));
@@ -204,6 +211,7 @@ macro_rules! schnorr_impl {
                                                 return Err(Error::custom(concat!("invalid scalar type for ", stringify!($s_field))));
                                             }
                                         }
+                                        bytes.zeroize();
                                     }
                                 )*
                                 _ => return Err(Error::unknown_field(&key, &[
