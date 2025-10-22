@@ -47,6 +47,6 @@ git = "https://github.com/serai-dex/serai.git"
 rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
 
 [dev-dependencies]
-rand = { workspace = true }
 env_logger = "0.11.8"
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
 

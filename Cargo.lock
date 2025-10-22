@@ -2738,13 +2738,13 @@ dependencies = [
  "log",
  "modular-frost",
  "monero",
- "rand 0.9.2",
+ "paste",
  "rand_core 0.6.4",
  "ron",
  "serde",
  "sha3",
+ "subtle",
  "thiserror 2.0.16",
- "wallet",
  "zeroize",
 ]
 
@@ -5570,7 +5570,6 @@ dependencies = [
  "monero-serai",
  "monero-simple-request-rpc",
  "monero-wallet",
- "rand 0.9.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",

@@ -10,7 +10,6 @@ use num_traits::Zero;
 use poseidon_rs::Fr;
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::io::Write;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

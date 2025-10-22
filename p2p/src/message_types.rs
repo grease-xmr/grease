@@ -8,7 +8,6 @@ use libgrease::monero::data_objects::{
     ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
     MultisigSplitSecretsResponse, TransactionId, TransactionRecord,
 };
-use libgrease::multisig::AdaptedSignature;
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, ProposedChannelInfo};
@@ -18,6 +17,7 @@ use log::*;
 use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
+use wallet::multisig_wallet::AdaptSig;
 
 /// Requests that one peer can make to another peer in the Grease p2p network to create, update or close a payment
 /// channel.
@@ -415,7 +415,7 @@ pub struct UpdatePrepared {
     pub delta: MoneroDelta,
     pub prepare_info_merchant: Vec<u8>,
     pub update_proof: PublicUpdateProof,
-    pub adapted_sig: AdaptedSignature,
+    pub adapted_sig: AdaptSig,
 }
 
 impl Debug for UpdatePrepared {
@@ -431,5 +431,5 @@ impl Debug for UpdatePrepared {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateCommitted {
     pub public_update_proof: PublicUpdateProof,
-    pub adapted_signature: AdaptedSignature,
+    pub adapted_signature: AdaptSig,
 }

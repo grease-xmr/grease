@@ -11,15 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Formatter};
 use zeroize::Zeroizing;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AdaptedSignature(pub Curve25519Secret);
-
-impl AdaptedSignature {
-    pub fn as_scalar(&self) -> &DScalar {
-        self.0.as_scalar()
-    }
-}
-
 /// A struct to make it easier to persist and pass wallet info around. Obviously it needs to be made more secure for
 /// a production environment.
 #[derive(Clone, Serialize, Deserialize)]

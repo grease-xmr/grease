@@ -7,6 +7,7 @@
 //! - `ChannelForceClose`: This indicates a force close of the channel, and will move the channel to the `Disputed` state.
 //!
 
+use crate::adapter_signature::AdaptedSignature;
 use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
 use crate::crypto::zk_objects::{
@@ -15,10 +16,11 @@ use crate::crypto::zk_objects::{
 };
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
-use crate::multisig::{AdaptedSignature, MultisigWalletData};
+use crate::multisig::MultisigWalletData;
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;
+use ciphersuite::Ed25519;
 use log::*;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
@@ -30,8 +32,8 @@ use std::fmt::{Debug, Formatter};
 pub struct UpdateRecord {
     // My half of the spend authority for this transaction.
     pub my_signature: Vec<u8>,
-    pub my_adapted_signature: AdaptedSignature,
-    pub peer_adapted_signature: AdaptedSignature,
+    pub my_adapted_signature: AdaptedSignature<Ed25519>,
+    pub peer_adapted_signature: AdaptedSignature<Ed25519>,
     // Data needed to reconstruct the Monero transaction for this update.
     pub my_preprocess: Vec<u8>,
     pub peer_preprocess: Vec<u8>,

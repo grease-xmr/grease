@@ -9,9 +9,11 @@ use std::path::Path;
 
 use crate::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::errors::WalletError;
+use libgrease::adapter_signature::AdaptedSignature;
 use libgrease::amount::MoneroAmount;
 use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::multisig::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys, AdaptedSignature, MultisigWalletData};
+use libgrease::multisig::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys, MultisigWalletData};
+use libgrease::XmrScalar;
 use log::*;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
 use modular_frost::{Participant, ThresholdKeys};
@@ -23,9 +25,10 @@ use monero_serai::transaction::Transaction;
 use monero_wallet::address::{AddressType, MoneroAddress, Network};
 use monero_wallet::send::{SignableTransaction, TransactionSignMachine, TransactionSignatureMachine};
 use monero_wallet::{Scanner, ViewPair, WalletOutput};
-use rand_core::{CryptoRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
 
 pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
+pub type AdaptSig = AdaptedSignature<Ed25519>;
 
 pub struct MultisigWallet {
     rpc: SimpleRequestRpc,
@@ -43,6 +46,8 @@ pub struct MultisigWallet {
     shared_spend_key: Option<SignatureShare<Ed25519>>,
     final_signer: Option<TransactionSignatureMachine>,
 }
+
+const MSG: &[u8] = b"Adapter signature: MuSig2 2-of-2 multisig transaction";
 
 impl MultisigWallet {
     pub fn new(
@@ -305,22 +310,40 @@ impl MultisigWallet {
         Ok(())
     }
 
-    pub fn verify_adapted_signature(&self, adapted: &AdaptedSignature) -> Result<(), WalletError> {
-        // TODO: Implement verification logic for adapted signatures
-        Ok(())
-    }
-
     pub fn my_signing_share(&self) -> Option<SignatureShare<Ed25519>> {
         self.shared_spend_key.clone()
     }
 
-    pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptedSignature, WalletError> {
-        let real_sig = self
+    pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptSig, WalletError> {
+        let secret = self
             .my_signing_share()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
-        let real_sig = signature_share_to_secret(real_sig);
-        let adapted = real_sig.as_dalek_scalar() + witness.as_dalek_scalar();
-        Ok(AdaptedSignature(Curve25519Secret::from(adapted)))
+        let secret = signature_share_to_scalar(secret);
+        let mut rng = OsRng;
+        let adapted = AdaptSig::sign(&secret, witness.as_scalar(), MSG, &mut rng);
+        Ok(adapted)
+    }
+
+    pub fn verify_adapted_signature(&self, adapted: &AdaptSig) -> Result<(), WalletError> {
+        let p = self.peer_public_key().as_point();
+        match adapted.verify(&p, MSG) {
+            true => Ok(()),
+            false => Err(WalletError::SigningError("Adapted signature verification failed".into())),
+        }
+    }
+
+    pub fn extract_true_signature(
+        &self,
+        adapted: &AdaptSig,
+        offset: &XmrScalar,
+    ) -> Result<SignatureShare<Ed25519>, WalletError> {
+        let p = self.peer_public_key().as_point();
+        let true_sig = adapted.adapt(&offset, &p, MSG).map_err(|_| {
+            WalletError::SigningError("Incorrect offset supplied. Adapter signature verification failed".into())
+        })?;
+        let bytes = true_sig.s().as_bytes();
+        let share = self.bytes_to_signature_share(bytes)?;
+        Ok(share)
     }
 
     pub fn bytes_to_signature_share(&self, bytes: &[u8]) -> Result<SignatureShare<Ed25519>, WalletError> {
@@ -337,16 +360,6 @@ impl MultisigWallet {
             ));
         }
         Ok(share.remove(0))
-    }
-    pub fn extract_true_signature(
-        &self,
-        adapted: &AdaptedSignature,
-        offset: &Curve25519Secret,
-    ) -> Result<SignatureShare<Ed25519>, WalletError> {
-        let sig = *adapted.as_scalar() - **offset.as_scalar();
-        let bytes = sig.as_bytes();
-        let sig = self.bytes_to_signature_share(bytes)?;
-        Ok(sig)
     }
 
     pub fn sign(&mut self, peer_share: SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
@@ -463,6 +476,15 @@ pub fn signature_share_to_secret(signature: SignatureShare<Ed25519>) -> Curve255
         scalar
     };
     Curve25519Secret::from(sig)
+}
+
+pub fn signature_share_to_scalar(signature: SignatureShare<Ed25519>) -> XmrScalar {
+    // Safety: SignatureShare<Ed25519> is a wrapper around a DScalar, as is XmrScalar
+    let val = unsafe {
+        let scalar: DScalar = mem::transmute(signature);
+        scalar
+    };
+    XmrScalar(val)
 }
 
 pub fn signature_share_to_bytes(secret: &SignatureShare<Ed25519>) -> Vec<u8> {
