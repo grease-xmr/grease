@@ -483,15 +483,17 @@ mod test {
         GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
     };
     use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
-    use libgrease::multisig::{AdaptedSignature, MultisigWalletData};
+    use libgrease::multisig::MultisigWalletData;
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
     use libgrease::state_machine::{
         ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, NewChannelState, UpdateRecord,
     };
+    use libgrease::XmrScalar;
     use libp2p::{Multiaddr, PeerId};
     use monero::Address;
     use std::str::FromStr;
+    use wallet::multisig_wallet::AdaptSig;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
     const ALICE_ADDRESS: &str =
@@ -577,10 +579,12 @@ mod test {
             },
             proof: b"my_update_proof".to_vec(),
         };
+        let key = Curve25519Secret::random(&mut rand_core::OsRng);
+        let q = Curve25519Secret::random(&mut rand_core::OsRng);
         let info = UpdateRecord {
             my_signature: b"my_signature".to_vec(),
-            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
-            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
+            my_adapted_signature: AdaptSig::sign(key.as_scalar(), q.as_scalar(), b"", &mut rand_core::OsRng),
+            peer_adapted_signature: AdaptSig::sign(key.as_scalar(), q.as_scalar(), b"", &mut rand_core::OsRng),
             my_preprocess: b"my_prepared_info".to_vec(),
             peer_preprocess: b"peer_prepared_info".to_vec(),
             my_proofs,

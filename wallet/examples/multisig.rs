@@ -127,8 +127,8 @@ async fn main() -> Result<(), WalletError> {
     wallet_a.verify_adapted_signature(&adapted_b)?;
     println!("Adaptor signature is valid (but can't create a valid transaction yet)");
     // Recreate the original signature share
-    let ss_a = wallet_b.extract_true_signature(&adapted_a, &offset_a)?;
-    let ss_b = wallet_a.extract_true_signature(&adapted_b, &offset_b)?;
+    let ss_a = wallet_b.extract_true_signature(&adapted_a, offset_a.as_scalar())?;
+    let ss_b = wallet_a.extract_true_signature(&adapted_b, offset_b.as_scalar())?;
 
     let tx_a = wallet_a.sign(ss_b)?;
     println!("Alice's transaction signed successfully");
