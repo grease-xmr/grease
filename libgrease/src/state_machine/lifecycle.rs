@@ -203,20 +203,24 @@ impl LifeCycle for ChannelState {
 
 #[cfg(test)]
 pub mod test {
+    use crate::adapter_signature::AdaptedSignature;
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::crypto::zk_objects::{
         KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo, UpdateProofs,
     };
     use crate::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
-    use crate::multisig::{AdaptedSignature, MultisigWalletData};
+    use crate::multisig::MultisigWalletData;
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
     use crate::state_machine::new_channel::NewChannelBuilder;
     use crate::state_machine::open_channel::{EstablishedChannelState, UpdateRecord};
     use crate::state_machine::{ChannelCloseRecord, NewChannelState};
+    use crate::XmrScalar;
     use blake2::Blake2b512;
+    use ciphersuite::Ed25519;
+    use k256::elliptic_curve::Field;
     use log::*;
 
     const ALICE_ADDRESS: &str =
@@ -337,10 +341,12 @@ pub mod test {
             },
             proof: b"my_update_proof".to_vec(),
         };
+        let k = XmrScalar::random(&mut rand_core::OsRng);
+        let q = XmrScalar::random(&mut rand_core::OsRng);
         let update_info = UpdateRecord {
             my_signature: b"signature".to_vec(),
-            my_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
-            peer_adapted_signature: AdaptedSignature(Curve25519Secret::random(&mut rand_core::OsRng)),
+            my_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &q, "", &mut rand_core::OsRng),
+            peer_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &q, "", &mut rand_core::OsRng),
             my_preprocess: vec![],
             peer_preprocess: vec![],
             my_proofs,

@@ -22,7 +22,6 @@ use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
     TransactionId, TransactionRecord,
 };
-use libgrease::multisig::AdaptedSignature;
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
@@ -37,7 +36,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::JoinHandle;
-use wallet::multisig_wallet::{signature_share_to_bytes, signature_share_to_secret, translate_payments};
+use wallet::multisig_wallet::{signature_share_to_bytes, signature_share_to_secret, translate_payments, AdaptSig};
 use wallet::{connect_to_rpc, publish_transaction, MultisigWallet};
 
 pub type WritableState = OwnedRwLockWriteGuard<PaymentChannel>;
@@ -1160,7 +1159,7 @@ where
         index: u64,
         delta: MoneroDelta,
         peer_proof: PublicUpdateProof,
-        adapted_signature: AdaptedSignature,
+        adapted_signature: AdaptSig,
     ) -> Result<(), ChannelServerError> {
         // Verify the peer's proofs.
         let channel = self.channels.peek(name).await.ok_or(ChannelServerError::ChannelNotFound)?;
@@ -1168,7 +1167,9 @@ where
         drop(channel);
         self.delegate.verify_update(index, delta, &peer_proof, &metadata).await?;
         debug!("💸️  Peer's update {index} proofs are VALID for channel {name}.");
-        self.delegate.verify_adapted_signature(index, &peer_proof, &adapted_signature).await?;
+        // Verify the adapted signature.
+        // TODO: Implement adapted signature verification.
+        error!("💸️  Verifying adapted signature for update is unimplemented");
         Ok(())
     }
 
@@ -1500,7 +1501,7 @@ where
         wallet.partial_sign(&final_update.peer_preprocess)?;
         trace!("{role}: Signed final transaction with my key.");
         let adapted = final_update.peer_adapted_signature;
-        let ss_b = wallet.extract_true_signature(&adapted, &offset)?;
+        let ss_b = wallet.extract_true_signature(&adapted, offset.as_scalar())?;
         let closing_tx = wallet.sign(ss_b)?;
         let tx_hash = TransactionId::new(hex::encode(closing_tx.hash()));
         debug!("{role}: Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");

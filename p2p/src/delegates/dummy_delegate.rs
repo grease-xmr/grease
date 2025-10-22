@@ -15,7 +15,6 @@ use libgrease::crypto::zk_objects::{
     PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
-use libgrease::multisig::AdaptedSignature;
 use libgrease::state_machine::error::InvalidProposal;
 use log::{debug, info, warn};
 use std::time::Duration;
@@ -216,16 +215,6 @@ impl Updater for DummyDelegate {
         } else {
             Err(DelegateError("Invalid update proof".to_string()))
         }
-    }
-
-    async fn verify_adapted_signature(
-        &self,
-        _index: u64,
-        _proof: &PublicUpdateProof,
-        _sig: &AdaptedSignature,
-    ) -> Result<(), DelegateError> {
-        info!("Dummy delegate: Verifying adapted signature");
-        Ok(())
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod adapter_signature;
 pub mod amount;
 pub mod balance;
 pub mod channel_id;
@@ -14,3 +15,6 @@ pub mod state_machine;
 
 // Concerete implementations
 pub mod noir_impl;
+
+// Re-exports
+pub use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};

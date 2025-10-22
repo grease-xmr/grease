@@ -11,7 +11,6 @@ use libgrease::crypto::zk_objects::{
     PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::MultisigSplitSecrets;
-use libgrease::multisig::AdaptedSignature;
 use libgrease::state_machine::error::InvalidProposal;
 use std::future::Future;
 use std::time::Duration;
@@ -107,13 +106,6 @@ pub trait Updater {
         delta: MoneroDelta,
         proof: &PublicUpdateProof,
         metadata: &ChannelMetadata,
-    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
-
-    fn verify_adapted_signature(
-        &self,
-        update_count: u64,
-        peer_proof: &PublicUpdateProof,
-        adapted_sig: &AdaptedSignature,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
