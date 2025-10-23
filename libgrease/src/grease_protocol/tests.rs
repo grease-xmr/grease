@@ -1,3 +1,4 @@
+use crate::adapter_signature::AdaptedSignature;
 use crate::crypto::keys::Curve25519PublicKey;
 use crate::crypto::keys::Curve25519Secret;
 use crate::crypto::keys::PublicKey;
@@ -15,6 +16,8 @@ use rand_core::OsRng;
 struct MultisigWalletInfo {
     pub customer_keys: (Curve25519Secret, Curve25519PublicKey),
     pub merchant_keys: (Curve25519Secret, Curve25519PublicKey),
+    pub customer_adapt_sig: (AdaptedSignature<Ed25519>, Curve25519Secret),
+    pub merchant_adapt_sig: (AdaptedSignature<Ed25519>, Curve25519Secret),
     pub sorted_pubkeys: [Curve25519PublicKey; 2],
     pub joint_private_view_key: Curve25519Secret,
     pub joint_public_view_key: Curve25519PublicKey,
@@ -43,10 +46,22 @@ fn simple_multisig_wallet() -> MultisigWalletInfo {
     let joint_private_view_key = Curve25519Secret::from(jprv_vk.0);
     let joint_public_view_key = Curve25519PublicKey::from(j_pub_vk);
     let joint_public_spend_key = Curve25519PublicKey::from(customer_musig_keys.group_key());
+    let mut rng = OsRng;
+    // Customer signs adapter signature
+    let offset = Curve25519Secret::random(&mut rng);
+    let sig_adapt = AdaptedSignature::sign(customer_keys.0.as_scalar(), offset.as_scalar(), b"customer", &mut rng);
+    let customer_adapt_sig = (sig_adapt, offset);
+    // Merchant signs adapter signature
+    let offset = Curve25519Secret::random(&mut rng);
+    let sig_adapt = AdaptedSignature::sign(merchant_keys.0.as_scalar(), offset.as_scalar(), b"merchant", &mut rng);
+    let merchant_adapt_sig = (sig_adapt, offset);
+
     MultisigWalletInfo {
         customer_keys,
+        customer_adapt_sig,
         sorted_pubkeys: pubkeys,
         merchant_keys,
+        merchant_adapt_sig,
         joint_private_view_key,
         joint_public_view_key,
         joint_public_spend_key,
@@ -95,6 +110,8 @@ fn channel_opening_protocol() {
     );
     assert_eq!(sigma1_m.shard(), customer_w0.peer_shard());
     assert!(proof_for_merchant.verify(), "Merchant DLEQ proof verification failed");
+    // The merchant verifies the adapter signature
+    assert!(wallet_info.customer_adapt_sig.0.verify(&wallet_info.customer_keys.1.as_point(), b"customer"));
 
     // The customer decrypts and verifies his shard
     let sigma1_c = peer_m.decrypt_shard(w0c);
@@ -105,6 +122,8 @@ fn channel_opening_protocol() {
     );
     assert_eq!(sigma1_c.shard(), merchant_w0.peer_shard());
     assert!(proof_for_customer.verify(), "Customer DLEQ proof verification failed");
+    // The customer verifies the adapter signature
+    assert!(wallet_info.merchant_adapt_sig.0.verify(&wallet_info.merchant_keys.1.as_point(), b"merchant"));
 
     // The KES decrypts her shards
     let sigma2_c = kes_c.decrypt_shard(&kes_secret);
@@ -144,6 +163,4 @@ fn channel_opening_protocol() {
         ),
         "Customer shard verification against spend key failed"
     );
-
-    // Merchant creates an adapter signature for the initial channel funding transaction using their musig keys
 }

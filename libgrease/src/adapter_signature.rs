@@ -5,7 +5,6 @@ use paste::paste;
 use rand_core::{CryptoRng, CryptoRngCore, RngCore};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::ops::Deref;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 macro_rules! schnorr_def {
