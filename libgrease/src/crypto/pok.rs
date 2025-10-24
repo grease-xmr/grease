@@ -1,7 +1,11 @@
+use crate::error::ReadError;
+use crate::grease_protocol::utils::{write_field_element, write_group_element};
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
+use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
+use std::io::Read;
 use zeroize::Zeroize;
 
 pub struct KesPoK<C: Ciphersuite> {
@@ -19,6 +23,20 @@ impl<C: Ciphersuite> KesPoK<C> {
 
     pub fn verify(&self, sigma_pubkey: &C::G, kes_pubkey: &C::G) -> bool {
         self.private_key_pok.verify(kes_pubkey) && self.shard_pok.verify(sigma_pubkey)
+    }
+
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let shard_pok = SchnorrPoK::<C>::read(reader)?;
+        let private_key_pok = SchnorrPoK::<C>::read(reader)?;
+        Ok(Self { shard_pok, private_key_pok })
+    }
+}
+
+impl<C: Ciphersuite> Writable for KesPoK<C> {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
+        self.shard_pok.write(writer)?;
+        self.private_key_pok.write(writer)?;
+        Ok(())
     }
 }
 
@@ -48,6 +66,22 @@ impl<C: Ciphersuite> SchnorrPoK<C> {
         let lhs = C::generator() * self.s;
         let rhs = self.pub_nonce + *public_key * Self::challenge(&self.pub_nonce, &public_key);
         lhs == rhs
+    }
+
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let pub_nonce = crate::grease_protocol::utils::read_group_element::<C, R>(reader)
+            .map_err(|e| ReadError::new("SchnorrPoK.pub_nonce", e.to_string()))?;
+        let s = crate::grease_protocol::utils::read_field_element::<C, R>(reader)
+            .map_err(|e| ReadError::new("SchnorrPoK.s", e.to_string()))?;
+        Ok(Self { pub_nonce, s })
+    }
+}
+
+impl<C: Ciphersuite> Writable for SchnorrPoK<C> {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
+        write_group_element::<C, W>(writer, &self.pub_nonce)?;
+        write_field_element::<C, W>(writer, &self.s)?;
+        Ok(())
     }
 }
 

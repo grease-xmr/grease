@@ -3,6 +3,7 @@ pub mod amount;
 pub mod balance;
 pub mod channel_id;
 pub mod crypto;
+pub mod error;
 pub mod grease_protocol;
 pub mod helpers;
 pub mod monero;

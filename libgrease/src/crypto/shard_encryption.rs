@@ -1,26 +1,34 @@
+use crate::error::ReadError;
+use crate::grease_protocol::utils::{read_field_element, read_group_element, write_field_element, write_group_element};
 use crate::payment_channel::{ChannelRole, HasRole};
 use ciphersuite::group::GroupEncoding;
-use ciphersuite::{Ciphersuite, Ed25519};
-use dalek_ff_group::EdwardsPoint as XmrPoint;
+use ciphersuite::Ciphersuite;
 use modular_frost::curve::Curve;
-use modular_frost::curve::Group;
+use modular_frost::sign::Writable;
+use monero::consensus::ReadExt;
 use rand_core::{CryptoRng, RngCore};
+use std::io::Read;
 use std::ops::Mul;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const DOMAIN: &[u8] = b"FVSS-EncryptedShare";
 
-/// An encrypted witness shard $\Xi$ for a participant in the payment channel.
+/// An encrypted witness shard $\X_i$ for a participant in the payment channel.
 ///
 /// Each party encrypts two shards. One for the counterparty, and one for the KES.
 /// If `is_kes_shard` is true, this shard is intended for the KES; and `channel_role` indicates the role of the party
 /// who created the shard.
 /// If `is_kes_shard` is false, this shard is intended for the counterparty; and `channel_role` indicates the role of
 /// the recipient.
+#[derive(Clone)]
 pub struct EncryptedShard<C: Curve> {
+    /// The encrypted value of the shard.
     encrypted_shard: C::F,
+    /// The public nonce used in the encryption.
     public_nonce: C::G,
+    /// The role of the party who created this shard.
     role: ChannelRole,
+    /// Whether this shard is intended for the KES.
     is_kes_shard: bool,
 }
 
@@ -49,6 +57,19 @@ impl<C: Curve> EncryptedShard<C> {
         Self { role, is_kes_shard, encrypted_shard: encrypted_point, public_nonce }
     }
 
+    /// Read an EncryptedShard from something implementing Read.
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let role = reader
+            .read_u8()
+            .map_err(|e| ReadError::new("ChannelRole", e.to_string()))
+            .and_then(ChannelRole::try_from)?;
+        let is_kes_shard = reader.read_u8().map_err(|e| ReadError::new("is_kes_shard", e.to_string()))? != 0;
+        let encrypted_shard = read_field_element::<C, _>(reader).map_err(|e| ReadError::new("shard", e.to_string()))?;
+        let public_nonce =
+            read_group_element::<C, _>(reader).map_err(|e| ReadError::new("public_nonce", e.to_string()))?;
+        Ok(Self { encrypted_shard, is_kes_shard, role, public_nonce })
+    }
+
     /// Decrypt a witness shard using the recipient's secret key on the given curve using ephemeral Diffie-Hellman exchange.
     pub fn decrypt_shard(&self, secret: &C::F) -> Shard<C> {
         let shared_point = self.public_nonce * secret;
@@ -67,33 +88,6 @@ pub struct Shard<C: Curve> {
     shard: C::F,
     pub is_kes_shard: bool,
     role: ChannelRole,
-}
-
-impl Shard<Ed25519> {
-    /// Verify the shard corresponds to the witness commitment, given the witness commitment point,
-    /// $T_0 = \omega_0 \cdot G$, and the blinding_commitment commitment $C_0 = a \cdot G$, generated in
-    /// `generate_initial_shards`.
-    pub fn verify(&self, witness_commitment: &XmrPoint, blinding_commitment: &XmrPoint) -> bool {
-        if self.is_kes_shard {
-            self.verify_kes_shard(witness_commitment, blinding_commitment)
-        } else {
-            self.verify_peer_shard(witness_commitment, blinding_commitment)
-        }
-    }
-
-    fn verify_peer_shard(&self, witness_commitment: &XmrPoint, blinding_commitment: &XmrPoint) -> bool {
-        // peer shard is sigma_1, so verification is G * sigma_1 + (a * G + omega_0 * G) == 0
-        let lhs = Ed25519::generator() * self.shard;
-        let rhs = -(*blinding_commitment + witness_commitment);
-        lhs == rhs
-    }
-
-    fn verify_kes_shard(&self, witness_commitment: &XmrPoint, blinding_commitment: &XmrPoint) -> bool {
-        // kes shard is sigma_2, so verification is G * sigma_2 ?== 2T0 + C0
-        let lhs = Ed25519::generator() * self.shard;
-        let rhs = witness_commitment.double() + blinding_commitment;
-        lhs == rhs
-    }
 }
 
 impl<C: Curve> Shard<C> {
@@ -119,6 +113,16 @@ impl<C: Curve> Drop for Shard<C> {
 impl<C: Curve> HasRole for Shard<C> {
     fn role(&self) -> ChannelRole {
         self.role
+    }
+}
+
+impl<C: Curve> Writable for EncryptedShard<C> {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&[self.role.as_u8()])?;
+        writer.write_all(&[self.is_kes_shard as u8])?;
+        write_field_element::<C, _>(writer, &self.encrypted_shard)?;
+        write_group_element::<C, _>(writer, &self.public_nonce)?;
+        Ok(())
     }
 }
 

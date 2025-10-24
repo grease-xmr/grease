@@ -1,4 +1,6 @@
+use crate::error::ReadError;
 use crate::grease_protocol::error::WitnessError;
+use crate::grease_protocol::utils::write_group_element;
 use blake2::Blake2b512;
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::GroupEncoding;
@@ -12,11 +14,30 @@ use k256::ProjectivePoint;
 use log::*;
 use modular_frost::algorithm::SchnorrSignature;
 use modular_frost::curve::Curve;
+use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
+use std::io;
+use std::io::{Read, Write};
 use zeroize::{Zeroize, Zeroizing};
 
+#[derive(Clone)]
+pub struct EdSchnorrSignature(pub SchnorrSignature<Ed25519>);
+
+impl EdSchnorrSignature {
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let sig = SchnorrSignature::<Ed25519>::read(reader)?;
+        Ok(EdSchnorrSignature(sig))
+    }
+}
+
+impl Writable for EdSchnorrSignature {
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.0.write(writer)
+    }
+}
+
 pub trait Dleq<C: Curve>: Curve {
-    type Proof: Clone;
+    type Proof: Clone + Writable;
     type Error: Into<WitnessError>;
 
     /// Generate a new set of scalars (x, y) such that they are equivalent on both curves, in a sense that they stem
@@ -25,13 +46,16 @@ pub trait Dleq<C: Curve>: Curve {
         rng: &mut R,
     ) -> Result<(Self::Proof, (XmrScalar, <C as Ciphersuite>::F)), Self::Error>;
 
-    /// Verify that the provided proof shows that the discrete log of x in Ed25519 is the same as the discrete log of y in curve C.
-    /// and that the prover possesses knowledge of both discrete logs.
-    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<C as Ciphersuite>::G) -> bool;
+    /// Verify that the provided proof shows that the discrete log of p1 on Ed25519 is the same as the discrete log
+    /// of p2 on curve C, AND that the prover possesses knowledge of both discrete logs.
+    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<C as Ciphersuite>::G) -> bool;
+
+    /// Read the proof from a reader
+    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof>;
 }
 
 impl Dleq<Ed25519> for Ed25519 {
-    type Proof = SchnorrSignature<Ed25519>;
+    type Proof = EdSchnorrSignature;
     type Error = ();
 
     fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<(Self::Proof, (XmrScalar, XmrScalar)), ()> {
@@ -44,18 +68,36 @@ impl Dleq<Ed25519> for Ed25519 {
         let mut zs = Zeroizing::new(secret.clone());
         let proof = SchnorrSignature::sign(&zs, Zeroizing::new(nonce), challenge);
         zs.zeroize();
-        Ok((proof, (secret.clone(), secret)))
+        Ok((EdSchnorrSignature(proof), (secret.clone(), secret)))
     }
 
     fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &XmrPoint) -> bool {
         x.eq(y) && {
-            let challenge = ownership_challenge(&proof.R, &x);
-            proof.verify(x.clone(), challenge)
+            let challenge = ownership_challenge(&proof.0.R, &x);
+            proof.0.verify(x.clone(), challenge)
         }
+    }
+
+    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof> {
+        EdSchnorrSignature::read(reader)
     }
 }
 
-pub type DleqMoneroBjj = ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <BabyJubJub as Ciphersuite>::G>;
+#[derive(Clone)]
+pub struct DleqMoneroBjj(pub ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <BabyJubJub as Ciphersuite>::G>);
+
+impl DleqMoneroBjj {
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let proof = ConciseLinearDLEq::<<Ed25519 as Ciphersuite>::G, <BabyJubJub as Ciphersuite>::G>::read(reader)?;
+        Ok(DleqMoneroBjj(proof))
+    }
+}
+
+impl Writable for DleqMoneroBjj {
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.0.write(writer)
+    }
+}
 
 impl Dleq<BabyJubJub> for Ed25519 {
     type Proof = DleqMoneroBjj;
@@ -73,23 +115,41 @@ impl Dleq<BabyJubJub> for Ed25519 {
         // Unwraps one layer of Zeroizing:
         let xmr = *xmr;
         let foreign_key = <BabyJubJub as Ciphersuite>::F::from(fk.0);
-        Ok((proof, (xmr, foreign_key)))
+        Ok((DleqMoneroBjj(proof), (xmr, foreign_key)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<BabyJubJub as Ciphersuite>::G) -> bool {
+    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<BabyJubJub as Ciphersuite>::G) -> bool {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
         let mut rng = OsRng;
-        match proof.verify(&mut rng, &mut transcript, xmr_bjj_generators()) {
-            Ok((x_rec, y_rec)) => x.eq(&x_rec) && y.eq(&y_rec),
+        match proof.0.verify(&mut rng, &mut transcript, xmr_bjj_generators()) {
+            Ok((x_rec, y_rec)) => p1.eq(&x_rec) && p2.eq(&y_rec),
             Err(e) => {
                 warn!("Error verifying DLEQ proof: {e}");
                 false
             }
         }
     }
+
+    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof> {
+        DleqMoneroBjj::read(reader)
+    }
 }
 
-pub type DleqMoneroBitcoin = ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <Secp256k1 as Ciphersuite>::G>;
+#[derive(Clone)]
+pub struct DleqMoneroBitcoin(pub ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <Secp256k1 as Ciphersuite>::G>);
+
+impl DleqMoneroBitcoin {
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let proof = ConciseLinearDLEq::<<Ed25519 as Ciphersuite>::G, <Secp256k1 as Ciphersuite>::G>::read(reader)?;
+        Ok(DleqMoneroBitcoin(proof))
+    }
+}
+
+impl Writable for DleqMoneroBitcoin {
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.0.write(writer)
+    }
+}
 
 impl Dleq<Secp256k1> for Ed25519 {
     type Proof = DleqMoneroBitcoin;
@@ -103,19 +163,23 @@ impl Dleq<Secp256k1> for Ed25519 {
         let digest = Blake2b512::new().chain(&nonce);
         nonce.zeroize();
         let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_btc_generators(), digest);
-        Ok((proof, (*xmr, *fk)))
+        Ok((DleqMoneroBitcoin(proof), (*xmr, *fk)))
     }
 
     fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<Secp256k1 as Ciphersuite>::G) -> bool {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
         let mut rng = OsRng;
-        match proof.verify(&mut rng, &mut transcript, xmr_btc_generators()) {
+        match proof.0.verify(&mut rng, &mut transcript, xmr_btc_generators()) {
             Ok((x_rec, y_rec)) => x.eq(&x_rec) && y.eq(&y_rec),
             Err(e) => {
                 warn!("Error verifying DLEQ proof: {e}");
                 false
             }
         }
+    }
+
+    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof> {
+        DleqMoneroBitcoin::read(reader)
     }
 }
 
@@ -182,15 +246,39 @@ where
     pub fn verify(&self) -> bool {
         D::verify_dleq(&self.proof, &self.xmr_point, &self.foreign_point)
     }
+
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let proof =
+            D::read(reader).map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read proof: {}", e)))?;
+        let xmr_point = crate::grease_protocol::utils::read_group_element::<Ed25519, R>(reader)
+            .map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read XMR point: {}", e)))?;
+        let foreign_point = crate::grease_protocol::utils::read_group_element::<C, R>(reader)
+            .map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read foreign point: {}", e)))?;
+        Ok(DleqProof { proof, xmr_point, foreign_point })
+    }
+}
+
+impl<C, D> Writable for DleqProof<C, D>
+where
+    C: Curve,
+    D: Dleq<C>,
+{
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.proof.write(writer)?;
+        write_group_element::<Ed25519, W>(writer, &self.xmr_point)?;
+        write_group_element::<C, W>(writer, &self.foreign_point)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::grease_protocol::dleq::Dleq;
+    use crate::crypto::dleq::Dleq;
     use ciphersuite::group::ff::PrimeFieldBits;
     use ciphersuite::group::GroupEncoding;
     use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
     use grease_babyjubjub::BabyJubJub;
+    use modular_frost::sign::Writable;
     use rand_core::OsRng;
     use std::ops::Add;
 

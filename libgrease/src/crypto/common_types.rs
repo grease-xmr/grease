@@ -58,3 +58,5 @@ impl<D: SecureDigest> PartialEq for HashCommitment256<D> {
         self.data == other.data
     }
 }
+
+impl<D: SecureDigest> Eq for HashCommitment256<D> {}

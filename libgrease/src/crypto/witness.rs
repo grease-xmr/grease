@@ -1,14 +1,20 @@
-use crate::crypto::shard_encryption::EncryptedShard;
-use crate::grease_protocol::dleq::{Dleq, DleqProof};
+use crate::crypto::dleq::{Dleq, DleqProof};
+use crate::crypto::shard_encryption::{EncryptedShard, Shard};
+use crate::error::ReadError;
 use crate::grease_protocol::error::WitnessError;
+use crate::grease_protocol::open_channel::OpenProtocolError;
+use crate::grease_protocol::utils::{read_group_element, write_group_element};
 use crate::payment_channel::{ChannelRole, HasRole};
+use crate::XmrPoint;
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::Group;
 use ciphersuite::{Ciphersuite, Ed25519};
 use dalek_ff_group::{EdwardsPoint, Scalar as XmrScalar};
 use grease_babyjubjub::BabyJubJub;
 use modular_frost::curve::Curve as FrostCurve;
+use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
+use std::io::{Read, Write};
 use std::ops::Neg;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -119,6 +125,28 @@ where
     C: FrostCurve,
     D: Dleq<C>,
 {
+    pub fn new<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        role: ChannelRole,
+        witness_0: &XmrScalar,
+    ) -> Result<Self, WitnessError> {
+        let (proof, (sigma2, fk)) = D::generate_dleq(rng).map_err(|e| e.into())?;
+        let mut blinding_factor = sigma2 - witness_0.double();
+        let public_commitment = Ed25519::generator() * witness_0;
+        let blinding_commitment = Ed25519::generator() * &blinding_factor;
+        let sigma1 = (blinding_factor + witness_0).neg();
+        blinding_factor.zeroize();
+        Ok(InitialShards {
+            peer_shard: sigma1,
+            kes_shard: sigma2,
+            kes_shard_fk: fk,
+            public_commitment,
+            blinding_commitment,
+            proof,
+            channel_role: role,
+        })
+    }
+
     pub fn reconstruct_wallet_spend_key(&self) -> XmrScalar {
         self.peer_shard + self.kes_shard
     }
@@ -155,6 +183,32 @@ where
         let peer_shard = EncryptedShard::encrypt_shard(self.role(), false, &self.peer_shard, peer, rng);
         let kes_shard = EncryptedShard::encrypt_shard(self.role(), true, &self.kes_shard_fk, kes, rng);
         Ok((peer_shard, kes_shard))
+    }
+
+    /// Generates a new public Shard record that can be shared with the peer.
+    ///
+    /// As part of this, this function:
+    /// 1. encrypts both the peer shard and the KES shard for the recipient,
+    /// 2. generates a DLEQ proof that the KES shard corresponds to the Monero shard,
+    /// 3. packages the public commitments needed to verify the shards.
+    pub fn generate_public_shard_info<R: RngCore + CryptoRng>(
+        &self,
+        peer_public_key: &XmrPoint,
+        kes_public_key: &<C as Ciphersuite>::G,
+        rng: &mut R,
+    ) -> PublicShardInfo<C, D> {
+        let dleq_proof = self.dleq_proof();
+        let peer_shard =
+            EncryptedShard::<Ed25519>::encrypt_shard(self.role(), false, &self.peer_shard, peer_public_key, rng);
+        let kes_shard = EncryptedShard::encrypt_shard(self.role(), true, &self.kes_shard_fk, kes_public_key, rng);
+        PublicShardInfo {
+            channel_role: self.role(),
+            peer_shard,
+            kes_shard,
+            public_witness: self.public_commitment.clone(),
+            blinding_commitment: self.blinding_commitment.clone(),
+            dleq_proof,
+        }
     }
 }
 
@@ -200,4 +254,115 @@ where
         proof,
         channel_role: role,
     })
+}
+
+pub struct PublicShardInfo<C: FrostCurve, D: Dleq<C>> {
+    /// The role of this witness in the payment channel.
+    channel_role: ChannelRole,
+    /// The encrypted shard given to the peer, $\Xi_1$.
+    peer_shard: EncryptedShard<Ed25519>,
+    /// The peer shard handed to the KES, $\Xi_2$.
+    kes_shard: EncryptedShard<C>,
+    /// The public commitment to the witness, $T_0 = \omega \cdot G$
+    public_witness: EdwardsPoint,
+    /// The public commitment to the blinding factor, $C_0 = a \cdot G$
+    blinding_commitment: EdwardsPoint,
+    /// The DLEQ proof that the shard given to the KES corresponds to the shard in Monero.
+    dleq_proof: DleqProof<C, D>,
+}
+
+impl<C: FrostCurve, D: Dleq<C>> PublicShardInfo<C, D> {
+    pub fn peer_shard(&self) -> &EncryptedShard<Ed25519> {
+        &self.peer_shard
+    }
+
+    pub fn decrypt_and_verify(&self, secret: &XmrScalar) -> Result<Shard<Ed25519>, WitnessError> {
+        let shard = self.peer_shard.decrypt_shard(secret);
+        match self.verify_peer_shard(&shard) {
+            true => Ok(shard),
+            false => Err(WitnessError::IncorrectShard),
+        }
+    }
+
+    /// Verify the that the peer's shard corresponds to the public witness point,
+    /// $T_0 = \omega_0 \cdot G$,
+    /// and the blinding_commitment commitment $C_0 = a \cdot G$.
+    pub fn verify_peer_shard(&self, shard: &Shard<Ed25519>) -> bool {
+        // peer shard is sigma_1, so verification is G * sigma_1 + (a * G + omega_0 * G) == 0
+        let lhs = Ed25519::generator() * shard.shard();
+        let rhs = -(self.blinding_commitment + self.public_witness);
+        lhs == rhs
+    }
+
+    /// Verify that the KES shard corresponds to the public witness point,
+    /// $S_0 = \omega_0 \cdot G$, and the blinding_commitment commitment $C_0 = a \cdot G$.
+    fn verify_kes_shard(&self, shard: Shard<Ed25519>) -> bool {
+        // kes shard is sigma_2, so verification is G * sigma_2 ?== 2T0 + C0
+        let lhs = Ed25519::generator() * shard.shard();
+        let rhs = self.public_witness.double() + self.blinding_commitment;
+        lhs == rhs
+    }
+
+    pub fn kes_shard(&self) -> &EncryptedShard<C> {
+        &self.kes_shard
+    }
+
+    pub fn public_commitment(&self) -> &EdwardsPoint {
+        &self.public_witness
+    }
+
+    pub fn blinding_commitment(&self) -> &EdwardsPoint {
+        &self.blinding_commitment
+    }
+
+    pub fn dleq_proof(&self) -> &DleqProof<C, D> {
+        &self.dleq_proof
+    }
+
+    pub fn verify_dleq_proof(&self) -> Result<(XmrPoint, C::G), OpenProtocolError> {
+        if !self.dleq_proof.verify() {
+            return Err(OpenProtocolError::InvalidDataFromPeer("DLEQ proof verification failed".into()));
+        }
+        let xmr_point = self.dleq_proof.xmr_point;
+        let foreign_point = self.dleq_proof.foreign_point;
+        Ok((xmr_point, foreign_point))
+    }
+
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, OpenProtocolError> {
+        let channel_role = ChannelRole::read(reader)?;
+        let peer_shard = EncryptedShard::<Ed25519>::read(reader)?;
+        let kes_shard = EncryptedShard::<C>::read(reader)?;
+        let public_commitment = read_group_element::<Ed25519, _>(reader)
+            .map_err(|e| ReadError::new("PublicShardInfo.public_commitment", e.to_string()))?;
+        let blinding_commitment = read_group_element::<Ed25519, _>(reader)
+            .map_err(|e| ReadError::new("PublicShardInfo.blinding_commitment", e.to_string()))?;
+        let dleq_proof = DleqProof::<C, D>::read(reader)
+            .map_err(|e| OpenProtocolError::InvalidDataFromPeer(format!("Failed to read DLEQ proof: {}", e)))?;
+        Ok(Self {
+            channel_role,
+            peer_shard,
+            kes_shard,
+            public_witness: public_commitment,
+            blinding_commitment,
+            dleq_proof,
+        })
+    }
+}
+
+impl<C: FrostCurve, D: Dleq<C>> HasRole for PublicShardInfo<C, D> {
+    fn role(&self) -> ChannelRole {
+        self.channel_role
+    }
+}
+
+impl<C: FrostCurve, D: Dleq<C>> Writable for PublicShardInfo<C, D> {
+    fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.channel_role.write(writer)?;
+        self.peer_shard.write(writer)?;
+        self.kes_shard.write(writer)?;
+        write_group_element::<Ed25519, _>(writer, &self.public_witness)?;
+        write_group_element::<Ed25519, _>(writer, &self.blinding_commitment)?;
+        self.dleq_proof.write(writer)?;
+        Ok(())
+    }
 }

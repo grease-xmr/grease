@@ -1,6 +1,8 @@
+use crate::error::ReadError;
 use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
+use modular_frost::sign::Writable;
 use paste::paste;
 use rand_core::{CryptoRng, CryptoRngCore, RngCore};
 use serde::ser::SerializeStruct;
@@ -262,6 +264,41 @@ macro_rules! schnorr_impl {
                 $(
                     && (self.$s_field.ct_eq(&other.$s_field).unwrap_u8() == 1)
                 )*
+            }
+        }
+
+        impl<C: Ciphersuite> Writable for $name<C> {
+            fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+                use crate::grease_protocol::utils::{write_group_element, write_field_element};
+                $( write_field_element::<C, _>(writer, &self.$s_field)?; )*
+                $( write_group_element::<C, _>(writer, &self.$p_field)?; )*
+                Ok(())
+            }
+        }
+
+        #[allow(non_snake_case)]
+        impl<C: Ciphersuite> $name<C> {
+            /// Read the signature from the provided reader.
+            pub fn read<R: std::io::Read>(reader: &mut R) -> Result<Self, ReadError> {
+                use crate::grease_protocol::utils::{read_group_element, read_field_element};
+                $(
+                    let $s_field = read_field_element::<C, _>(reader)
+                    .map_err(|e| ReadError::new(
+                        concat!(stringify!($name), ".", stringify!($s_field)),
+                        e.to_string()
+                    ))?;
+                )*
+                $(
+                    let $p_field = read_group_element::<C, _>(reader)
+                        .map_err(|e| ReadError::new(
+                            concat!(stringify!($name), ".", stringify!($p_field)),
+                            e.to_string()
+                    ))?;
+                )*
+                Ok(Self {
+                    $( $s_field, )*
+                    $( $p_field, )*
+                })
             }
         }
     }
