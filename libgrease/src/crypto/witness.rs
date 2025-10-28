@@ -77,6 +77,11 @@ impl<C: FrostCurve> Witness<C> {
     pub fn reconstruct_wallet_spend_key(&self) -> XmrScalar {
         self.local_shard + self.peer_shard
     }
+
+    /// Returns the point $\sigma_k \cdot G$ on the KES curve.
+    pub fn kes_public_point(&self) -> &<C as Ciphersuite>::G {
+        &self.kes_public_point
+    }
 }
 
 /// A convenience struct holding initial shard information
@@ -86,12 +91,12 @@ where
     D: Dleq<C>,
 {
     /// The shard given to the peer, $\sigma_1$.
-    peer_shard: XmrScalar,
+    peer_shard: Shard<Ed25519>,
     /// The peer shard handed to the KES, $\sigma_2$. There is an accompanying DLEQ proof that proces that the little-
     /// endian bit representation of this scalar matches the shard given to the KES in $\Xi_2$.
-    kes_shard: XmrScalar,
+    kes_shard: Shard<Ed25519>,
     /// The KES shard on the KES curve, $\sigma_k$. Provided for convenience
-    kes_shard_fk: <C as Ciphersuite>::F,
+    kes_shard_fk: Shard<C>,
     /// The public commitment to the witness, $T_0 = \omega \cdot G$
     public_commitment: EdwardsPoint,
     /// The public commitment to the blinding factor, $C_0 = a \cdot G$
@@ -135,11 +140,14 @@ where
         let public_commitment = Ed25519::generator() * witness_0;
         let blinding_commitment = Ed25519::generator() * &blinding_factor;
         let sigma1 = (blinding_factor + witness_0).neg();
+        let peer_shard = Shard::new(sigma1, false, role.other());
+        let kes_shard = Shard::new(sigma2, true, role);
+        let kes_shard_fk = Shard::new(fk, true, role);
         blinding_factor.zeroize();
         Ok(InitialShards {
-            peer_shard: sigma1,
-            kes_shard: sigma2,
-            kes_shard_fk: fk,
+            peer_shard,
+            kes_shard,
+            kes_shard_fk,
             public_commitment,
             blinding_commitment,
             proof,
@@ -148,25 +156,25 @@ where
     }
 
     pub fn reconstruct_wallet_spend_key(&self) -> XmrScalar {
-        self.peer_shard + self.kes_shard
+        *self.peer_shard.shard() + self.kes_shard.shard()
     }
 
-    pub fn peer_shard(&self) -> &XmrScalar {
+    pub fn peer_shard(&self) -> &Shard<Ed25519> {
         &self.peer_shard
     }
 
-    pub fn kes_shard(&self) -> &XmrScalar {
+    pub fn kes_shard(&self) -> &Shard<Ed25519> {
         &self.kes_shard
     }
 
-    pub fn foreign_kes_shard(&self) -> &<C as Ciphersuite>::F {
+    pub fn foreign_kes_shard(&self) -> &Shard<C> {
         &self.kes_shard_fk
     }
 
     pub fn dleq_proof(&self) -> DleqProof<C, D> {
         let proof = self.proof.clone();
-        let xmr_point = Ed25519::generator() * self.kes_shard;
-        let foreign_point = C::generator() * &self.kes_shard_fk;
+        let xmr_point = Ed25519::generator() * self.kes_shard.shard();
+        let foreign_point = C::generator() * self.kes_shard_fk.shard();
         DleqProof::new(proof, xmr_point, foreign_point)
     }
 
@@ -180,8 +188,8 @@ where
         kes: &<C as Ciphersuite>::G,
         rng: &mut R,
     ) -> Result<(EncryptedShard<Ed25519>, EncryptedShard<C>), WitnessError> {
-        let peer_shard = EncryptedShard::encrypt_shard(self.role(), false, &self.peer_shard, peer, rng);
-        let kes_shard = EncryptedShard::encrypt_shard(self.role(), true, &self.kes_shard_fk, kes, rng);
+        let peer_shard = EncryptedShard::encrypt_shard(&self.peer_shard, peer, rng);
+        let kes_shard = EncryptedShard::encrypt_shard(&self.kes_shard_fk, kes, rng);
         Ok((peer_shard, kes_shard))
     }
 
@@ -198,9 +206,8 @@ where
         rng: &mut R,
     ) -> PublicShardInfo<C, D> {
         let dleq_proof = self.dleq_proof();
-        let peer_shard =
-            EncryptedShard::<Ed25519>::encrypt_shard(self.role(), false, &self.peer_shard, peer_public_key, rng);
-        let kes_shard = EncryptedShard::encrypt_shard(self.role(), true, &self.kes_shard_fk, kes_public_key, rng);
+        let peer_shard = EncryptedShard::<Ed25519>::encrypt_shard(&self.peer_shard, peer_public_key, rng);
+        let kes_shard = EncryptedShard::encrypt_shard(&self.kes_shard_fk, kes_public_key, rng);
         PublicShardInfo {
             channel_role: self.role(),
             peer_shard,
@@ -241,14 +248,17 @@ where
 {
     let (proof, (sigma2, fk)) = D::generate_dleq(rng).map_err(|e| e.into())?;
     let mut blinding_factor = sigma2 - witness_0.double();
-    let public_commitment = EdwardsPoint::generator() * witness_0;
-    let blinding_commitment = EdwardsPoint::generator() * &blinding_factor;
+    let public_commitment = Ed25519::generator() * witness_0;
+    let blinding_commitment = Ed25519::generator() * &blinding_factor;
     let sigma1 = (blinding_factor + witness_0).neg();
     blinding_factor.zeroize();
+    let peer_shard = Shard::new(sigma1, false, role.other());
+    let kes_shard = Shard::new(sigma2, true, role);
+    let kes_shard_fk = Shard::new(fk, true, role);
     Ok(InitialShards {
-        peer_shard: sigma1,
-        kes_shard: sigma2,
-        kes_shard_fk: fk,
+        peer_shard,
+        kes_shard,
+        kes_shard_fk,
         public_commitment,
         blinding_commitment,
         proof,
@@ -294,8 +304,8 @@ impl<C: FrostCurve, D: Dleq<C>> PublicShardInfo<C, D> {
         lhs == rhs
     }
 
-    /// Verify that the KES shard corresponds to the public witness point,
-    /// $S_0 = \omega_0 \cdot G$, and the blinding_commitment commitment $C_0 = a \cdot G$.
+    /// Verify that the KES shard (using Ed25519 coordinates) corresponds to the public witness point,
+    /// $T_0 = \omega_0 \cdot G$, and the blinding_commitment commitment $C_0 = a \cdot G$.
     fn verify_kes_shard(&self, shard: Shard<Ed25519>) -> bool {
         // kes shard is sigma_2, so verification is G * sigma_2 ?== 2T0 + C0
         let lhs = Ed25519::generator() * shard.shard();

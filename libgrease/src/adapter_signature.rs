@@ -309,7 +309,7 @@ schnorr_impl!(SchnorrSignature (2) scalars=[s] points=[R]);
 
 #[cfg(test)]
 mod tests {
-    use crate::adapter_signature::{AdaptedSignature, SchnorrSignature};
+    use crate::adapter_signature::AdaptedSignature;
     use crate::XmrScalar;
     use ciphersuite::group::ff::Field;
     use ciphersuite::{Ciphersuite, Ed25519};

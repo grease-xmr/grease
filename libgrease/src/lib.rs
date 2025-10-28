@@ -14,8 +14,5 @@ pub mod storage;
 pub mod channel_metadata;
 pub mod state_machine;
 
-// Concerete implementations
-pub mod noir_impl;
-
 // Re-exports
 pub use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};

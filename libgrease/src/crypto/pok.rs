@@ -1,7 +1,7 @@
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{write_field_element, write_group_element};
 use ciphersuite::group::ff::Field;
-use ciphersuite::group::GroupEncoding;
+use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
 use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
@@ -71,6 +71,12 @@ impl<C: Ciphersuite> SchnorrPoK<C> {
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
         let pub_nonce = crate::grease_protocol::utils::read_group_element::<C, R>(reader)
             .map_err(|e| ReadError::new("SchnorrPoK.pub_nonce", e.to_string()))?;
+        if pub_nonce.is_identity().into() {
+            return Err(ReadError::new(
+                "SchnorrPoK.pub_nonce",
+                "public nonce cannot be the identity element".to_string(),
+            ));
+        }
         let s = crate::grease_protocol::utils::read_field_element::<C, R>(reader)
             .map_err(|e| ReadError::new("SchnorrPoK.s", e.to_string()))?;
         Ok(Self { pub_nonce, s })
@@ -109,6 +115,9 @@ mod tests {
         let sigma_pubkey = Ed25519::generator() * &shard;
         let kes_pubkey = Ed25519::generator() * &private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
+        assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
+        let data = pok.serialize();
+        let pok = KesPoK::<Ed25519>::read(&mut &data[..]).unwrap();
         assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
         let invalid_kes_pubkey = kes_pubkey + Ed25519::generator();
         assert!(!pok.verify(&sigma_pubkey, &invalid_kes_pubkey));

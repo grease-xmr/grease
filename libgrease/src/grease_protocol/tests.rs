@@ -1,11 +1,10 @@
 use crate::adapter_signature::AdaptedSignature;
 use crate::crypto::common_types::HashCommitment256;
-use crate::crypto::dleq::{Dleq, DleqMoneroBjj};
 use crate::crypto::keys::Curve25519PublicKey;
 use crate::crypto::keys::Curve25519Secret;
 use crate::crypto::keys::PublicKey;
 use crate::crypto::pok::KesPoK;
-use crate::crypto::witness::{generate_initial_shards, InitialShards, PublicShardInfo};
+use crate::crypto::witness::{InitialShards, PublicShardInfo};
 use crate::crypto::Commit;
 use crate::grease_protocol::open_channel::{
     AdapterSignatureHandler, CustomerOpenProtocol, HasPublicKey, HasSecretKey, MerchantOpenProtocol,
@@ -16,9 +15,8 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use crate::{XmrPoint, XmrScalar};
 use blake2::Blake2b512;
 use ciphersuite::group::GroupEncoding;
+use ciphersuite::Ciphersuite;
 use ciphersuite::Ed25519;
-use ciphersuite::{Ciphersuite, Secp256k1};
-use dalek_ff_group::Scalar;
 use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
 use grease_babyjubjub::{BabyJubJub, BjjPoint, Scalar as BjjScalar};
 use modular_frost::curve::Field;
@@ -26,6 +24,7 @@ use modular_frost::sign::Writable;
 use monero::consensus::{ReadExt, WriteExt};
 use rand_core::{CryptoRng, OsRng, RngCore};
 use std::io::{Read, Write};
+use subtle::ConstantTimeEq;
 
 struct MultisigWalletKey {
     pub role: ChannelRole,
@@ -125,11 +124,6 @@ impl MultisigWalletKeys for MultisigWalletKey {
     fn shared_info(&self) -> Self::SharedWalletInfo {
         SharedWalletInfo { role: self.role, public_key: self.public_key.clone() }
     }
-}
-
-fn keypair() -> (Curve25519Secret, Curve25519PublicKey) {
-    let mut rng = OsRng;
-    Curve25519PublicKey::keypair(&mut rng)
 }
 
 fn kes_keypair() -> (BjjScalar, BjjPoint) {
@@ -382,7 +376,10 @@ fn channel_opening_protocol() {
 
     assert!(sigma1_m.role().is_merchant(), "Not the merchant's shard");
     // Test only assertion:
-    assert_eq!(sigma1_m.shard(), customer_protocol.initial_shards().unwrap().peer_shard());
+    assert_eq!(
+        sigma1_m.ct_eq(customer_protocol.initial_shards().unwrap().peer_shard()).unwrap_u8(),
+        1
+    );
     // Merchant verifies the adapter signature
     let adapted_c =
         AdaptedSignature::<Ed25519>::read(&mut &adapted_c_data[..]).expect("Expected adapted_c deserialization");
@@ -433,7 +430,7 @@ fn channel_opening_protocol() {
         .expect("Expected customer decrypt and verify shard");
     let (pub_shard_m, sigma2_m_pub) = shard_data_m.verify_dleq_proof().expect("Expected DLEQ proof verification");
     assert!(sigma1_c.role().is_customer(), "Not the customer's shard");
-    assert_eq!(sigma1_c.shard(), &merchant_shard_for_customer);
+    assert_eq!(sigma1_c.ct_eq(&merchant_shard_for_customer).unwrap_u8(), 1);
     // The customer verifies the adapter signature
     assert!(adapted_m.verify(
         &customer_protocol.peer_shared_wallet_info().unwrap().public_key().as_point(),
@@ -448,9 +445,9 @@ fn channel_opening_protocol() {
     assert!(sigma2_c.role().is_customer(), "Not the customer's KES shard");
     assert!(sigma2_m.role().is_merchant(), "Not the merchant's KES shard");
     // // The KES produces Proof of Knowledge proofs for its shards
-    let pok_m = KesPoK::<BabyJubJub>::prove(&mut rng, &kes_shard_m, &kes_secret);
+    let pok_m = KesPoK::<BabyJubJub>::prove(&mut rng, &kes_shard_m.shard(), &kes_secret);
     let customer_w0 = customer_protocol.initial_shards().unwrap();
-    let pok_c = KesPoK::<BabyJubJub>::prove(&mut rng, &customer_w0.foreign_kes_shard(), &kes_secret);
+    let pok_c = KesPoK::<BabyJubJub>::prove(&mut rng, &customer_w0.foreign_kes_shard().shard(), &kes_secret);
     let pok_c_data = pok_c.serialize();
     let pok_m_data = pok_m.serialize();
     // --> Send (pok_m, pok_c) to merchant (and customer)
