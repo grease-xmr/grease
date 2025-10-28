@@ -229,43 +229,6 @@ where
     }
 }
 
-/// Generate the initial shards from $\omega_0$, along with the DLEQ proof that the KES shard corresponds to the
-/// Monero shard.
-///
-/// Since the DLEQ proof generation also produces a random scalar $\sigma_2$, we derive the blinding factor
-/// as $a = \sigma_2 - 2 \cdot \omega_0$ and then compute $\sigma_1 = -(a + \omega_0)$.
-/// This ensures that $\sigma_1 + \sigma_2 = \omega_0$ as required, and we have the necessary guarantees that $\sigma_2$
-/// is a valid scalar on both chains.
-pub fn generate_initial_shards<C, D, R>(
-    role: ChannelRole,
-    witness_0: &XmrScalar,
-    rng: &mut R,
-) -> Result<InitialShards<C, D>, WitnessError>
-where
-    R: RngCore + CryptoRng,
-    C: FrostCurve,
-    D: Dleq<C>,
-{
-    let (proof, (sigma2, fk)) = D::generate_dleq(rng).map_err(|e| e.into())?;
-    let mut blinding_factor = sigma2 - witness_0.double();
-    let public_commitment = Ed25519::generator() * witness_0;
-    let blinding_commitment = Ed25519::generator() * &blinding_factor;
-    let sigma1 = (blinding_factor + witness_0).neg();
-    blinding_factor.zeroize();
-    let peer_shard = Shard::new(sigma1, false, role.other());
-    let kes_shard = Shard::new(sigma2, true, role);
-    let kes_shard_fk = Shard::new(fk, true, role);
-    Ok(InitialShards {
-        peer_shard,
-        kes_shard,
-        kes_shard_fk,
-        public_commitment,
-        blinding_commitment,
-        proof,
-        channel_role: role,
-    })
-}
-
 pub struct PublicShardInfo<C: FrostCurve, D: Dleq<C>> {
     /// The role of this witness in the payment channel.
     channel_role: ChannelRole,
