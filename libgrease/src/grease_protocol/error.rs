@@ -10,6 +10,8 @@ pub enum WitnessError {
     Ed25519ScalarTooLarge,
     #[error("An equivalent ZK and Ed25519 representation could not be found during initial witness generation.")]
     InitializationFailure,
+    #[error("The provided shard is not correct.")]
+    IncorrectShard,
     #[error("An unspecified witness error occurred.")]
     Unspecified,
 }

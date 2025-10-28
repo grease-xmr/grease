@@ -1,7 +1,11 @@
+use crate::error::ReadError;
+use crate::grease_protocol::utils::{write_field_element, write_group_element};
 use ciphersuite::group::ff::Field;
-use ciphersuite::group::GroupEncoding;
+use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
+use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
+use std::io::Read;
 use zeroize::Zeroize;
 
 pub struct KesPoK<C: Ciphersuite> {
@@ -19,6 +23,20 @@ impl<C: Ciphersuite> KesPoK<C> {
 
     pub fn verify(&self, sigma_pubkey: &C::G, kes_pubkey: &C::G) -> bool {
         self.private_key_pok.verify(kes_pubkey) && self.shard_pok.verify(sigma_pubkey)
+    }
+
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let shard_pok = SchnorrPoK::<C>::read(reader)?;
+        let private_key_pok = SchnorrPoK::<C>::read(reader)?;
+        Ok(Self { shard_pok, private_key_pok })
+    }
+}
+
+impl<C: Ciphersuite> Writable for KesPoK<C> {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
+        self.shard_pok.write(writer)?;
+        self.private_key_pok.write(writer)?;
+        Ok(())
     }
 }
 
@@ -49,6 +67,28 @@ impl<C: Ciphersuite> SchnorrPoK<C> {
         let rhs = self.pub_nonce + *public_key * Self::challenge(&self.pub_nonce, &public_key);
         lhs == rhs
     }
+
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let pub_nonce = crate::grease_protocol::utils::read_group_element::<C, R>(reader)
+            .map_err(|e| ReadError::new("SchnorrPoK.pub_nonce", e.to_string()))?;
+        if pub_nonce.is_identity().into() {
+            return Err(ReadError::new(
+                "SchnorrPoK.pub_nonce",
+                "public nonce cannot be the identity element".to_string(),
+            ));
+        }
+        let s = crate::grease_protocol::utils::read_field_element::<C, R>(reader)
+            .map_err(|e| ReadError::new("SchnorrPoK.s", e.to_string()))?;
+        Ok(Self { pub_nonce, s })
+    }
+}
+
+impl<C: Ciphersuite> Writable for SchnorrPoK<C> {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
+        write_group_element::<C, W>(writer, &self.pub_nonce)?;
+        write_field_element::<C, W>(writer, &self.s)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -75,6 +115,9 @@ mod tests {
         let sigma_pubkey = Ed25519::generator() * &shard;
         let kes_pubkey = Ed25519::generator() * &private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
+        assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
+        let data = pok.serialize();
+        let pok = KesPoK::<Ed25519>::read(&mut &data[..]).unwrap();
         assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
         let invalid_kes_pubkey = kes_pubkey + Ed25519::generator();
         assert!(!pok.verify(&sigma_pubkey, &invalid_kes_pubkey));

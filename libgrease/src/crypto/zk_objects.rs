@@ -1,6 +1,6 @@
 use crate::crypto::common_types::HashCommitment256;
+use crate::crypto::Commit;
 use crate::grease_protocol::utils::write_field_element;
-use crate::grease_protocol::Commit;
 use crate::monero::data_objects::MultisigSplitSecrets;
 use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::GroupEncoding;
@@ -116,7 +116,7 @@ impl<C: Curve> Writable for PrivateNonces<C> {
 mod test {
     use super::PublicInputs;
     use crate::crypto::common_types::HashCommitment256;
-    use crate::grease_protocol::Commit;
+    use crate::crypto::Commit;
     use blake2::Blake2b512;
     use ciphersuite::group::ff::Field;
     use ciphersuite::{Ciphersuite, Secp256k1};

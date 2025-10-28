@@ -3,10 +3,10 @@ sequenceDiagram
     participant C as Customer
     participant M as Merchant
     participant L1 as Monero blockchain
-    participant L2 as ZK chain
+    participant KES as KES
 
- 
-    C->>C: Generate multisig wallet keys\n(k_c, P_c)
+    KES-->KES: Create public/private keypair (k_K, P_K).\nPublish P_K.
+    C->>C: Generate multisig wallet keys\n(ωc_0, Tc_0)
     C->>M: Share public key (P_c)
     M->>M: Generate multisig wallet keys\n(k_m, P_m)
     M->>M: Create multisig wallet\n(k_m, P_m, P_c)
@@ -17,8 +17,8 @@ sequenceDiagram
     C->>C: Split and encrypt wallet spend key -> (peer-shard_c, kes-shard_c)
     C->>M: Share Customer's shards (peer-shard_c, kes-shard_c)
     M->>M: Split and encrypt wallet spend key -> (peer-shard_m, kes-shard_m)
-    M->>L2: Create KES\n(kes-shard_c, kes-shard_m)
-    L2->>M: KES contract created\n(kes-proof)
+    M->>KES: Create KES\n(kes-shard_c, kes-shard_m)
+    KES->>M: KES contract created\n(kes-proof)
     M->>C: Share encrypted shards and KES proof\n(peer-shard_m, kes-shard_m, kes-proof)
     C->>C: Verify KES proof
     alt KES proof valid
