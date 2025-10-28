@@ -2,8 +2,10 @@ use flexible_transcript::{SecureDigest, Transcript};
 use modular_frost::sign::Writable;
 
 pub trait Commit<D: SecureDigest> {
-    type Committed: Clone + Writable;
+    type Committed: Clone + Writable + Eq;
     type Transcript: Transcript;
     fn commit(&self) -> Self::Committed;
-    fn verify(&self, commitment: &Self::Committed) -> bool;
+    fn verify(&self, commitment: &Self::Committed) -> bool {
+        self.commit() == *commitment
+    }
 }
