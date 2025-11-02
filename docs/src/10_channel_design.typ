@@ -91,7 +91,7 @@ On a high level, the payment channel lifecycle goes through 6 phases:
   broadcast  of the commitment transaction (if necessary).
 - `Disputing` - The channel is being disputed because someone initiated a force-close. If the local party initiated
   the force close, this phase includes invoking the force-close on the KES, and waiting for the challenge window to
-  expire so that the counterparty's secret share can be recovered in order to reconstruct the spending key.
+  expire so that the counterparty's secret share can be recovered in order to synthesize the closing transaction.
   If the other party initiated the force-close, we can invoke the KES to challenge the closing state, or do
   nothing and accept the state given by the counterparty.
   The final state transition is always to the `Closed` state, only the reason can vary.
