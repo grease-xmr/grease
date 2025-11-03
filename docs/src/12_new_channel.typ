@@ -17,5 +17,7 @@ There are *three* half-rounds of communication in this phase#footnote([See `serv
         - The merchant's id
     - Protocol-specific initialization data. This might include commitments for parameters that will be shared later,
       the KES public keys that can be accepted, etc.
+2. New channel proposal from Customer to Merchant
+3. Accepting the proposal from Merchant to Customer
 
 #include "../diagrams/new_channel_sequence.md"
