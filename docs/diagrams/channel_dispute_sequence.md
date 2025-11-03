@@ -20,7 +20,7 @@ sequenceDiagram
         Monero-->>Merchant: Transaction confirmed
         Merchant->>Merchant: Move to Closed state
         note left of Merchant: Closed
-    else Verification fails	
+    else Verification fails
         KES-->>Merchant: Reject force close
         Merchant->>Merchant: Move to Closed state (failed)
         note left of Merchant: Closed
