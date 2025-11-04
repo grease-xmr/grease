@@ -1,7 +1,9 @@
+use crate::error::ReadError;
+use crate::grease_protocol::utils::Readable;
 use flexible_transcript::SecureDigest;
 use hex::{FromHex, FromHexError, ToHex};
 use modular_frost::sign::Writable;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 
 /// A 256 bit hash-based commitment to some data, using a specific hash algorithm D.
@@ -14,12 +16,20 @@ pub struct HashCommitment256<D: SecureDigest> {
 impl<D: SecureDigest> HashCommitment256<D> {
     /// Create a new hash commitment from the provided data.
     pub fn new(data: [u8; 32]) -> Self {
-        HashCommitment256 { data, _phantom_data: PhantomData::default() }
+        HashCommitment256 { data, _phantom_data: PhantomData }
     }
 
     /// Get the raw bytes of the commitment.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.data
+    }
+}
+
+impl<D: SecureDigest> Readable for HashCommitment256<D> {
+    fn read<R: Read + ?Sized>(reader: &mut R) -> Result<Self, ReadError> {
+        let mut data = [0u8; 32];
+        reader.read_exact(&mut data).map_err(|e| ReadError::new("HashCommitment256", e.to_string()))?;
+        Ok(HashCommitment256 { data, _phantom_data: PhantomData })
     }
 }
 
@@ -31,12 +41,12 @@ impl<D: SecureDigest> Writable for HashCommitment256<D> {
 
 impl<D: SecureDigest> ToHex for HashCommitment256<D> {
     fn encode_hex<T: FromIterator<char>>(&self) -> T {
-        let s = hex::encode(&self.data);
+        let s = hex::encode(self.data);
         s.chars().collect()
     }
 
     fn encode_hex_upper<T: FromIterator<char>>(&self) -> T {
-        let s = hex::encode_upper(&self.data);
+        let s = hex::encode_upper(self.data);
         s.chars().collect()
     }
 }
@@ -47,7 +57,7 @@ impl<D: SecureDigest> FromHex for HashCommitment256<D> {
     fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
         let mut data = [0u8; 32];
         hex::decode_to_slice(hex, &mut data)?;
-        Ok(HashCommitment256 { data, _phantom_data: PhantomData::default() })
+        Ok(HashCommitment256 { data, _phantom_data: PhantomData })
     }
 }
 

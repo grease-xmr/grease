@@ -7,10 +7,10 @@
 //! - `ChannelForceClose`: This indicates a force close of the channel, and will move the channel to the `Disputed` state.
 //!
 
-use crate::adapter_signature::AdaptedSignature;
 use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
-use crate::crypto::zk_objects::{
+use crate::cryptography::adapter_signature::AdaptedSignature;
+use crate::cryptography::zk_objects::{
     GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs,
     PublicUpdateProof, ShardInfo, UpdateProofs,
 };
@@ -149,14 +149,6 @@ impl EstablishedChannelState {
         // Essentially, only witness_0 is important here, and maybe T_0. which is witness_0.G.
         // The proofs are only needed in a dispute, but when update count is 0, there's no future state to prove in a
         // dispute anyway.
-        let pvt_out = PrivateUpdateOutputs {
-            witness_i: self.my_proof0.private_outputs.witness_0,
-            ..PrivateUpdateOutputs::default()
-        };
-        let pub_out =
-            PublicUpdateOutputs { T_current: self.my_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
-        let peer_pub_out =
-            PublicUpdateOutputs { T_current: self.peer_proof0.public_outputs.T_0, ..PublicUpdateOutputs::default() };
         todo!("Finalize the channel if no updates have been made");
     }
 

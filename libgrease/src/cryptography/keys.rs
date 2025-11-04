@@ -1,15 +1,23 @@
-use crate::crypto::zk_objects::GenericScalar;
+use crate::cryptography::common_types::HashCommitment256;
+use crate::cryptography::zk_objects::GenericScalar;
+use crate::cryptography::Commit;
+use blake2::Blake2b512;
 use ciphersuite::group::ff::Field;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::Scalar;
 use dalek_ff_group::{EdwardsPoint, Scalar as XmrScalar};
+use flexible_transcript::{RecommendedTranscript, Transcript};
 use hex::FromHexError;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use thiserror::Error;
 use zeroize::Zeroizing;
+
+/// A commitment to a Monero wallet public key. It's always a 256-bit Blake2b hash due to the implementation of
+/// [`Commit`] for [`Curve25519PublicKey`].
+pub type PublicKeyCommitment = HashCommitment256<Blake2b512>;
 
 pub trait SecretKey: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> {}
 
@@ -20,6 +28,9 @@ pub trait PublicKey: Clone + PartialEq + Eq + Send + Sync + Serialize + for<'de>
     fn from_secret(secret_key: &Self::SecretKey) -> Self;
 }
 
+/// A secret key for a Monero wallet.
+///
+/// Cloning is safe because the underlying scalar is zeroized on drop automatically.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Curve25519Secret(Zeroizing<XmrScalar>);
 
@@ -112,7 +123,10 @@ impl<'de> Deserialize<'de> for Curve25519Secret {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+/// A public key for a Monero wallet.
+///
+/// Note: EdwardsPoint is `Copy`, so may as well make this `Copy` too.
+#[derive(Clone, PartialEq, Eq, Copy)]
 pub struct Curve25519PublicKey {
     point: EdwardsPoint,
 }
@@ -201,6 +215,19 @@ impl<'de> Deserialize<'de> for Curve25519PublicKey {
     {
         let hex_str = String::deserialize(deserializer)?;
         Curve25519PublicKey::from_hex(&hex_str).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Commit<Blake2b512> for Curve25519PublicKey {
+    type Committed = PublicKeyCommitment;
+    type Transcript = RecommendedTranscript;
+
+    fn commit(&self) -> Self::Committed {
+        let mut t = RecommendedTranscript::new(b"Curve25519PublicKeyCommitment");
+        t.append_message(b"Ed25519.EdwardsPoint", self.to_compressed().to_bytes());
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&t.challenge(b"commitment"));
+        HashCommitment256::new(hash)
     }
 }
 

@@ -28,7 +28,7 @@ mod tests {
     use ark_ff::Field;
 
     #[test]
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     fn check_parameters() {
         let A = <BjjConfig as MontCurveConfig>::COEFF_A;
         let B = <BjjConfig as MontCurveConfig>::COEFF_B;

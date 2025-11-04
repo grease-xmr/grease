@@ -13,16 +13,17 @@ use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::balance::Balances;
 use libgrease::channel_metadata::ChannelMetadata;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use libgrease::crypto::zk_objects::{
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::cryptography::zk_objects::{
     generate_txc0_nonces, GenericPoint, GenericScalar, KesProof, PublicProof0, PublicUpdateProof, ShardInfo,
     UpdateProofs,
 };
+use libgrease::grease_protocol::multisig_wallet::SharedPublicKey;
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
     TransactionId, TransactionRecord,
 };
-use libgrease::payment_channel::UpdateError;
+use libgrease::payment_channel::{ChannelRole, UpdateError};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use libgrease::state_machine::{
@@ -337,7 +338,7 @@ where
         let (k, p) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         // 2.1.2. Exchange the public keys with the merchant.
         debug!("👛️ Sharing public key with merchant for channel {name}");
-        let peer_key_info = self.exchange_wallet_keys(peer_id, &name, &p).await?;
+        let peer_key_info = self.exchange_wallet_keys(peer_id, &name, &p, ChannelRole::Customer).await?;
         debug!("👛️ Received merchant's public key for channel {name}");
         // 2.1.3. Create a new multisig wallet with the public keys.
         let wallet = self.customer_create_multisig_wallet(&name, k, p, peer_key_info).await?;
@@ -364,7 +365,7 @@ where
             )));
         }
         let pvk = wallet.joint_private_view_key().clone();
-        let pub_spend_key = wallet.joint_public_spend_key().clone();
+        let pub_spend_key = *wallet.joint_public_spend_key();
         let birthday = Some(wallet.birthday());
         info!("👛️ Multisig wallet has been successfully created for channel {name}.");
         self.watch_for_funding_transaction(&name, pvk, pub_spend_key, birthday).await?;
@@ -400,7 +401,7 @@ where
         };
         drop(channel);
         let pvt_vk = wallet_info.joint_private_view_key.clone();
-        let pub_sk = wallet_info.joint_public_spend_key.clone();
+        let pub_sk = wallet_info.joint_public_spend_key;
         let bday = wallet_info.birthday.saturating_sub(5);
         trace!("Scanning blockchain from block {bday} for funding transaction for channel {name}");
         self.watch_for_funding_transaction(name, pvt_vk, pub_sk, Some(bday))
@@ -547,9 +548,10 @@ where
         peer_id: PeerId,
         name: &str,
         my_pubkey: &Curve25519PublicKey,
+        role: ChannelRole,
     ) -> Result<MultisigKeyInfo, ChannelServerError> {
         let mut client = self.network_client.clone();
-        let key_info = MultisigKeyInfo { key: my_pubkey.clone() };
+        let key_info = MultisigKeyInfo { key: *my_pubkey, role };
         let peer_pubkey = match client.send_multisig_key(peer_id, name, key_info).await? {
             Ok(envelope) => {
                 let (channel_name, peer_key_info) = envelope.open();
@@ -572,11 +574,11 @@ where
         &self,
         my_spend_key: Curve25519Secret,
         my_pubkey: Curve25519PublicKey,
-        peer_key: MultisigKeyInfo,
+        peer_key: SharedPublicKey,
     ) -> Result<MultisigWallet, ChannelServerError> {
         // Create a new multisig wallet with the peer's key info.
         let rpc = connect_to_rpc(&self.rpc_address).await?;
-        let mut wallet = MultisigWallet::new(rpc, my_spend_key, &my_pubkey, &peer_key.key, None)?;
+        let mut wallet = MultisigWallet::new(rpc, my_spend_key, &my_pubkey, &peer_key.public_key, None, peer_key.role)?;
         let height = wallet.reset_birthday().await?;
         debug!("👛️  New Multisig wallet created with birthday at height {height}.");
         Ok(wallet)
@@ -594,12 +596,13 @@ where
         let (name, peer_key_info) = envelope.open();
         info!("👛️ Received multisig pubkey from Customer. Creating new wallet keys for channel {name}.");
         let (k, p) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
+        let peer_key_info = SharedPublicKey::new(peer_key_info.role, peer_key_info.key);
         let wallet = self.common_create_wallet_and_advance(&name, k, p, peer_key_info).await.map_err(|e| {
             GreaseResponse::MsKeyExchange(Err(RemoteServerError::internal(format!("Failed to create new wallet: {e}"))))
         })?;
         debug!("👛️ Saved multisig data in channel. Watching for funding transaction.");
         let jpvk = wallet.joint_private_view_key().clone();
-        let jpsk = wallet.joint_public_spend_key().clone();
+        let jpsk = *wallet.joint_public_spend_key();
         let _ = self
             .watch_for_funding_transaction(&name, jpvk, jpsk, Some(wallet.birthday()))
             .await
@@ -608,7 +611,7 @@ where
             })
             .ok();
         debug!("👛️ Sending public key to customer.");
-        let response = MultisigKeyInfo { key: wallet.my_public_key().clone() };
+        let response = MultisigKeyInfo { key: *wallet.my_public_key(), role: ChannelRole::Merchant };
         let envelope = MessageEnvelope::new(name, response);
         Ok(GreaseResponse::MsKeyExchange(Ok(envelope)))
     }
@@ -620,6 +623,7 @@ where
         my_pubkey: Curve25519PublicKey,
         key: MultisigKeyInfo,
     ) -> Result<MultisigWallet, ChannelServerError> {
+        let key = SharedPublicKey::new(key.role, key.key);
         self.common_create_wallet_and_advance(name, my_spend_key, my_pubkey, key).await
     }
 
@@ -628,7 +632,7 @@ where
         name: &str,
         my_spend_key: Curve25519Secret,
         my_pubkey: Curve25519PublicKey,
-        peer_key: MultisigKeyInfo,
+        peer_key: SharedPublicKey,
     ) -> Result<MultisigWallet, ChannelServerError> {
         let wallet = self.create_new_2_of_2_wallet(my_spend_key, my_pubkey, peer_key).await?;
         let data = wallet.serializable();
@@ -750,7 +754,7 @@ where
             )))
         })?;
         let key = wallet.my_spend_key.clone();
-        let peer = wallet.peer_public_key().clone();
+        let peer = *wallet.peer_public_key();
         let kes_pubkey = channel.state().metadata().kes_public_key().to_string();
         drop(channel);
         debug!("👛️  Splitting multisig wallet spend key for customer and KES.");

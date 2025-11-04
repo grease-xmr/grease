@@ -9,10 +9,13 @@ use std::path::Path;
 
 use crate::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::errors::WalletError;
-use libgrease::adapter_signature::AdaptedSignature;
+use crate::payments::Payment;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::cryptography::adapter_signature::AdaptedSignature;
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::grease_protocol::multisig_wallet::{MultisigTransaction, MultisigTxError};
 use libgrease::multisig::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys, MultisigWalletData};
+use libgrease::payment_channel::{ChannelRole, HasRole};
 use libgrease::XmrScalar;
 use log::*;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
@@ -31,6 +34,7 @@ pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
 pub type AdaptSig = AdaptedSignature<Ed25519>;
 
 pub struct MultisigWallet {
+    role: ChannelRole,
     rpc: SimpleRequestRpc,
     my_spend_key: Curve25519Secret,
     my_public_key: Curve25519PublicKey,
@@ -56,8 +60,9 @@ impl MultisigWallet {
         public_spend_key: &Curve25519PublicKey,
         peer_pubkey: &Curve25519PublicKey,
         birthday: Option<u64>,
+        role: ChannelRole,
     ) -> Result<Self, WalletError> {
-        let mut pubkeys = [public_spend_key.clone(), peer_pubkey.clone()];
+        let mut pubkeys = [*public_spend_key, *peer_pubkey];
         sort_pubkeys(&mut pubkeys);
         let musig_keys = musig_2_of_2(&spend_key, &pubkeys)
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
@@ -68,7 +73,7 @@ impl MultisigWallet {
         Ok(MultisigWallet {
             rpc,
             my_spend_key: spend_key,
-            my_public_key: public_spend_key.clone(),
+            my_public_key: *public_spend_key,
             sorted_pubkeys: pubkeys,
             musig_keys,
             joint_private_view_key,
@@ -80,6 +85,7 @@ impl MultisigWallet {
             sign_machine: None,
             shared_spend_key: None,
             final_signer: None,
+            role,
         })
     }
 
@@ -121,6 +127,7 @@ impl MultisigWallet {
         let known_outputs = data.known_outputs;
         let known_outputs =
             Self::read_outputs(known_outputs.as_slice()).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
+        let role = data.role;
         Ok(Self {
             rpc,
             my_spend_key: data.my_spend_key,
@@ -136,6 +143,7 @@ impl MultisigWallet {
             sign_machine: None,
             shared_spend_key: None,
             final_signer: None,
+            role,
         })
     }
 
@@ -245,7 +253,7 @@ impl MultisigWallet {
         create_signable_tx(rpc, rng, inputs, payments, change, vec![]).await
     }
 
-    /// If you need to restore the wallet to an exact know last state, you should call `prepare` with the RNG
+    /// If you need to restore the wallet to an exact known last state, you should call `prepare` with the RNG
     /// returned by this function.
     pub fn deterministic_rng(&self) -> ChaCha20Rng {
         // Use the spend key as a seed for the RNG, which is unique to this wallet instance
@@ -257,7 +265,7 @@ impl MultisigWallet {
     }
 
     /// Prepare the multisig wallet for signing a transaction. The nonce is a random value that
-    /// a. Must be get private and
+    /// a. Must be treated as private and
     /// b. Never be reused (unless deterministically reconstructing this wallet).
     pub async fn prepare<R: Send + Sync + RngCore + CryptoRng>(
         &mut self,
@@ -338,7 +346,7 @@ impl MultisigWallet {
         offset: &XmrScalar,
     ) -> Result<SignatureShare<Ed25519>, WalletError> {
         let p = self.peer_public_key().as_point();
-        let true_sig = adapted.adapt(&offset, &p, MSG).map_err(|_| {
+        let true_sig = adapted.adapt(offset, &p, MSG).map_err(|_| {
             WalletError::SigningError("Incorrect offset supplied. Adapter signature verification failed".into())
         })?;
         let bytes = true_sig.s().as_bytes();
@@ -438,13 +446,55 @@ impl MultisigWallet {
         });
         MultisigWalletData {
             my_spend_key: self.my_spend_key.clone(),
-            my_public_key: self.my_public_key.clone(),
-            sorted_pubkeys: self.sorted_pubkeys.clone(),
+            my_public_key: self.my_public_key,
+            sorted_pubkeys: self.sorted_pubkeys,
             joint_private_view_key: self.joint_private_view_key.clone(),
-            joint_public_spend_key: self.joint_public_spend_key.clone(),
+            joint_public_spend_key: self.joint_public_spend_key,
             birthday: self.birthday,
             known_outputs,
+            role: self.role,
         }
+    }
+}
+
+impl HasRole for MultisigWallet {
+    fn role(&self) -> ChannelRole {
+        self.role
+    }
+}
+
+impl MultisigTransaction for MultisigWallet {
+    type Context = ();
+    type Preprocess = MoneroPreprocess;
+    type PartialSignature = SignatureShare<Ed25519>;
+    type Transaction = Transaction;
+    type PaymentType = Payment;
+
+    async fn prepare_transaction<R: Send + Sync + RngCore + CryptoRng>(
+        &mut self,
+        payments: &[Self::PaymentType],
+        _ctx: &Self::Context,
+        rng: &mut R,
+    ) -> Result<(), MultisigTxError> {
+        let payments = payments.iter().map(|p| p.as_tuple()).collect();
+        self.prepare(payments, rng).await.map_err(|e| MultisigTxError::PreprepareError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn partial_sign(&mut self, preparatory_data: &Self::Preprocess, _: &Self::Context) -> Result<(), MultisigTxError> {
+        let mut buf = Vec::<u8>::with_capacity(160);
+        preparatory_data.write(&mut buf).map_err(|e| MultisigTxError::PartialSignError(e.to_string()))?;
+        MultisigWallet::partial_sign(self, &buf).map_err(|e| MultisigTxError::PartialSignError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn sign(
+        &mut self,
+        peer_sig: Self::PartialSignature,
+        _: &Self::Context,
+    ) -> Result<Self::Transaction, MultisigTxError> {
+        let tx = MultisigWallet::sign(self, peer_sig).map_err(|e| MultisigTxError::FinalSignError(e.to_string()))?;
+        Ok(tx)
     }
 }
 

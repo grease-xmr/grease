@@ -1,7 +1,7 @@
 use crate::errors::WalletError;
 use crate::{DScalar, MoneroAddress, SubaddressIndex};
 use ciphersuite::{Ciphersuite, Ed25519};
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use log::*;
 use monero_rpc::{FeeRate, Rpc, RpcError};
 use monero_serai::ringct::RctType;

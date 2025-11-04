@@ -3,7 +3,7 @@ use babyjubjub_rs::Point;
 use curve25519_dalek::constants::X25519_BASEPOINT;
 use curve25519_dalek::{MontgomeryPoint, Scalar};
 use ff_ce::Field;
-use libgrease::crypto::zk_objects::GenericScalar;
+use libgrease::cryptography::zk_objects::GenericScalar;
 use num_bigint::{BigInt, BigUint};
 use num_traits::Euclid;
 use poseidon_rs::Fr;
@@ -69,11 +69,11 @@ where
     Ok(result)
 }
 
-pub fn proof_to_hex<S>(proof: &Box<[u8; 14080]>, s: S) -> Result<S::Ok, S::Error>
+pub fn proof_to_hex<S>(proof: &[u8; 14080], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    hex::encode(**proof).serialize(s)
+    hex::encode(*proof).serialize(s)
 }
 
 pub fn proof_from_hex<'de, D>(de: D) -> Result<Box<[u8; 14080]>, D::Error>
@@ -108,7 +108,7 @@ pub fn left_pad_bytes_32(input: &[u8]) -> Result<[u8; 32], String> {
     result[offset..].copy_from_slice(input);
     Ok(result)
 }
-pub(crate) fn left_pad_bytes_32_vec(input: &Vec<u8>) -> [u8; 32] {
+pub(crate) fn left_pad_bytes_32_vec(input: &[u8]) -> [u8; 32] {
     assert!(input.len() <= 32, "Input length exceeds target length");
 
     let mut result = [0u8; 32];
@@ -125,7 +125,7 @@ pub fn right_pad_bytes_32(input: &[u8]) -> [u8; 32] {
 }
 pub fn point_negate(point: Point) -> Point {
     // The negative of a point (x, y) on Baby Jubjub is (-x, y)
-    let mut negative_x: Fr = BABY_JUBJUB_PRIME.clone();
+    let mut negative_x: Fr = *BABY_JUBJUB_PRIME;
     negative_x.sub_assign(&point.x);
 
     Point { x: negative_x, y: point.y }
@@ -150,8 +150,7 @@ pub fn get_scalar_to_point_bjj(scalar: &BigUint) -> Point {
 
     let scalar_i: BigInt = scalar.clone().into();
 
-    let p = B8.mul_scalar(&scalar_i);
-    p
+    B8.mul_scalar(&scalar_i)
 }
 pub(crate) fn get_scalar_to_point_ed25519(scalar_big_uint: &BigUint) -> MontgomeryPoint {
     // Convert the 32-byte array to an Ed25519 Scalar

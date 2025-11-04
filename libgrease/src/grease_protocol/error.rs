@@ -1,19 +1,19 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum WitnessError {
+pub enum DleqError {
     #[error("The provided scalar cannot be represented as a scalar on the Ed25519 curve.")]
     InvalidEd25519Scalar,
-    #[error("The provided scalar cannot be represented as a field element on the ZK curve.")]
-    InvalidZKFieldElement,
-    #[error("The ED25519 scalar cannot be represented on the ZK curve.")]
+    #[error("The provided scalar cannot be represented as a field element on the Foreign curve.")]
+    InvalidForeignFieldElement,
+    #[error("The ED25519 scalar cannot be represented on the Foreign curve.")]
     Ed25519ScalarTooLarge,
-    #[error("An equivalent ZK and Ed25519 representation could not be found during initial witness generation.")]
+    #[error("An equivalent Foreign and Ed25519 representation could not be found during initial witness generation.")]
     InitializationFailure,
-    #[error("The provided shard is not correct.")]
-    IncorrectShard,
-    #[error("An unspecified witness error occurred.")]
-    Unspecified,
+    #[error("DLEQ proof verification failed.")]
+    VerificationFailure,
+    #[error("I/O error occurred during reading data.")]
+    ReadError(#[from] std::io::Error),
 }
 
 #[derive(Debug, Error)]
@@ -38,9 +38,3 @@ pub enum WitnessProofError {
 
 #[derive(Debug, Error)]
 pub enum GreaseProtocolError {}
-
-impl From<()> for WitnessError {
-    fn from(_: ()) -> Self {
-        WitnessError::Unspecified
-    }
-}

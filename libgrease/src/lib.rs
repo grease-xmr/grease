@@ -1,11 +1,11 @@
-pub mod adapter_signature;
 pub mod amount;
 pub mod balance;
 pub mod channel_id;
-pub mod crypto;
+pub mod cryptography;
 pub mod error;
 pub mod grease_protocol;
 pub mod helpers;
+pub mod impls;
 pub mod monero;
 pub mod multisig;
 pub mod payment_channel;

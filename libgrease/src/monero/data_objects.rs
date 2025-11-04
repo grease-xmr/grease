@@ -5,8 +5,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 // re-export
 use crate::balance::Balances;
-use crate::crypto::keys::Curve25519PublicKey;
-use crate::crypto::zk_objects::{KesProof, PartialEncryptedKey};
+use crate::cryptography::keys::Curve25519PublicKey;
+use crate::cryptography::zk_objects::{KesProof, PartialEncryptedKey};
+use crate::payment_channel::ChannelRole;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecrets {
@@ -53,9 +54,11 @@ where
     }
 }
 
+#[deprecated = "Use SharedPublicKey instead"]
 #[derive(Clone, Deserialize, Serialize)]
 pub struct MultisigKeyInfo {
     pub key: Curve25519PublicKey,
+    pub role: ChannelRole,
 }
 
 impl Debug for MultisigKeyInfo {

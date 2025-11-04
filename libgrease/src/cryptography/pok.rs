@@ -3,6 +3,7 @@ use crate::grease_protocol::utils::{write_field_element, write_group_element};
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
+use log::*;
 use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
 use std::io::Read;
@@ -14,15 +15,25 @@ pub struct KesPoK<C: Ciphersuite> {
 }
 
 impl<C: Ciphersuite> KesPoK<C> {
-    /// Prove that the possessor of `private_key` knows both `sigma_1`.
+    /// Prove that the possessor of `private_key` knows `shard`.
     pub fn prove<R: RngCore + CryptoRng>(rng: &mut R, shard: &C::F, private_key: &C::F) -> Self {
         let shard_pok = SchnorrPoK::<C>::prove(rng, shard);
         let private_key_pok = SchnorrPoK::prove(rng, private_key);
         Self { shard_pok, private_key_pok }
     }
 
-    pub fn verify(&self, sigma_pubkey: &C::G, kes_pubkey: &C::G) -> bool {
-        self.private_key_pok.verify(kes_pubkey) && self.shard_pok.verify(sigma_pubkey)
+    pub fn verify(&self, shard_pubkey: &C::G, kes_pubkey: &C::G) -> bool {
+        let pk_valid = self.private_key_pok.verify(kes_pubkey);
+        let result_pk = if pk_valid { "KES knows the private key" } else { "KES does NOT know the private key" };
+        let shard_valid = self.shard_pok.verify(shard_pubkey);
+        let result_shard = if shard_valid { "KES knows the shard value" } else { "KES does NOT know the shard value" };
+        let result = pk_valid && shard_valid;
+        if result {
+            debug!("VALID: {result_pk} AND {result_shard}");
+        } else {
+            warn!("INVALID KES PoK verification: {result_pk} AND {result_shard}");
+        };
+        result
     }
 
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
@@ -46,7 +57,6 @@ pub struct SchnorrPoK<C: Ciphersuite> {
 }
 
 impl<C: Ciphersuite> SchnorrPoK<C> {
-    #[allow(non_snake_case)]
     fn challenge(pub_nonce: &C::G, pub_key: &C::G) -> C::F {
         let msg = [pub_nonce.to_bytes().as_ref(), pub_key.to_bytes().as_ref()].concat();
         C::hash_to_F(b"SchnorrPoK", &msg)
@@ -64,7 +74,7 @@ impl<C: Ciphersuite> SchnorrPoK<C> {
 
     pub fn verify(&self, public_key: &C::G) -> bool {
         let lhs = C::generator() * self.s;
-        let rhs = self.pub_nonce + *public_key * Self::challenge(&self.pub_nonce, &public_key);
+        let rhs = self.pub_nonce + *public_key * Self::challenge(&self.pub_nonce, public_key);
         lhs == rhs
     }
 
