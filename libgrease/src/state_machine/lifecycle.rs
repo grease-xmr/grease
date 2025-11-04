@@ -203,10 +203,10 @@ impl LifeCycle for ChannelState {
 
 #[cfg(test)]
 pub mod test {
-    use crate::adapter_signature::AdaptedSignature;
     use crate::amount::{MoneroAmount, MoneroDelta};
-    use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-    use crate::crypto::zk_objects::{
+    use crate::cryptography::adapter_signature::AdaptedSignature;
+    use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+    use crate::cryptography::zk_objects::{
         KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo, UpdateProofs,
     };
     use crate::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
@@ -262,7 +262,7 @@ pub mod test {
         establishing
     }
 
-    pub fn create_wallet() -> MultisigWalletData {
+    pub fn create_wallet(role: ChannelRole) -> MultisigWalletData {
         let some_secret =
             Curve25519Secret::from_hex("8eb8a1fd0f2c42fa7508a8883addb0860a0c5e44c1c14605abb385375c533609").unwrap();
         let some_pub = Curve25519PublicKey::from_secret(&some_secret);
@@ -274,12 +274,13 @@ pub mod test {
             joint_private_view_key: Curve25519Secret::random(&mut rand_core::OsRng),
             birthday: 0,
             known_outputs: Default::default(),
+            role,
         }
     }
 
     pub fn establish_channel(mut state: EstablishingState) -> EstablishedChannelState {
         // The multisig wallet protocol is complete.
-        let wallet = create_wallet();
+        let wallet = create_wallet(state.role());
         state.wallet_created(wallet);
         // The KES shards have been exchanged.
         let my_shards = MultisigSplitSecrets {

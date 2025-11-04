@@ -1,8 +1,8 @@
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_metadata::ChannelMetadata;
-use crate::crypto::keys::{Curve25519Secret, KeyError};
-use crate::crypto::zk_objects::{GenericScalar, KesProof, Proofs0, PublicProof0, ShardInfo};
+use crate::cryptography::keys::{Curve25519Secret, KeyError};
+use crate::cryptography::zk_objects::{GenericScalar, KesProof, Proofs0, PublicProof0, ShardInfo};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::multisig::MultisigWalletData;

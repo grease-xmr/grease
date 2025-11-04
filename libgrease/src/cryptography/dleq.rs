@@ -1,5 +1,5 @@
 use crate::error::ReadError;
-use crate::grease_protocol::error::WitnessError;
+use crate::grease_protocol::error::DleqError;
 use crate::grease_protocol::utils::write_group_element;
 use blake2::Blake2b512;
 use ciphersuite::group::ff::Field;
@@ -11,7 +11,6 @@ use dleq::cross_group::{ConciseLinearDLEq, Generators};
 use flexible_transcript::{RecommendedTranscript, Transcript};
 use grease_babyjubjub::{BabyJubJub, BjjPoint};
 use k256::ProjectivePoint;
-use log::*;
 use modular_frost::algorithm::SchnorrSignature;
 use modular_frost::curve::Curve;
 use modular_frost::sign::Writable;
@@ -24,8 +23,10 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct EdSchnorrSignature(pub SchnorrSignature<Ed25519>);
 
 impl EdSchnorrSignature {
-    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
-        let sig = SchnorrSignature::<Ed25519>::read(reader)?;
+    pub fn read<R: Read + ?Sized>(reader: &mut R) -> io::Result<Self> {
+        let mut buf = [0u8; 64];
+        reader.read_exact(&mut buf)?;
+        let sig = SchnorrSignature::<Ed25519>::read(&mut &buf[..])?;
         Ok(EdSchnorrSignature(sig))
     }
 }
@@ -36,50 +37,54 @@ impl Writable for EdSchnorrSignature {
     }
 }
 
+pub type DleqResult<C> = (<Ed25519 as Dleq<C>>::Proof, (XmrScalar, <C as Ciphersuite>::F));
 pub trait Dleq<C: Curve>: Curve {
     type Proof: Clone + Writable;
-    type Error: Into<WitnessError>;
 
     /// Generate a new set of scalars (x, y) such that they are equivalent on both curves, in a sense that they stem
     /// from the same binary representation. Returns the proof and the scalars (x, y).
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-    ) -> Result<(Self::Proof, (XmrScalar, <C as Ciphersuite>::F)), Self::Error>;
+    ) -> Result<(Self::Proof, (XmrScalar, <C as Ciphersuite>::F)), DleqError>;
 
     /// Verify that the provided proof shows that the discrete log of p1 on Ed25519 is the same as the discrete log
     /// of p2 on curve C, AND that the prover possesses knowledge of both discrete logs.
-    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<C as Ciphersuite>::G) -> bool;
+    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<C as Ciphersuite>::G) -> Result<(), DleqError>;
 
     /// Read the proof from a reader
-    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof>;
+    fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError>;
 }
 
 impl Dleq<Ed25519> for Ed25519 {
     type Proof = EdSchnorrSignature;
-    type Error = ();
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<(Self::Proof, (XmrScalar, XmrScalar)), ()> {
+    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Ed25519>, DleqError> {
         let secret = XmrScalar::random(&mut *rng);
         let nonce = <Ed25519 as Ciphersuite>::random_nonzero_F(rng);
         let nonce_pub = Ed25519::generator() * nonce;
         let public_point = Ed25519::generator() * secret;
         let challenge = ownership_challenge(&nonce_pub, &public_point);
         // C::F is already Zeroize. Maybe this gets cleaned up upstream at some point
-        let mut zs = Zeroizing::new(secret.clone());
+        let mut zs = Zeroizing::new(secret);
         let proof = SchnorrSignature::sign(&zs, Zeroizing::new(nonce), challenge);
         zs.zeroize();
-        Ok((EdSchnorrSignature(proof), (secret.clone(), secret)))
+        Ok((EdSchnorrSignature(proof), (secret, secret)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &XmrPoint) -> bool {
-        x.eq(y) && {
-            let challenge = ownership_challenge(&proof.0.R, &x);
-            proof.0.verify(x.clone(), challenge)
+    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &XmrPoint) -> Result<(), DleqError> {
+        let valid = x.eq(y) && {
+            let challenge = ownership_challenge(&proof.0.R, x);
+            proof.0.verify(*x, challenge)
+        };
+        match valid {
+            true => Ok(()),
+            false => Err(DleqError::VerificationFailure),
         }
     }
 
-    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof> {
-        EdSchnorrSignature::read(reader)
+    fn read<R: Read + ?Sized>(reader: &mut R) -> Result<Self::Proof, DleqError> {
+        let proof = EdSchnorrSignature::read(reader)?;
+        Ok(proof)
     }
 }
 
@@ -101,11 +106,8 @@ impl Writable for DleqMoneroBjj {
 
 impl Dleq<BabyJubJub> for Ed25519 {
     type Proof = DleqMoneroBjj;
-    type Error = ();
 
-    fn generate_dleq<R: RngCore + CryptoRng>(
-        rng: &mut R,
-    ) -> Result<(Self::Proof, (XmrScalar, <BabyJubJub as Ciphersuite>::F)), Self::Error> {
+    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<BabyJubJub>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
         let mut nonce = Zeroizing::new([0u8; 64]);
         rng.fill_bytes(nonce.as_mut_slice());
@@ -118,20 +120,22 @@ impl Dleq<BabyJubJub> for Ed25519 {
         Ok((DleqMoneroBjj(proof), (xmr, foreign_key)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<BabyJubJub as Ciphersuite>::G) -> bool {
+    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<BabyJubJub as Ciphersuite>::G) -> Result<(), DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
         let mut rng = OsRng;
-        match proof.0.verify(&mut rng, &mut transcript, xmr_bjj_generators()) {
-            Ok((x_rec, y_rec)) => p1.eq(&x_rec) && p2.eq(&y_rec),
-            Err(e) => {
-                warn!("Error verifying DLEQ proof: {e}");
-                false
-            }
+        let (x_rec, y_rec) = proof
+            .0
+            .verify(&mut rng, &mut transcript, xmr_bjj_generators())
+            .map_err(|_| DleqError::VerificationFailure)?;
+        match p1.eq(&x_rec) && p2.eq(&y_rec) {
+            true => Ok(()),
+            false => Err(DleqError::VerificationFailure),
         }
     }
 
-    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof> {
-        DleqMoneroBjj::read(reader)
+    fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError> {
+        let proof = DleqMoneroBjj::read(reader)?;
+        Ok(proof)
     }
 }
 
@@ -153,10 +157,7 @@ impl Writable for DleqMoneroBitcoin {
 
 impl Dleq<Secp256k1> for Ed25519 {
     type Proof = DleqMoneroBitcoin;
-    type Error = ();
-    fn generate_dleq<R: RngCore + CryptoRng>(
-        rng: &mut R,
-    ) -> Result<(Self::Proof, (XmrScalar, <Secp256k1 as Ciphersuite>::F)), ()> {
+    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Secp256k1>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
         let mut nonce = Zeroizing::new([0u8; 64]);
         rng.fill_bytes(nonce.as_mut_slice());
@@ -166,20 +167,22 @@ impl Dleq<Secp256k1> for Ed25519 {
         Ok((DleqMoneroBitcoin(proof), (*xmr, *fk)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<Secp256k1 as Ciphersuite>::G) -> bool {
+    fn verify_dleq(proof: &Self::Proof, x: &XmrPoint, y: &<Secp256k1 as Ciphersuite>::G) -> Result<(), DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
         let mut rng = OsRng;
-        match proof.0.verify(&mut rng, &mut transcript, xmr_btc_generators()) {
-            Ok((x_rec, y_rec)) => x.eq(&x_rec) && y.eq(&y_rec),
-            Err(e) => {
-                warn!("Error verifying DLEQ proof: {e}");
-                false
-            }
+        let (x_rec, y_rec) = proof
+            .0
+            .verify(&mut rng, &mut transcript, xmr_btc_generators())
+            .map_err(|_| DleqError::VerificationFailure)?;
+        match x.eq(&x_rec) && y.eq(&y_rec) {
+            true => Ok(()),
+            false => Err(DleqError::VerificationFailure),
         }
     }
 
-    fn read<R: Read>(reader: &mut R) -> io::Result<Self::Proof> {
-        DleqMoneroBitcoin::read(reader)
+    fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError> {
+        let proof = DleqMoneroBitcoin::read(reader)?;
+        Ok(proof)
     }
 }
 
@@ -243,7 +246,7 @@ where
         Self { proof, xmr_point, foreign_point }
     }
 
-    pub fn verify(&self) -> bool {
+    pub fn verify(&self) -> Result<(), DleqError> {
         D::verify_dleq(&self.proof, &self.xmr_point, &self.foreign_point)
     }
 
@@ -273,7 +276,8 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::crypto::dleq::Dleq;
+    use crate::cryptography::dleq::Dleq;
+    use crate::grease_protocol::error::DleqError;
     use ciphersuite::group::ff::PrimeFieldBits;
     use ciphersuite::group::GroupEncoding;
     use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
@@ -291,7 +295,7 @@ mod test {
         println!("x: {}, y: {}", hex::encode(x_point.to_bytes()), hex::encode(y_point.to_bytes()));
         assert_eq!(x_point, y_point);
         assert!(
-            <Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &x_point, &y_point),
+            <Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &x_point, &y_point).is_ok(),
             "DLEQ Proof did not verify"
         );
         assert_eq!(
@@ -301,10 +305,10 @@ mod test {
             proof.serialize().len()
         );
         let y_point = x_point.add(&x_point);
-        assert!(
-            !<Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &x_point, &y_point),
-            "DLEQ should not verify"
-        );
+        assert!(matches!(
+            <Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &x_point, &y_point),
+            Err(DleqError::VerificationFailure)
+        ));
         assert_eq!(x.to_bytes(), y.to_bytes());
     }
 
@@ -324,14 +328,14 @@ mod test {
             hex::encode(y_point.to_bytes())
         );
         assert!(
-            <Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &x_point, &y_point),
+            <Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &x_point, &y_point).is_ok(),
             "XMR<>BTC DLEQ Proof did not verify"
         );
         let x_point = x_point.add(&x_point);
-        assert!(
-            !<Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &x_point, &y_point),
-            "XMR<>BTC DLEQ should not verify"
-        );
+        assert!(matches!(
+            <Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &x_point, &y_point),
+            Err(DleqError::VerificationFailure)
+        ));
         assert_eq!(x.to_le_bits(), y.to_le_bits());
     }
 
@@ -351,14 +355,14 @@ mod test {
             hex::encode(y_point.to_bytes())
         );
         assert!(
-            <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point),
+            <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point).is_ok(),
             "XMR<>BTC DLEQ Proof did not verify"
         );
         let x_point = x_point.add(&x_point);
-        assert!(
-            !<Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point),
-            "XMR<>BTC DLEQ should not verify"
-        );
+        assert!(matches!(
+            <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point),
+            Err(DleqError::VerificationFailure)
+        ));
         assert_eq!(x.to_le_bits(), y.to_le_bits());
     }
 }

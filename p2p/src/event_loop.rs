@@ -11,7 +11,7 @@ use futures::channel::{
     oneshot,
 };
 use futures::{SinkExt, StreamExt};
-use libgrease::crypto::zk_objects::PublicProof0;
+use libgrease::cryptography::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
 };

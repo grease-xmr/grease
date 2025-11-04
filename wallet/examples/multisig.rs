@@ -1,4 +1,5 @@
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::payment_channel::ChannelRole;
 use log::*;
 use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
@@ -32,8 +33,8 @@ async fn main() -> Result<(), WalletError> {
 
     // They exchange their public keys and create multisig wallets
     let rpc = SimpleRequestRpc::new("http://localhost:25070".into()).await?;
-    let mut wallet_a = MultisigWallet::new(rpc.clone(), k_a, &p_a, &p_b, None)?;
-    let mut wallet_b = MultisigWallet::new(rpc.clone(), k_b, &p_b, &p_a, None)?;
+    let mut wallet_a = MultisigWallet::new(rpc.clone(), k_a, &p_a, &p_b, None, ChannelRole::Customer)?;
+    let mut wallet_b = MultisigWallet::new(rpc.clone(), k_b, &p_b, &p_a, None, ChannelRole::Merchant)?;
 
     assert_eq!(
         wallet_a.joint_public_spend_key(),

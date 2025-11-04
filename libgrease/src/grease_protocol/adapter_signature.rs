@@ -1,0 +1,41 @@
+use crate::cryptography::adapter_signature::AdaptedSignature;
+use crate::cryptography::keys::Curve25519Secret;
+use crate::payment_channel::HasRole;
+use crate::XmrScalar;
+use ciphersuite::Ed25519;
+use rand_core::{CryptoRng, RngCore};
+use thiserror::Error;
+
+pub trait AdapterSignatureHandler: HasRole {
+    /// Assign the initial adapter signature offset.
+    fn initialize_signature_offset(&mut self);
+
+    /// Update the adapter signature offset.
+    fn update_signature_offset(&mut self, offset: XmrScalar);
+
+    /// Return the current adapter signature offset.
+    fn adapter_signature_offset(&self) -> &XmrScalar;
+
+    /// Return the message to be signed for the adapter signature.
+    fn adapter_signature_message(&self) -> &'static str {
+        "Grease channel opening"
+    }
+
+    /// Generate a new adapter signature using the current secret key and offset.
+    fn new_adapter_signature<R: RngCore + CryptoRng>(
+        &self,
+        secret_key: &Curve25519Secret,
+        rng: &mut R,
+    ) -> Result<AdaptedSignature<Ed25519>, AdapterSignatureError> {
+        let offset = self.adapter_signature_offset();
+        let signature =
+            AdaptedSignature::<Ed25519>::sign(secret_key.as_scalar(), offset, self.adapter_signature_message(), rng);
+        Ok(signature)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AdapterSignatureError {
+    #[error("Could not provide result because the following information is missing: {0}")]
+    MissingInformation(String),
+}

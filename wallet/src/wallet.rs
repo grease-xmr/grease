@@ -4,7 +4,7 @@ use crate::watch_only::WatchOnlyWallet;
 use crate::MoneroAddress;
 use blake2::Digest;
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use log::*;
 use monero_rpc::{Rpc, RpcError};
 use monero_serai::block::Block;
@@ -27,7 +27,7 @@ impl MoneroWallet {
         birthday: Option<u64>,
     ) -> Result<Self, WalletError> {
         let public_spend_key = Curve25519PublicKey::from_secret(&private_spend_key);
-        let inner = WatchOnlyWallet::new(rpc.clone(), private_view_key, public_spend_key.clone(), birthday)?;
+        let inner = WatchOnlyWallet::new(rpc.clone(), private_view_key, public_spend_key, birthday)?;
         Ok(MoneroWallet { private_spend_key, inner })
     }
 
@@ -89,7 +89,7 @@ impl MoneroWallet {
         self.remove_outputs(outputs);
         debug!(
             "Transaction {} successfully published to network: {amount} to {to}",
-            hex::encode(&hash)
+            hex::encode(hash)
         );
         Ok(hash)
     }

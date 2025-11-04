@@ -7,12 +7,13 @@ use paste::paste;
 use rand_core::{CryptoRng, CryptoRngCore, RngCore};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 macro_rules! schnorr_def {
     ($name:ident, $s:ident) => {
         impl<C: Ciphersuite> $name<C> {
-            #[allow(non_snake_case)]
+            #[expect(non_snake_case)]
             fn challenge<B: AsRef<[u8]>>(R: &C::G, pubkey: &C::G, msg: B) -> C::F {
                 use ciphersuite::group::GroupEncoding;
                 let bytes = [
@@ -46,7 +47,7 @@ macro_rules! schnorr_def {
 }
 
 #[derive(Clone, Debug)]
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub struct SchnorrSignature<C: Ciphersuite> {
     R: C::G,
     s: C::F,
@@ -58,25 +59,25 @@ impl<C: Ciphersuite> SchnorrSignature<C> {
     ///
     /// The returned signature signs a challenge bound to $R$ and $P = k\cdot G$, such that if we knew $q, Q = q\cdot G$
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, msg: B, rng: &mut R) -> Self {
         let mut nonce = C::F::random(rng.as_rngcore());
         while nonce == C::F::ZERO {
             nonce = C::F::random(rng.as_rngcore());
         }
-        let R = C::generator() * &nonce;
+        let R = C::generator() * nonce;
         let pubkey = C::generator() * secret;
-        let e = Self::challenge(&R, &pubkey, msg);
+        let e = Self::challenge(&R, &pubkey, &msg);
         let s = nonce + (e * secret);
         nonce.zeroize();
         Self { R, s }
     }
 
     /// Verify the adapted signature against the provided public key and message.
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     pub fn verify<B: AsRef<[u8]>>(&self, public_key: &C::G, msg: B) -> bool {
-        let e = Self::challenge(&self.R, public_key, msg);
-        let sG = C::generator() * &self.s;
+        let e = Self::challenge(&self.R, public_key, &msg);
+        let sG = C::generator() * self.s;
         let rhs = self.R + (*public_key * e);
         sG == rhs
     }
@@ -87,7 +88,7 @@ impl<C: Ciphersuite> SchnorrSignature<C> {
 }
 
 #[derive(Clone, Debug)]
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub struct AdaptedSignature<C: Ciphersuite> {
     Q: C::G,
     R: C::G,
@@ -100,36 +101,46 @@ impl<C: Ciphersuite> AdaptedSignature<C> {
     ///
     /// The returned signature signs a challenge bound to $R$ and $P = k\cdot G$, such that if we knew $q, Q = q\cdot G$
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, payload: &C::F, msg: B, rng: &mut R) -> Self {
         let mut nonce = C::F::random(rng.as_rngcore());
         while nonce == C::F::ZERO {
             nonce = C::F::random(rng.as_rngcore());
         }
         let pubkey = C::generator() * secret;
-        let R = C::generator() * &nonce;
+        let R = C::generator() * nonce;
         let Q = C::generator() * payload;
-        let e = Self::challenge(&R, &pubkey, msg);
+        let e = Self::challenge(&R, &pubkey, &msg);
         let s_adapted = nonce + payload + (e * secret);
         nonce.zeroize();
         AdaptedSignature { Q, R, s_adapted }
     }
 
+    /// Get the adapter commitment point Q.
+    pub fn adapter_commitment(&self) -> C::G {
+        self.Q
+    }
+
     /// Verify the adapted signature against the provided public key and message.
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     pub fn verify<B: AsRef<[u8]>>(&self, public_key: &C::G, msg: B) -> bool {
-        let e = Self::challenge(&self.R, public_key, msg);
-        let sG = C::generator() * &self.s_adapted;
-        let rhs = self.R + &self.Q + (*public_key * e);
+        let e = Self::challenge(&self.R, public_key, &msg);
+        let sG = C::generator() * self.s_adapted;
+        let rhs = self.R + self.Q + (*public_key * e);
         sG == rhs
     }
 
     /// Adapt the signature using the provided payload, and verifying that the payload is correct.
-    pub fn adapt<B: AsRef<[u8]>>(&self, payload: &C::F, pubkey: &C::G, msg: B) -> Result<SchnorrSignature<C>, ()> {
+    pub fn adapt<B: AsRef<[u8]>>(
+        &self,
+        payload: &C::F,
+        pubkey: &C::G,
+        msg: B,
+    ) -> Result<SchnorrSignature<C>, SignatureError> {
         let sig = self.adapt_no_verify(payload);
         match sig.verify(pubkey, msg) {
             true => Ok(sig),
-            false => Err(()),
+            false => Err(SignatureError("Could not adapt signature".into())),
         }
     }
 
@@ -139,6 +150,10 @@ impl<C: Ciphersuite> AdaptedSignature<C> {
         SchnorrSignature::<C> { R: self.R, s }
     }
 }
+
+#[derive(Clone, Debug, Error)]
+#[error("Adapter signature error: {0}")]
+pub struct SignatureError(String);
 
 macro_rules! schnorr_impl {
     ($name:ident ($count:expr) scalars=[$($s_field:ident),*] points=[$($p_field:ident),*]) => {
@@ -171,7 +186,7 @@ macro_rules! schnorr_impl {
                         formatter.write_str(concat!("struct ", stringify!($name)))
                     }
 
-                    #[allow(non_snake_case)]
+                    #[expect(non_snake_case)]
                     fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
                         $(
                             paste!{ let mut [<$p_field _opt>]: Option<C::G> = None; }
@@ -276,10 +291,10 @@ macro_rules! schnorr_impl {
             }
         }
 
-        #[allow(non_snake_case)]
+        #[expect(non_snake_case)]
         impl<C: Ciphersuite> $name<C> {
             /// Read the signature from the provided reader.
-            pub fn read<R: std::io::Read>(reader: &mut R) -> Result<Self, ReadError> {
+            pub fn read<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, ReadError> {
                 use crate::grease_protocol::utils::{read_group_element, read_field_element};
                 $(
                     let $s_field = read_field_element::<C, _>(reader)
@@ -309,7 +324,7 @@ schnorr_impl!(SchnorrSignature (2) scalars=[s] points=[R]);
 
 #[cfg(test)]
 mod tests {
-    use crate::adapter_signature::AdaptedSignature;
+    use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::XmrScalar;
     use ciphersuite::group::ff::Field;
     use ciphersuite::{Ciphersuite, Ed25519};

@@ -1,4 +1,5 @@
-use crate::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::payment_channel::ChannelRole;
 use ciphersuite::Ed25519;
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use dalek_ff_group::{dalek::Scalar as DScalar, EdwardsPoint, Scalar};
@@ -22,6 +23,7 @@ pub struct MultisigWalletData {
     pub joint_public_spend_key: Curve25519PublicKey,
     pub birthday: u64,
     pub known_outputs: Vec<Vec<u8>>,
+    pub role: ChannelRole,
 }
 
 impl MultisigWalletData {
@@ -53,6 +55,7 @@ impl Debug for MultisigWalletData {
         )?;
         write!(f, "birthday: {}, ", self.birthday)?;
         write!(f, "known_outputs: {}, ", self.known_outputs.len())?;
+        write!(f, "role: {:?} ", self.role)?;
         write!(f, ")")
     }
 }

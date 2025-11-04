@@ -1,7 +1,7 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroDelta;
-use libgrease::crypto::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
+use libgrease::cryptography::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
 use libgrease::monero::data_objects::{TransactionId, TransactionRecord};
 use libgrease::multisig::MultisigWalletData;
 use libgrease::state_machine::error::LifeCycleError;
@@ -183,11 +183,9 @@ impl PaymentChannel {
                 ))),
             }
         } else if self.is_closed() {
-            match event {
-                _ => Err(LifeCycleError::InvalidState(format!(
-                    "Received event {event} in Closed state, which is not allowed"
-                ))),
-            }
+            Err(LifeCycleError::InvalidState(format!(
+                "Received event {event} in Closed state, which is not allowed"
+            )))
         } else {
             Err(LifeCycleError::InvalidState(format!(
                 "No event handlers for state: {}",
@@ -478,8 +476,8 @@ mod test {
     use crate::{ContactInfo, PaymentChannel};
     use blake2::Blake2b512;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
-    use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-    use libgrease::crypto::zk_objects::{
+    use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+    use libgrease::cryptography::zk_objects::{
         GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
     };
     use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
@@ -538,6 +536,7 @@ mod test {
             joint_private_view_key: Curve25519Secret::random(&mut rand_core::OsRng),
             birthday: 0,
             known_outputs: Default::default(),
+            role: ChannelRole::Customer,
         };
         let event = LifeCycleEvent::MultiSigWalletCreated(Box::new(wallet));
         channel.handle_event(event).unwrap();
