@@ -177,7 +177,7 @@ fn channel_opening_protocol() {
     let adapted_c = customer_protocol
         .kes_client()
         .unwrap()
-        .new_adapter_signature(&customer_protocol.secret_key(), &mut rng)
+        .new_adapter_signature(&customer_protocol.secret_key(), 0, &mut rng)
         .expect(
             "Expected customer new adapter \
         signature",
@@ -195,12 +195,13 @@ fn channel_opening_protocol() {
     merchant_protocol.read_peer_dleq_proof(&mut &proof_data[..]).expect("valid dleq proof");
     merchant_protocol.initialize_kes_client(&mut rng, kes_pubkey).expect("merchant kes init");
     let kes_client = merchant_protocol.kes_client().unwrap();
-    let msg = kes_client.adapter_signature_message();
+    let msg = kes_client.adapter_signature_message(0);
     merchant_protocol.verify_adapter_sig_offset(msg).expect("verify adapter sig");
 
     // The merchant creates a new adapter signature produces a DLEQ proof.
-    let adapted_m =
-        kes_client.new_adapter_signature(&merchant_protocol.secret_key(), &mut rng).expect("to generate adapter sig");
+    let adapted_m = kes_client
+        .new_adapter_signature(&merchant_protocol.secret_key(), 0, &mut rng)
+        .expect("to generate adapter sig");
     let dleq_proof_m = kes_client.dleq_proof();
     let encrypted_w0m = kes_client.encrypt_to_kes(&mut rng);
 
@@ -213,7 +214,7 @@ fn channel_opening_protocol() {
     customer_protocol.read_peer_dleq_proof(&mut &proof_data[..]).expect("valid dleq proof");
     // Verify the adapter signature offset
     let kes_client = customer_protocol.kes_client().unwrap();
-    let msg = kes_client.adapter_signature_message();
+    let msg = kes_client.adapter_signature_message(0);
     customer_protocol.verify_adapter_sig_offset(msg).expect("verify merchant adapter sig");
 
     // <--- KES receives (kes_m, kes_c) from merchant

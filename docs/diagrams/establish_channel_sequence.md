@@ -19,19 +19,21 @@ sequenceDiagram
     end
 
     C->>M: Generate Tx0
-    note right of C: Wallet transaction protocol -> (ŝc, Qc, Rc), ωc,\n(ŝm, Qm, Rm), ωm
+    note right of C: Wallet transaction protocol -> (sc, Rc)\n(sm, Rm)
     M->>C: Ok/Abort
-
+    
+    C->>C: Adapt signature (Rc, sc) -> (Rc, Qc, ŝc), ωc
     C->>C: Encrypt ωc to KES -> Xc.\nNote: Tc = ωc.G on KES curve
     C->>C: Produce DLEQ proof for Π(Qc <-> Tc) 
-    C->>M: Χc, Tc, Πc
+    C->>M: Χc, (Rc, Qc, ŝc), Πc(Tc, Sc)
     
     M->>M: Verify DLEQ proof Πc (i.e. Qc <-> Tc)
+    M->>M: Verify adapter signature (Rc, Qc, ŝc)
     alt All verifications PASS
-        M->>M: Generate Χm, Tm, Πm as above.
+        M->>M: Generate Χm, (Rm, Qm, ŝm), Πm(Tm, Sm) as above.
         activate KES
-        M->>KES: Xc, Xm, Tc, Tm
-        M->>C: Xm, Tm, Πm
+        M->>KES: Xc, Xm
+        M->>C: (Rm, Qm, ŝm), Πm(Tm, Sm)
     else any verification FAILED
         M-xC: Error: Verification failed
         note left of M: Closed
@@ -44,9 +46,10 @@ sequenceDiagram
     KES-->>KES: Store (Xc, Xm). Destroy (ωc, ωm)
     deactivate KES
     
-    M->>M: Verify KES PoK (Γ1, Γ2)
-        C->>C: Perform same verification as M, above
-
+    M->>M: Verify KES PoK (Γm, Γc)
+    C->>C: Perform same verification as M, above
+    C->>C: Verify KES PoK (Γm, Γc)
+    
     alt All verifications PASS
         activate L1
         C-->>L1: Watch for funding transaction
