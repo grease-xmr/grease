@@ -36,7 +36,7 @@ pub fn create_channel_proposal(
 ) -> anyhow::Result<NewChannelProposal, anyhow::Error> {
     let customer_label = customer.config.user_label.clone().expect("User label is not set");
     let customer_contact_info = customer.identity.contact_info();
-    let customer_closing_address = customer.config.refund_address.clone().expect("Customer refund address is not set");
+    let customer_closing_address = customer.config.refund_address.expect("Customer refund address is not set");
     let merchant_contact_info = merchant.identity.contact_info();
     let seed_info = ChannelSeedBuilder::new(ChannelRole::Customer)
         .with_closing_address(merchant.config.refund_address.expect("Merchant refund address is not set"))

@@ -1,6 +1,7 @@
 use ciphersuite::group::ff::PrimeField;
 use dalek_ff_group::Scalar;
-use libgrease::crypto::keys::Curve25519PublicKey;
+use libgrease::cryptography::keys::Curve25519PublicKey;
+use libgrease::payment_channel::ChannelRole;
 use log::info;
 use modular_frost::curve::Ed25519;
 use modular_frost::sign::{SignatureShare, Writable};
@@ -55,8 +56,8 @@ async fn main() -> Result<(), WalletError> {
 
     // They exchange their public keys and create multisig wallets
     let rpc = SimpleRequestRpc::new("http://localhost:25070".into()).await?;
-    let mut wallet_a = MultisigWallet::new(rpc.clone(), k_a.clone(), &p_a, &p_b, None)?;
-    let mut wallet_b = MultisigWallet::new(rpc.clone(), k_b.clone(), &p_b, &p_a, None)?;
+    let mut wallet_a = MultisigWallet::new(rpc.clone(), k_a.clone(), &p_a, &p_b, None, ChannelRole::Customer)?;
+    let mut wallet_b = MultisigWallet::new(rpc.clone(), k_b.clone(), &p_b, &p_a, None, ChannelRole::Merchant)?;
 
     assert_eq!(
         wallet_a.joint_public_spend_key(),

@@ -2,7 +2,7 @@ use crate::common::scan_wallet;
 use crate::errors::WalletError;
 use crate::{AddressType, MoneroAddress, Network};
 use libgrease::amount::MoneroAmount;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use log::debug;
 use monero_rpc::{Rpc, RpcError};
 use monero_serai::block::Block;

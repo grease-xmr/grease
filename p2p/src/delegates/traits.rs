@@ -5,8 +5,8 @@ use crate::message_types::NewChannelProposal;
 use crate::Client;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
-use libgrease::crypto::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::crypto::zk_objects::{
+use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use libgrease::cryptography::zk_objects::{
     Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, Proofs0, PublicProof0,
     PublicUpdateProof, UpdateProofs,
 };

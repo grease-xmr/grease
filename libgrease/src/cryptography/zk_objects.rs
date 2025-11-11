@@ -1,5 +1,5 @@
-use crate::crypto::common_types::HashCommitment256;
-use crate::crypto::Commit;
+use crate::cryptography::common_types::HashCommitment256;
+use crate::cryptography::Commit;
 use crate::grease_protocol::utils::write_field_element;
 use crate::monero::data_objects::MultisigSplitSecrets;
 use ciphersuite::group::ff::PrimeField;
@@ -17,7 +17,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// The public inputs to the ZK prover for the initial witness generation proof. These parameters are shared with the
 /// peer and are publicly known.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct PublicInputs<C: Curve> {
     /// The public key/curve point on the ZK curve for the KES
@@ -42,13 +42,13 @@ impl<C: Curve, D: SecureDigest + Send + Clone> Commit<D> for PublicInputs<C> {
 
     fn commit(&self) -> Self::Committed {
         let mut transcript = Self::Transcript::new(b"public-input-commitment");
-        transcript.append_message(b"kes_point", &self.kes_point.to_bytes());
-        transcript.append_message(b"my_pubkey", &self.my_pubkey.to_bytes());
-        transcript.append_message(b"nonce_peer", &self.nonce_peer.to_repr());
-        transcript.append_message(b"T0", &self.T0.to_bytes());
-        transcript.append_message(b"rho_zk", &self.rho_zk.to_repr());
-        transcript.append_message(b"S0", &self.S0.compress().to_bytes());
-        transcript.append_message(b"rho_ed", &self.rho_ed.to_bytes());
+        transcript.append_message(b"kes_point", self.kes_point.to_bytes());
+        transcript.append_message(b"my_pubkey", self.my_pubkey.to_bytes());
+        transcript.append_message(b"nonce_peer", self.nonce_peer.to_repr());
+        transcript.append_message(b"T0", self.T0.to_bytes());
+        transcript.append_message(b"rho_zk", self.rho_zk.to_repr());
+        transcript.append_message(b"S0", self.S0.compress().to_bytes());
+        transcript.append_message(b"rho_ed", self.rho_ed.to_bytes());
 
         let commitment = transcript.challenge(b"public-input");
         let mut data = [0u8; 32];
@@ -115,8 +115,8 @@ impl<C: Curve> Writable for PrivateNonces<C> {
 #[cfg(test)]
 mod test {
     use super::PublicInputs;
-    use crate::crypto::common_types::HashCommitment256;
-    use crate::crypto::Commit;
+    use crate::cryptography::common_types::HashCommitment256;
+    use crate::cryptography::Commit;
     use blake2::Blake2b512;
     use ciphersuite::group::ff::Field;
     use ciphersuite::{Ciphersuite, Secp256k1};
@@ -293,7 +293,7 @@ pub struct Comm0PrivateInputs {
 }
 
 /// The outputs of the Commitment0 proofs that must be shared with the peer.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Comm0PublicOutputs {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
@@ -334,7 +334,7 @@ pub struct Comm0PrivateOutputs {
 }
 
 /// Struct holding the public outputs from a ZK update proof.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct PublicUpdateOutputs {
     /// **Τ_(i-1)** - The public key/curve point on Baby Jubjub for ω_(i-1).

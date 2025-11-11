@@ -2,7 +2,7 @@
 
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
-use libgrease::crypto::keys::Curve25519Secret;
+use libgrease::cryptography::keys::Curve25519Secret;
 use libp2p::Multiaddr;
 use monero::Address;
 use serde::{Deserialize, Serialize};

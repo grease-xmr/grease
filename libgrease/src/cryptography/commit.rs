@@ -1,8 +1,9 @@
+use crate::grease_protocol::utils::Readable;
 use flexible_transcript::{SecureDigest, Transcript};
 use modular_frost::sign::Writable;
 
 pub trait Commit<D: SecureDigest> {
-    type Committed: Clone + Writable + Eq;
+    type Committed: Clone + Writable + Eq + Readable;
     type Transcript: Transcript;
     fn commit(&self) -> Self::Committed;
     fn verify(&self, commitment: &Self::Committed) -> bool {

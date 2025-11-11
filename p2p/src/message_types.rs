@@ -3,7 +3,7 @@ use crate::ContactInfo;
 use futures::channel::oneshot;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
-use libgrease::crypto::zk_objects::{PublicProof0, PublicUpdateProof};
+use libgrease::cryptography::zk_objects::{PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
     ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
     MultisigSplitSecretsResponse, TransactionId, TransactionRecord,

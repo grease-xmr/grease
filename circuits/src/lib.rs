@@ -14,13 +14,12 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
-use toml;
 
 pub mod helpers;
 use helpers::*;
 
 use lazy_static::lazy_static;
-use libgrease::crypto::zk_objects::{Comm0PrivateOutputs, Comm0PublicOutputs, GenericPoint, GenericScalar};
+use libgrease::cryptography::zk_objects::{Comm0PrivateOutputs, Comm0PublicOutputs, GenericPoint, GenericScalar};
 
 lazy_static! {
     static ref B8: Point = Point {
@@ -55,9 +54,9 @@ pub enum BBError {
     SelfVerify,
 }
 
-impl Into<BBError> for &str {
-    fn into(self) -> BBError {
-        BBError::String(self.to_string())
+impl From<&str> for BBError {
+    fn from(val: &str) -> Self {
+        BBError::String(val.to_string())
     }
 }
 
@@ -283,13 +282,13 @@ pub(crate) fn generate_dleqproof_simple(
     // Compute T = secret * G1 (Baby Jubjub)
     let t: Point = B8.mul_scalar(&secret.clone().into());
 
-    let s: MontgomeryPoint = get_scalar_to_point_ed25519(&secret);
+    let s: MontgomeryPoint = get_scalar_to_point_ed25519(secret);
 
     // Compute commitments: R1 = blinding_DLEQ * G1 (Baby Jubjub)
     let r1: Point = B8.mul_scalar(&blinding_dleq.clone().into());
 
     // Compute commitments: R2 = blinding_DLEQ * G2 (Ed25519)
-    let r2: MontgomeryPoint = get_scalar_to_point_ed25519(&blinding_dleq);
+    let r2: MontgomeryPoint = get_scalar_to_point_ed25519(blinding_dleq);
 
     // Input byte array
     let header: [u8; 32] = [0; 32]; // NIZK_DLEQ HASH_HEADER_CONSTANT
@@ -451,9 +450,9 @@ pub fn verify_dleq_simple(
 
     //Verify: r.G == c.x.G - (c*x-r).G => R == c.T - z.G
     //        R2 == challenge_ed25519.S - response_ed25519.G
-    let response_ed25519_g2: MontgomeryPoint = get_scalar_to_point_ed25519(&response_ed25519);
+    let response_ed25519_g2: MontgomeryPoint = get_scalar_to_point_ed25519(response_ed25519);
     let challenge_ed25519: BigUint = challenge_bigint.rem_euclid(&ED25519_ORDER);
-    let challenge_ed25519_s: MontgomeryPoint = multiply_point_by_scalar_ed25519(&s, &challenge_ed25519);
+    let challenge_ed25519_s: MontgomeryPoint = multiply_point_by_scalar_ed25519(s, &challenge_ed25519);
 
     let mut count_match = 0u8;
     let r2_calc_pp =
@@ -511,10 +510,8 @@ fn call_shell(program: &str, args: &[&str], working_dir: Option<PathBuf>) -> io:
     let mut command = command.spawn()?;
 
     // Get stdout and stderr handles
-    let stdout =
-        command.stdout.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Failed to capture stdout"))?;
-    let stderr =
-        command.stderr.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Failed to capture stderr"))?;
+    let stdout = command.stdout.take().ok_or_else(|| io::Error::other("Failed to capture stdout"))?;
+    let stderr = command.stderr.take().ok_or_else(|| io::Error::other("Failed to capture stderr"))?;
 
     debug!("Execution of {program} complete.");
     // Read stdout into a string
@@ -534,13 +531,10 @@ fn call_shell(program: &str, args: &[&str], working_dir: Option<PathBuf>) -> io:
             env::current_dir()?.display(),
             args,
             status,
-            stderr_output.trim().to_string()
+            stderr_output.trim()
         );
         // panic!("args: {:?}\terror: {}", args, stderr_output.trim().to_string());
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Script failed with status: {}", status,),
-        ));
+        return Err(io::Error::other(format!("Script failed with status: {}", status,)));
     }
 
     Ok((stdout_output, stderr_output.trim().to_string()))
@@ -620,7 +614,7 @@ fn get_point_config_baby_jubjub(point: &Point) -> PointConfig {
     PointConfig { x: x_str.to_string(), y: y_str.to_string() }
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Serialize)]
 struct InitConfig {
     a_1: String,
@@ -648,7 +642,7 @@ struct InitConfig {
     pubkey_peer: PointConfig,
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Serialize)]
 struct UpdateConfig {
     blinding_DLEQ: String,
@@ -962,16 +956,16 @@ pub(crate) fn bb_prove_init(
         a_1: a_1.to_string(),
         blinding: blinding.to_string(),
         blinding_DLEQ: blinding_dleq.to_string(),
-        challenge_bytes: byte_array_to_string_array(&challenge_bytes),
+        challenge_bytes: byte_array_to_string_array(challenge_bytes),
         enc_1: enc_1.to_string(),
         enc_2: enc_2.to_string(),
         nonce_peer: nonce_peer.to_string(),
         r_1: r_1.to_string(),
         r_2: r_2.to_string(),
-        response_div_BabyJubJub: byte_array_to_string_array(&response_div_baby_jub_jub),
-        response_div_ed25519: byte_array_to_string_array(&response_div_ed25519),
+        response_div_BabyJubJub: byte_array_to_string_array(response_div_baby_jub_jub),
+        response_div_ed25519: byte_array_to_string_array(response_div_ed25519),
         response_BabyJubJub: response_baby_jub_jub.to_string(),
-        response_ed25519: byte_array_to_string_array(&response_ed25519),
+        response_ed25519: byte_array_to_string_array(response_ed25519),
         share_1: share_1.to_string(),
         share_2: share_2.to_string(),
         witness_0: witness_0.to_string(),
@@ -985,7 +979,7 @@ pub(crate) fn bb_prove_init(
     };
 
     // Serialize to TOML string
-    let toml_string = toml::to_string_pretty(&config).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let toml_string = toml::to_string_pretty(&config).map_err(io::Error::other)?;
 
     let target_dir = get_target_path();
     create_dir_if_not_exists(&target_dir)?;
@@ -1079,20 +1073,14 @@ fn create_dir_if_not_exists(path: impl AsRef<Path>) -> Result<(), BBError> {
 }
 
 fn get_noir_project_path() -> PathBuf {
-    env::var("NARGO_PATH").map(|p| PathBuf::from(p)).unwrap_or_else(|_| PathBuf::from("./circuits"))
+    env::var("NARGO_PATH").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("./circuits"))
 }
 
 fn get_target_path() -> PathBuf {
-    env::var("NARGO_TARGET_PATH")
-        .map(|p| PathBuf::from(p))
-        .unwrap_or_else(|_| get_noir_project_path().join("./grease-proofs"))
+    env::var("NARGO_TARGET_PATH").map(PathBuf::from).unwrap_or_else(|_| get_noir_project_path().join("./grease-proofs"))
 }
 
-pub(crate) fn bb_verify(
-    proof: &Box<[u8; 14080]>,
-    public_inputs: &Vec<u8>,
-    view_key_file: &str,
-) -> Result<bool, BBError> {
+pub(crate) fn bb_verify(proof: &[u8; 14080], public_inputs: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> {
     // Create named temporary files
     let target_dir = get_target_path();
     let proof_file_path = target_dir.join("proof");
@@ -1101,7 +1089,7 @@ pub(crate) fn bb_verify(
     let inputs_file = inputs_file_path.to_string_lossy().to_string();
 
     // Write content to the temporary files
-    std::fs::write(proof_file_path, **proof)?;
+    std::fs::write(proof_file_path, *proof)?;
     std::fs::write(target_dir.join("public_inputs"), public_inputs)?;
 
     //nargo verify
@@ -1118,10 +1106,10 @@ pub(crate) fn bb_verify(
 }
 
 pub fn bb_verify_init(
-    nonce_peer: &BigUint,
-    public_key_bjj_peer: &Point,
-    kes_public_key: &Point,
-    public_init: &PublicInit,
+    _nonce_peer: &BigUint,
+    _public_key_bjj_peer: &Point,
+    _kes_public_key: &Point,
+    _public_init: &PublicInit,
     verification_key: &[u8],
     zero_knowledge_proof_init: &ZeroKnowledgeProofInit,
 ) -> Result<bool, BBError> {
@@ -1151,11 +1139,11 @@ pub(crate) fn bb_prove_update(
 ) -> Result<ZeroKnowledgeProofUpdate, BBError> {
     let config = UpdateConfig {
         blinding_DLEQ: blinding_dleq.to_string(),
-        challenge_bytes: byte_array_to_string_array(&challenge_bytes),
-        response_div_BabyJubJub: byte_array_to_string_array(&response_div_baby_jub_jub),
-        response_div_ed25519: byte_array_to_string_array(&response_div_ed25519),
+        challenge_bytes: byte_array_to_string_array(challenge_bytes),
+        response_div_BabyJubJub: byte_array_to_string_array(response_div_baby_jub_jub),
+        response_div_ed25519: byte_array_to_string_array(response_div_ed25519),
         response_BabyJubJub: response_baby_jub_jub.to_string(),
-        response_ed25519: byte_array_to_string_array(&response_ed25519),
+        response_ed25519: byte_array_to_string_array(response_ed25519),
         witness_i: witness_i.to_string(),
         witness_im1: witness_im1.to_string(),
 
@@ -1164,7 +1152,7 @@ pub(crate) fn bb_prove_update(
     };
 
     // Serialize to TOML string
-    let toml_string = toml::to_string_pretty(&config).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let toml_string = toml::to_string_pretty(&config).map_err(io::Error::other)?;
 
     // hard-code this working directory and leave temp files in place until all the bugs have been ironed out.
     let target_path = get_target_path();
@@ -1248,7 +1236,7 @@ pub(crate) fn bb_prove_update(
 }
 
 /// The outputs of the Commitment0 proofs that must be shared with the peer.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Debug, Clone)]
 pub struct PublicInit {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
@@ -1277,7 +1265,7 @@ pub struct PublicInit {
     pub R2: MontgomeryPoint,
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 impl PublicInit {
     pub fn new(
         T_0: &Point,
@@ -1302,18 +1290,18 @@ impl PublicInit {
             enc_1: enc_1.clone(),
             phi_2: phi_2.clone(),
             enc_2: enc_2.clone(),
-            S_0: S_0.clone(),
+            S_0: *S_0,
             c: challenge,
             rho_bjj: rho_bjj.clone(),
             rho_ed: rho_ed.clone(),
             R1: R1.clone(),
-            R2: R2.clone(),
+            R2: *R2,
         }
     }
 }
 
 /// Struct holding the public outputs from a ZK update proof.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[derive(Debug, Clone)]
 pub struct PublicUpdate {
     /// **Τ_(i-1)** - The public key/curve point on Baby Jubjub for ω_(i-1).
@@ -1334,7 +1322,7 @@ pub struct PublicUpdate {
     pub R_ed: MontgomeryPoint,
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 impl PublicUpdate {
     pub fn new(
         T_prev: &Point,
@@ -1351,12 +1339,12 @@ impl PublicUpdate {
         PublicUpdate {
             T_prev: T_prev.clone(),
             T_current: T_current.clone(),
-            S_current: S_current.clone(),
-            challenge: challenge,
+            S_current: *S_current,
+            challenge,
             rho_bjj: rho_bjj.clone(),
             rho_ed: rho_ed.clone(),
             R_bjj: R_bjj.clone(),
-            R_ed: R_ed.clone(),
+            R_ed: *R_ed,
         }
     }
 }
@@ -1432,7 +1420,7 @@ impl InitialProof {
             phi_2: GenericPoint::new(self.phi_2.compress()),
             enc_2: big_int_to_generic(&self.enc_2).unwrap(),
             S_0: GenericPoint::new(self.s_0.to_bytes()),
-            c: GenericScalar::new(self.challenge_bytes.clone()),
+            c: GenericScalar::new(self.challenge_bytes),
             rho_bjj: big_int_to_generic(&self.rho_bjj).unwrap(),
             rho_ed: big_int_to_generic(&self.rho_ed).unwrap(),
         }
@@ -1443,8 +1431,8 @@ impl InitialProof {
             witness_0: big_int_to_generic(&self.witness_0).unwrap(),
             peer_share: big_int_to_generic(&self.share_1).unwrap(),
             kes_share: big_int_to_generic(&self.share_2).unwrap(),
-            delta_bjj: GenericScalar::new(self.response_div_baby_jub_jub.clone()),
-            delta_ed: GenericScalar::new(self.response_div_ed25519.clone()),
+            delta_bjj: GenericScalar::new(self.response_div_baby_jub_jub),
+            delta_ed: GenericScalar::new(self.response_div_ed25519),
         }
     }
 }
@@ -1466,13 +1454,13 @@ pub fn generate_initial_proofs(
     let nargo_version = get_nargo_version()?;
     info!("`nargo` version: {}", nargo_version);
 
-    let (witness_0, t_0, s_0) = make_witness0(&nonce_peer, &blinding)?;
+    let (witness_0, t_0, s_0) = make_witness0(nonce_peer, blinding)?;
 
-    let (c_1, share_1, share_2) = feldman_secret_share_2_of_2(&witness_0, &a_1)?;
+    let (c_1, share_1, share_2) = feldman_secret_share_2_of_2(&witness_0, a_1)?;
 
-    let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &public_key_bjj_peer, None)?;
+    let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, r_1, public_key_bjj_peer, None)?;
 
-    let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &kes_public_key, None)?;
+    let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, r_2, kes_public_key, None)?;
 
     //NIZK DLEQ
     let (
@@ -1483,7 +1471,7 @@ pub fn generate_initial_proofs(
         r2,
         response_div_baby_jub_jub,
         response_div_ed25519,
-    ) = generate_dleqproof_simple(&witness_0, &blinding_dleq)?;
+    ) = generate_dleqproof_simple(&witness_0, blinding_dleq)?;
 
     //Verify
     let res = verify_dleq_simple(
@@ -1509,15 +1497,15 @@ pub fn generate_initial_proofs(
 
     //Prove
     let zero_knowledge_proof_init = bb_prove_init(
-        &a_1,
-        &blinding,
-        &blinding_dleq,
+        a_1,
+        blinding,
+        blinding_dleq,
         &challenge_bytes,
         &enc_1,
         &enc_2,
-        &nonce_peer,
-        &r_1,
-        &r_2,
+        nonce_peer,
+        r_1,
+        r_2,
         &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
         &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
         &response_baby_jub_jub,
@@ -1529,8 +1517,8 @@ pub fn generate_initial_proofs(
         &c_1,
         &fi_1,
         &fi_2,
-        &kes_public_key,
-        &public_key_bjj_peer,
+        kes_public_key,
+        public_key_bjj_peer,
     )?;
 
     //Verify
@@ -1552,9 +1540,9 @@ pub fn generate_initial_proofs(
     let verification_key = load_vk(get_target_path(), "vk_init")?;
 
     let verification = bb_verify_init(
-        &nonce_peer,
-        &public_key_bjj_peer,
-        &kes_public_key,
+        nonce_peer,
+        public_key_bjj_peer,
+        kes_public_key,
         &public_init,
         &verification_key,
         &zero_knowledge_proof_init,
@@ -1610,7 +1598,7 @@ pub struct UpdateProof {
 }
 
 pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &Point) -> Result<UpdateProof, BBError> {
-    let (witness_i, t_i, s_i) = make_vcof(&witness_im1)?;
+    let (witness_i, t_i, s_i) = make_vcof(witness_im1)?;
 
     //NIZK DLEQ
     let (
@@ -1621,7 +1609,7 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
         r2,
         response_div_baby_jub_jub,
         response_div_ed25519,
-    ) = generate_dleqproof_simple(&witness_i, &blinding_dleq)?;
+    ) = generate_dleqproof_simple(&witness_i, blinding_dleq)?;
 
     //Verify
     let res = verify_dleq_simple(
@@ -1650,21 +1638,21 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
 
     //Prove
     let zero_knowledge_proof_update = bb_prove_update(
-        &blinding_dleq,
+        blinding_dleq,
         &challenge_bytes,
         &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
         &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
         &response_baby_jub_jub,
         &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
         &witness_i,
-        &witness_im1,
+        witness_im1,
         &t_i,
-        &t_im1,
+        t_im1,
     )?;
 
     //Verify
     let public_update = PublicUpdate::new(
-        &t_im1,
+        t_im1,
         &t_i,
         &s_i,
         &challenge_bytes,
