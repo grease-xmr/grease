@@ -15,6 +15,7 @@ pub mod hashes;
 pub mod keys;
 pub mod pok;
 pub mod secret_encryption;
+pub mod vcof;
 pub mod zk_objects;
 
 pub use commit::Commit;

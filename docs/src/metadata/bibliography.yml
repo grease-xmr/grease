@@ -1,13 +1,16 @@
-what-is-monero:
-  type: web
-  title: What is Monero?
-  url: https://www.getmonero.org/get-started/what-is-monero/
+# Web pages / Blog posts - alphabetical by tag
 all-about-monero:
   type: web
   title: All About Monero
   author:
     - Chainalysis
   url: https://www.chainalysis.com/blog/all-about-monero/
+
+what-is-monero:
+  type: web
+  title: What is Monero?
+  url: https://www.getmonero.org/get-started/what-is-monero/
+
 culafi24:
     type: web
     title: Monero and the complicated world of privacy coins
@@ -15,6 +18,8 @@ culafi24:
     author:
       - Alexander Culafi
     url: https://www.techtarget.com/searchsecurity/news/252512394/Monero-and-the-complicated-world-of-privacy-coins
+
+# Academic papers /  Theses - Alphabetical by tag
 aux-channel:
   type: proceedings
   author:
@@ -27,6 +32,26 @@ aux-channel:
   title: "AuxChannel: Enabling Efficient Bi-Directional Channel for Scriptless Blockchains."
   conference: 2022 ACM on Asia Conference on Computer and Communications Security (ASIA CCS '22). 
   url: https://eprint.iacr.org/2022/117.pdf
+
+fournier19:
+  type: paper
+  title: "One-Time Verifiably Encrypted Signatures, A.K.A. Adaptor Signatures"
+  author: Lloyd Fournier
+  url: https://github.com/LLFourn/one-time-VES/blob/master/main.pdf
+
+monet:
+  type: proceedings
+  title: "Monet: A Fast Payment Channel Network for Scriptless Cryptocurrency Monero"
+  author:
+    - Sui, Zhimei
+    - Liu, Joseph K.
+    - Yu, Jiangshan
+    - Qin, Xianrui
+  conference: 2022 IEEE 42nd International Conference on Distributed Computing Systems (ICDCS)
+  date: 2022-07-10
+  pages: 280-290
+  url: https://eprint.iacr.org/2022/744.pdf
+
 sui23:
   type: thesis
   title: Payment Channel Network for Scriptless Blockchains
@@ -35,18 +60,8 @@ sui23:
   author:
     - Zhimei Sui
   url:  https://bridges.monash.edu/articles/thesis/Payment_Channel_Network_for_Scriptless_Blockchains/23909907
-monet:
-  type: proceedings
-  title: "Monet: A Fast Payment Channel Network for Scriptless Cryptocurrency Monero"
-  author:
-   - Sui, Zhimei
-   - Liu, Joseph K.
-   - Yu, Jiangshan
-   - Qin, Xianrui
-  conference: 2022 IEEE 42nd International Conference on Distributed Computing Systems (ICDCS)
-  date: 2022-07-10
-  pages: 280-290
-  url: https://eprint.iacr.org/2022/744.pdf
+
+# Conference talks / Presentations - Alphabetical by tag
 monerokon-grease:
   type: web
   title: "Grease: A minimal Monero Payment Channel implementation for Monero"
@@ -54,6 +69,8 @@ monerokon-grease:
     - CJ
     - Sean Coughlin
   url: https://cfp.twed.org/mk5/talk/QYDGPM/
+
+# Other / Misc - Alphabetical by tag
 jeffro25:
   type: misc
   author:

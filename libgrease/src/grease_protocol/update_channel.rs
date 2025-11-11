@@ -1,33 +1,13 @@
-use crate::amount::MoneroDelta;
-use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::dleq::Dleq;
-use crate::cryptography::secret_encryption::SecretWithRole;
 use crate::grease_protocol::adapter_signature::{AdapterSignatureError, AdapterSignatureHandler};
 use crate::grease_protocol::error::DleqError;
 use crate::payment_channel::HasRole;
-use crate::XmrScalar;
-use ciphersuite::Ed25519;
 use modular_frost::curve::Curve as FrostCurve;
 use rand_core::{CryptoRng, RngCore};
 use thiserror::Error;
-
-pub struct GreaseUpdate {
-    update_count: u64,
-    delta: MoneroDelta,
-    omega: XmrScalar,
-    peer_shard: SecretWithRole<Ed25519>,
-    signature: AdaptedSignature<Ed25519>,
-}
+use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
 
 pub trait UpdateProtocol<C: FrostCurve>: HasRole + AdapterSignatureHandler {
-    fn update_count(&self) -> u64;
-    fn prepare_next_update<D: Dleq<C>>(
-        &mut self,
-        update_count: u64,
-        delta: MoneroDelta,
-    ) -> Result<(), UpdateProtocolError>;
-    fn update_prepared(&self, update_count: u64) -> bool;
-    fn delta_for_next_update(&self) -> Option<MoneroDelta>;
+    type VCOF: VerifiableConsecutiveOnewayFunction<C>;
 
     fn update<R: RngCore + CryptoRng>(&mut self, update_count: u64, rng: &mut R) -> Result<(), UpdateProtocolError>;
 }
