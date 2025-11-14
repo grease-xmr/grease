@@ -19,7 +19,7 @@ At *initialization*, two peers will:
 + verify the correctness of the closing transaction using the shared view key, the unadapted signatures and the adaptor statements,
 + create a shared funding transaction where both peers provide a $v_"in"$ input from their private Monero wallet with the exact amount of their balance,
 + verify the correctness of the funding transaction using the shared view key,
-+ activate the KES with the root secret shares,
++ activate the KES with the root secrets,
 + and finally broadcast the funding transaction to Monero.
 
 === Channel Update
@@ -68,7 +68,7 @@ The KES reacts to the defendant by:
 4. recognizing that the dispute‑response window has expired, ruling in favor of the plaintiff and proceeding with the unlock process.
 
 The KES will start the unlock process for the wronged peer against the violating peer:
-+ the KES will close the dispute and update the public state with the violating peer’s saved root‑secret share $sigma_2$, encrypted to the wronged peer.
++ the KES will close the dispute and update the public state with the violating peer’s saved root‑secret $witness_0$, encrypted to the wronged peer.
 
 The wronged peer will monitor the KES public state for the dispute closure. If the wronged peer detects the unlock process, the wronged peer will:
 + reconstruct the violating peer's root secret,
@@ -152,11 +152,8 @@ use.
       table.header([*Output*], [*Visibility*], []),
       [$T_0$], [Public], [The public key/curve point on Baby Jubjub for $witness_0$],
       [$witness_0$], [Private], [The root private key protecting access to the user's locked value (`witness_0`)],
-      [$c_1$], [Public], [`Feldman commitment 1` (used in tandem with `Feldman commitment 0` $=T_0$), which is a public key/curve point on Baby Jubjub],
-      [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
       [$Phi_1$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer (`fi_1`)],
       [$chi_1$], [Public], [The encrypted value of $sigma_1$ (`enc_1`)],
-      [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
       [$Phi_2$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES (`fi_2`)],
       [$chi_2$], [Public], [The encrypted value of $sigma_2$ (`enc_2`)],
       [$S_0$], [Public], [The public key/curve point on Ed25519 for $witness_0$],
@@ -337,25 +334,20 @@ $
 === Outputs
 #table( columns: 3,
   [*Output*], [*Visibility*], [],
-  [$c_1$], [Public], [`Feldman commitment 1` (used in tandem with `Feldman commitment 0` $=T_0$), which is a public key/curve point on Baby Jubjub],
-  [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
   [$Phi_1$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer (`fi_1`)],
   [$chi_1$], [Public], [The encrypted value of $sigma_1$ (`enc_1`)],
-  [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
   [$Phi_2$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES (`fi_2`)],
   [$chi_2$], [Public], [The encrypted value of $sigma_2$ (`enc_2`)],
 )
 
 === Summary
 
-The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the the provided inputs and calls the *FeldmanSecretShare_2_of_2* and *VerifyEncryptMessage* operations.
+The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the the provided inputs and calls the *VerifyEncryptMessage* operation.
 
 === Methods
 
 $
-  (c_1,sigma_1,sigma_2) = "FeldmanSecretShare_2_of_2"(omega_0,a_1) \
-  (Phi_1,chi_1) = "VerifyEncryptMessage"(sigma_1,nu_1,Pi_"peer") \
-  (Phi_2,chi_2) = "VerifyEncryptMessage"(sigma_2,nu_2,Pi_"KES") \
+  (Phi_2,chi_2) = "VerifyEncryptMessage"(omega_0,nu_2,Pi_"KES") \
 $
 
 
@@ -447,48 +439,11 @@ $
   R_ed = C_S_i - Rho_ed \
 $
 
-== FeldmanSecretShare_2_of_2
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$witness_0$], [Private], [The root private key protecting access to the user's locked value (`secret`)],
-  [$a_1$], [Private], [Random 251 bit value],
-)
-
-=== Outputs
-#table( columns: 3,
-  [*Output*], [*Visibility*], [],
-  [$T_0$], [Public], [Feldman commitment 0, which is the public key/curve point on Baby Jubjub for $witness_0$],
-  [$c_1$], [Public], [Feldman commitment 1, which is a public key/curve point on Baby Jubjub],
-  [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
-  [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
-)
-
 === Summary
 
-The *FeldmanSecretShare_2_of_2* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It receives the provided secret data and random entropy inputs. The outputs are the two perfectly binding Feldman commitments and the two encoded split shares to send to the destinations. The circuit is not ZK across the inputs so that full knowledge of the private outputs can reconstruct the private inputs.
-
-The outputs are used for the further *VerifyEncryptMessage*, *VerifyFeldmanSecretShare_peer*, *VerifyFeldmanSecretShare_KES*, and *ReconstructFeldmanSecretShare_2_of_2* operations.
+The outputs are used for the further *VerifyEncryptMessage* operation.
 
 The scalar order of the Baby Jubjub curve is represented here by $L_bjj$.
-
-Note that for the peer to verify the validity of the secret sharing protocol, the calculation is:
-$
-  "VerifyFeldmanSecretShare_peer"(T_0, c_1, sigma_1)
-$
-
-Note that for the KES to verify the validity of the secret sharing protocol, the calculation is:
-$
-  "VerifyFeldmanSecretShare_KES"(T_0, c_1, sigma_2)
-$
-
-Note that for reconstructing the secret input $witness_0$, the calculation is:
-$
-  omega_0 = "ReconstructFeldmanSecretShare_2_of_2"(sigma_1, sigma_2)
-$
-
-The negative $sigma_1$ is non-standard compared to typical Shamir/Feldman schemes. We use this to make the mathematics clearer and to avoid subtraction operations in certain legacy circuit implementations.
 
 === Methods
 
@@ -497,84 +452,6 @@ $
   c_1 = a_1 dot.c G_bjj \
   sigma_1 = -(omega_0 + a_1) mod L_bjj \
   sigma_2 = 2*omega_0 + a_1 mod L_bjj
-$
-
-== ReconstructFeldmanSecretShare_2_of_2
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
-  [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
-)
-
-=== Outputs
-#table( columns: 3,
-  [*Output*], [*Visibility*], [],
-  [$witness_0$], [Private], [The root private key protecting access to the user's locked value (`secret`)],
-)
-
-=== Summary
-
-The *ReconstructFeldmanSecretShare_2_of_2* operation is a reconstruction protocol and is language independent. It receives the two split shares as inputs and outputs the original $witness_0$ secret.
-
-The scalar order of the Baby Jubjub curve is represented here by $L_bjj$.
-
-=== Methods
-
-$
-  omega_0 = sigma_1 + sigma_2 mod L_bjj
-$
-
-== VerifyFeldmanSecretShare_peer
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$T_0$], [Public], [Feldman commitment 0, which is the public key/curve point on Baby Jubjub for $witness_0$],
-  [$c_1$], [Public], [Feldman commitment 1, which is a public key/curve point on Baby Jubjub],
-  [$sigma_1$], [Private], [The split of $witness_0$ shared with the peer (`share_1`)],
-)
-
-=== Outputs
-
-There are no outputs.
-
-=== Summary
-
-The *VerifyFeldmanSecretShare_peer* operation is a verification protocol and is language independent. This operation is redundant, in that the successful verification of the previous *FeldmanSecretShare_2_of_2* operation with the same publicly visible parameters implies that this operation will succeed.
-
-=== Methods
-
-$
-  "assert"(sigma_1 dot.c G_bjj == -(T_0 + c_1))
-$
-
-== VerifyFeldmanSecretShare_KES
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$T_0$], [Public], [Feldman commitment 0, which is the public key/curve point on Baby Jubjub for $witness_0$],
-  [$c_1$], [Public], [Feldman commitment 1, which is a public key/curve point on Baby Jubjub],
-  [$sigma_2$], [Private], [The split of $witness_0$ shared with the KES (`share_2`)],
-)
-
-=== Outputs
-
-There are no outputs.
-
-=== Summary
-
-The *VerifyFeldmanSecretShare_KES* operation is a verification protocol and is language independent. This operation is
-not redundant, in that the successful verification of the previous *FeldmanSecretShare_2_of_2* operation with the same publicly visible parameters implies that this operation will succeed, but the conditions are different.
-
-This operation will be implemented by the KES in its own native implementation language where the successful verification of the previous *FeldmanSecretShare_2_of_2* operation cannot be assumed. As such, this operation will exist and can called independently of any other operations.
-
-=== Methods
-
-$
-  "assert"(sigma_2 dot.c G_bjj == 2 dot.c T_0 + c_1)
 $
 
 == VerifyEncryptMessage

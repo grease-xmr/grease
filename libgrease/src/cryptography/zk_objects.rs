@@ -298,12 +298,12 @@ pub struct Comm0PrivateInputs {
 pub struct Comm0PublicOutputs {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
     pub T_0: GenericPoint,
-    /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
-    pub c_1: GenericPoint,
-    /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
-    pub phi_1: GenericPoint,
-    /// **χ₁** - The encrypted value of σ₁.
-    pub enc_1: GenericScalar,
+    // /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
+    // pub c_1: GenericPoint,
+    // /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
+    // pub phi_1: GenericPoint,
+    // /// **χ₁** - The encrypted value of σ₁.
+    // pub enc_1: GenericScalar,
     /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
     pub phi_2: GenericPoint,
     /// **χ₂** - The encrypted value of σ₂ (enc₂).
@@ -323,11 +323,11 @@ pub struct Comm0PublicOutputs {
 pub struct Comm0PrivateOutputs {
     /// **ω₀** - The root private key protecting access to the user's locked value (witness₀).
     pub witness_0: GenericScalar,
-    /// **σ₁** - The split of ω₀ shared with the peer (share₁).
-    pub peer_share: GenericScalar,
+    // /// **σ₁** - The split of ω₀ shared with the peer (share₁).
+    // pub peer_share: GenericScalar,
     /// **σ₂** - The split of ω₀ shared with the KES (share₂).
-    pub kes_share: GenericScalar,
-    /// **Δ_BabyJubjub** - Optimization parameter (response_div_BabyJubjub).
+    // pub kes_share: GenericScalar,
+    // /// **Δ_BabyJubjub** - Optimization parameter (response_div_BabyJubjub).
     pub delta_bjj: GenericScalar,
     /// **Δ_Ed25519** - Optimization parameter (response_div_BabyJubJub).
     pub delta_ed: GenericScalar,

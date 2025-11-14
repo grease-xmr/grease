@@ -9,10 +9,9 @@ Disputing a channel requires the following steps:
 3. If verification succeeds, the KES opens a challenge window to allow the defendant (e.g., the Customer) an opportunity to respond.
 4. During the challenge window, the KES monitors for any valid challenge from the defendant, such as evidence of a newer channel state.
 5. If no valid challenge is submitted and the window expires, the plaintiff requests resolution from the KES.
-6. The KES releases the defendant's encrypted KES-shard to the plaintiff.
-7. The plaintiff reconstructs the defendant's secret using the peer-shard (already in possession) and the newly released KES-shard.
-8. The plaintiff adapts the signatures to form a valid closing transaction.
-9. The plaintiff broadcasts the closing transaction to the Monero blockchain.
-10. Once the transaction is confirmed on the Monero blockchain, the channel transitions to the Closed state.
+6. The KES releases the defendant's encrypted secret to the plaintiff.
+7. The plaintiff adapts the signatures to form a valid closing transaction.
+8. The plaintiff broadcasts the closing transaction to the Monero blockchain.
+9. Once the transaction is confirmed on the Monero blockchain, the channel transitions to the Closed state.
 
 #include "../diagrams/channel_dispute_sequence.md"
