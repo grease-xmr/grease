@@ -183,11 +183,11 @@ fn channel_opening_protocol() {
         signature",
         );
     let proof_c = customer_protocol.kes_client().unwrap().dleq_proof();
-    let enrypted_w0c = customer_protocol.kes_client().unwrap().encrypt_to_kes(&mut rng);
+    let encrypted_w0c = customer_protocol.kes_client().unwrap().encrypt_to_kes(&mut rng);
     // ---> Send (DLEQ proof, (ŝc, Qc, Rc), Xc to merchant
     let sig_data = adapted_c.serialize();
     let proof_data = proof_c.serialize();
-    let encrypted_w0c_data = enrypted_w0c.serialize();
+    let encrypted_w0c_data = encrypted_w0c.serialize();
 
     // <--- Merchant receives (adapted_c, DLEQ proof, X_c) from customer
     // Merchant verifies the adapter signature (and DLEQ proof, and Qs match)

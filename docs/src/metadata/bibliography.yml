@@ -34,7 +34,7 @@ aux-channel:
   url: https://eprint.iacr.org/2022/117.pdf
 
 fournier19:
-  type: paper
+  type: web
   title: "One-Time Verifiably Encrypted Signatures, A.K.A. Adaptor Signatures"
   author: Lloyd Fournier
   url: https://github.com/LLFourn/one-time-VES/blob/master/main.pdf

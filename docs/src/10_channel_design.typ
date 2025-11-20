@@ -33,12 +33,7 @@ for the vast majority of channel instances, but its presence it mandatory to dis
   In fact, you could run Grease without a KES, if there is a high-trust relationship between the customer and merchant.
 ]
 
-When the 2-of-2 multisig wallet is created, both the customer and merchant split their spending keys into two
-encrypted pieces. They give one piece to their counterparty, and the other piece they give to the KES. The
-splitting is done in a way that is
-- verifiable - even though the secrets are encrypted, we can prove that the pieces form the original spending key.
-- secure - the pieces are encrypted to the public keys of the KES and counterparty respectively, so they can be
-  publicly communicated without worrying about the spending key being reconstructed by a malicious party.
+When the 2-of-2 multisig wallet is created, both the customer and merchant encrypt their adapter signature offset to the KES.
 
 If, say, the merchant tries to force-close a channel using an outdated state (which is itself enacting the dispute
 process), or refuses to publish anything at all (in which case the customer will enact the force-close process), the
@@ -46,9 +41,8 @@ customer has a certain window in which it can prove to the KES that it has a val
 signature.
 
 In a successful dispute, either by waiting for the challenge period to end, or the KES accepts the challenge, the KES
-will hand over the merchant's secret share and the customer will be able to reconstruct the spending key and spend
-the funds out of the multisig wallet. In this case, the customer can then spend any state from the entire history of
-the channel, including any states that favour the customer. This is a form of punishment that should motivate
+will hand over the merchant's first adapter offset. The customer will then be able to sign any transaction in the history of
+the channel by reconstructing the appropriate adapter signature offset, including any states that favour the customer. This is a form of punishment that should motivate
 parties to behave honestly.
 
 #warning[
@@ -91,7 +85,7 @@ On a high level, the payment channel lifecycle goes through 6 phases:
   broadcast  of the commitment transaction (if necessary).
 - `Disputing` - The channel is being disputed because someone initiated a force-close. If the local party initiated
   the force close, this phase includes invoking the force-close on the KES, and waiting for the challenge window to
-  expire so that the counterparty's secret share can be recovered in order to synthesize the closing transaction.
+  expire so that the counterparty's secret can be recovered in order to synthesize the closing transaction.
   If the other party initiated the force-close, we can invoke the KES to challenge the closing state, or do
   nothing and accept the state given by the counterparty.
   The final state transition is always to the `Closed` state, only the reason can vary.
