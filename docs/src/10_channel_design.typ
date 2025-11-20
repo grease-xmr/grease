@@ -33,7 +33,7 @@ for the vast majority of channel instances, but its presence it mandatory to dis
   In fact, you could run Grease without a KES, if there is a high-trust relationship between the customer and merchant.
 ]
 
-When the 2-of-2 multisig wallet is created, both the customer and merchant encrypt their spending keys to the KES.
+When the 2-of-2 multisig wallet is created, both the customer and merchant encrypt their adapter signature offset to the KES.
 
 If, say, the merchant tries to force-close a channel using an outdated state (which is itself enacting the dispute
 process), or refuses to publish anything at all (in which case the customer will enact the force-close process), the
@@ -41,9 +41,8 @@ customer has a certain window in which it can prove to the KES that it has a val
 signature.
 
 In a successful dispute, either by waiting for the challenge period to end, or the KES accepts the challenge, the KES
-will hand over the merchant's secret and the customer will be able to reconstruct the spending key and spend
-the funds out of the multisig wallet. In this case, the customer can then spend any state from the entire history of
-the channel, including any states that favour the customer. This is a form of punishment that should motivate
+will hand over the merchant's first adapter offset. The customer will then be able to sign any transaction in the history of
+the channel by reconstructing the appropriate adapter signature offset, including any states that favour the customer. This is a form of punishment that should motivate
 parties to behave honestly.
 
 #warning[

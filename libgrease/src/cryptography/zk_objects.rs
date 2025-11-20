@@ -298,12 +298,6 @@ pub struct Comm0PrivateInputs {
 pub struct Comm0PublicOutputs {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
     pub T_0: GenericPoint,
-    // /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
-    // pub c_1: GenericPoint,
-    // /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
-    // pub phi_1: GenericPoint,
-    // /// **χ₁** - The encrypted value of σ₁.
-    // pub enc_1: GenericScalar,
     /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
     pub phi_2: GenericPoint,
     /// **χ₂** - The encrypted value of σ₂ (enc₂).

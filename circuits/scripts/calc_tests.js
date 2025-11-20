@@ -22,14 +22,12 @@ const privateKey_KES = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % B
 
 //Settings - Internal
 const blinding = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
-// const a_1 = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
-// const r_1 = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 const r_2 = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 const blinding_DLEQ_Init = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 const blinding_DLEQ_Update = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 
 //Derives
-const pubkey_peer = mulPointEscalar(Base8, privateKey_peer);
+const pubkey_peer = mulPointEscalar(Base8, privateKey_peer);//TODO: Remove this unused value
 const pubkey_KES = mulPointEscalar(Base8, privateKey_KES);
 
 
@@ -87,36 +85,11 @@ function hexTo32ByteArrayDecimal(hexVariable) {
   let output = '[' + os.EOL;
   array.forEach((byte, index) => {
       output += '    "' + byte.toString(10) + '",' + os.EOL;
-      // if (index < array.length - 1) {
-      //    output += '", "'; // Add comma separator except for the last byte
-      // }
   });
   output += ']';
 
   return output;
 }
-
-// function hexTo64ByteArrayDecimal(hexVariable) {
-//   // Pad to 128 characters (64 bytes)
-//   const hex = hexVariable.padStart(128, '0');
-
-//   // Create a Buffer from the hex string
-//   const buffer = Buffer.from(hex, 'hex');
-
-//   // Uint8Array (64 bytes)
-//   const array = new Uint8Array(buffer);
-
-//   let output = '["';
-//   array.forEach((byte, index) => {
-//       output += byte.toString(10);
-//       if (index < array.length - 1) {
-//           output += '", "'; // Add comma separator except for the last byte
-//       }
-//   });
-//   output += '"]';
-
-//   return output;
-// }
 
 /**
  * Subtract one point from another on the Baby Jubjub curve
@@ -263,7 +236,7 @@ function generateDLEQProof_simple(secret, blinding_DLEQ) {
     };
 }
 
-//Init: VerifyWitness0 + VerifyWitnessSharing
+//Init: VerifyWitness0 + Encrypt to KES
 
 const byteArray_VerifyWitness0 = Buffer.from([
   ...Array(32).fill(0x00), // VerifyWitness0 HASH_HEADER_CONSTANT
@@ -277,63 +250,6 @@ var witness_0 = hashBig_VerifyWitness0 % BABY_JUBJUB_ORDER;
 if (witness_0 == 0) witness_0 = BABY_JUBJUB_ORDER;
 let T_0 = mulPointEscalar(Base8, witness_0);
 
-// //FeldmanSecretShare_2_of_2
-// const c_1 = mulPointEscalar(Base8, a_1);
-// var share_1 = (BABY_JUBJUB_ORDER - witness_0 + BABY_JUBJUB_ORDER - a_1) % BABY_JUBJUB_ORDER;
-// if (share_1 == 0) share_1 = BABY_JUBJUB_ORDER;
-// if (share_1 <= 0n) throw new Error('share_1 must be positive');
-// const share_2 = ((2n * witness_0) + a_1) % BABY_JUBJUB_ORDER;
-// if (share_2 == 0) share_2 = BABY_JUBJUB_ORDER;
-// if (share_2 <= 0n) throw new Error('share_2 must be positive');
-// //Verify reconstruction
-// const witness_0_calc = (share_1 + share_2) % BABY_JUBJUB_ORDER;
-// if (witness_0_calc == 0) witness_0_calc = BABY_JUBJUB_ORDER;
-// if (witness_0_calc != witness_0) throw new Error('witness_0_calc != witness_0');
-// //Verify peer verification
-// const peer_v_RHS = negatePoint(addPoint(T_0, c_1));
-// const peer_v_LHS = mulPointEscalar(Base8, share_1);
-// if (peer_v_RHS[0] != peer_v_LHS[0]) throw new Error('peer_v_RHS != peer_v_LHS');
-// if (peer_v_RHS[1] != peer_v_LHS[1]) throw new Error('peer_v_RHS != peer_v_LHS');
-// //Verify KES verification
-// const T_0_double = addPoint(T_0, T_0);
-// const KES_v_RHS = addPoint(T_0_double, c_1);
-// const KES_v_LHS = mulPointEscalar(Base8, share_2);
-// if (KES_v_RHS[0] != KES_v_LHS[0]) throw new Error('KES_v_RHS != KES_v_LHS');
-// if (KES_v_RHS[1] != KES_v_LHS[1]) throw new Error('KES_v_RHS != KES_v_LHS');
-
-// //Encrypt to peer
-// const ephemeral_1 = mulPointEscalar(Base8, r_1);
-// const rP_1 = mulPointEscalar(pubkey_peer, r_1);
-// const byteArray_1 = Buffer.from([
-//   ...bigIntTo32ByteArray(rP_1[0]),
-//   ...bigIntTo32ByteArray(rP_1[1]),
-// ]);
-// const hash_1 = blake.blake2sHex(byteArray_1);
-// const hash_1Big = BigInt('0x' + hash_1); // Convert hex to BigInt
-// var shared_secret_1 = hash_1Big % BABY_JUBJUB_ORDER;
-// if (shared_secret_1 == 0) shared_secret_1 = BABY_JUBJUB_ORDER;
-// var cipher_1 = (share_1 + shared_secret_1) % BABY_JUBJUB_ORDER;
-// if (cipher_1 == 0) cipher_1 = BABY_JUBJUB_ORDER;
-// const fi_1 = ephemeral_1;
-// const enc_1 = cipher_1;
-// //Verify
-// const fi_s_1 = mulPointEscalar(fi_1, privateKey_peer);
-// if (fi_s_1[0] != rP_1[0]) throw new Error('fi_s_1 != rP_1');
-// if (fi_s_1[1] != rP_1[1]) throw new Error('fi_s_1 != rP_1');
-// const byteArray_1_calc = Buffer.from([
-//   ...bigIntTo32ByteArray(fi_s_1[0]),
-//   ...bigIntTo32ByteArray(fi_s_1[1]),
-// ]);
-// const hash_1_calc = blake.blake2sHex(byteArray_1_calc);
-// const hash_1Big_calc = BigInt('0x' + hash_1_calc); // Convert hex to BigInt
-// var shared_secret_1_calc = hash_1Big_calc % BABY_JUBJUB_ORDER;
-// if (shared_secret_1_calc == 0) shared_secret_1_calc = BABY_JUBJUB_ORDER;
-// var share_1_calc = (enc_1 - shared_secret_1_calc) % BABY_JUBJUB_ORDER;
-// if (share_1_calc <= 0n) {
-//   share_1_calc += BABY_JUBJUB_ORDER;
-// }
-// if (share_1_calc != share_1) throw new Error('share_1_calc != share_1');
-
 //Encrypt to KES
 const ephemeral_2 = mulPointEscalar(Base8, r_2);
 const rP_2 = mulPointEscalar(pubkey_KES, r_2);
@@ -345,7 +261,6 @@ const hash_2 = blake.blake2sHex(byteArray_2);
 const hash_2Big = BigInt('0x' + hash_2); // Convert hex to BigInt
 const shared_secret_2 = hash_2Big % BABY_JUBJUB_ORDER;
 if (shared_secret_2 == 0) shared_secret_2 = BABY_JUBJUB_ORDER;
-// const cipher_2 = (share_2 + shared_secret_2) % BABY_JUBJUB_ORDER;
 const cipher_2 = (witness_0 + shared_secret_2) % BABY_JUBJUB_ORDER;
 if (cipher_2 == 0) cipher_2 = BABY_JUBJUB_ORDER;
 const fi_2 = ephemeral_2;
@@ -362,11 +277,6 @@ const hash_2_calc = blake.blake2sHex(byteArray_2_calc);
 const hash_2Big_calc = BigInt('0x' + hash_2_calc); // Convert hex to BigInt
 const shared_secret_2_calc = hash_2Big_calc % BABY_JUBJUB_ORDER;
 if (shared_secret_2_calc == 0) shared_secret_2_calc = BABY_JUBJUB_ORDER;
-// var share_2_calc = (enc_2 - shared_secret_2_calc) % BABY_JUBJUB_ORDER;
-// if (share_2_calc <= 0n) {
-//   share_2_calc += BABY_JUBJUB_ORDER;
-// }
-// if (share_2_calc != share_2) throw new Error('share_2_calc != share_2');
 var witness_0_calc = (enc_2 - shared_secret_2_calc) % BABY_JUBJUB_ORDER;
 if (witness_0_calc <= 0n) {
   witness_0_calc += BABY_JUBJUB_ORDER;
@@ -379,37 +289,22 @@ const proof_Init = generateDLEQProof_simple(witness_0, blinding_DLEQ_Init);
 console.log('Init: Ed25519 key S_0:', proof_Init.public.S);
 console.log('Init: circuits/init/Prover.toml');
 console.log('');
-// console.log(`a_1 = "${a_1.toString()}"`);
 console.log(`blinding = "${blinding.toString()}"`);
 console.log(`blinding_DLEQ = "${blinding_DLEQ_Init.toString()}"`);
 console.log(`challenge_bytes = ${hexTo32ByteArrayDecimal(proof_Init.proof.challenge)}`);
-// console.log(`enc_1 = "${enc_1.toString()}"`);
 console.log(`enc_2 = "${enc_2.toString()}"`);
 console.log(`nonce_peer = "${nonce_peer.toString()}"`);
-// console.log(`r_1 = "${r_1.toString()}"`);
 console.log(`r_2 = "${r_2.toString()}"`);
 console.log(`response_div_BabyJubJub = ${hexTo32ByteArrayDecimal(proof_Init.extra.response_div_BabyJubJub).toString(10)}`);
 console.log(`response_div_ed25519 = ${hexTo32ByteArrayDecimal(proof_Init.extra.response_div_ed25519).toString(10)}`);
 console.log(`response_BabyJubJub = "${BigInt('0x' + proof_Init.proof.response_BabyJubJub).toString(10)}"`);
 console.log(`response_ed25519 = ${hexTo32ByteArrayDecimal(proof_Init.proof.response_ed25519).toString(10)}`);
-// console.log(`share_1 = "${share_1.toString()}"`);
-// console.log(`share_2 = "${share_2.toString()}"`);
 console.log(`witness_0 = "${witness_0.toString()}"`);
 
 console.log('');
 console.log('[T_0]');
 console.log(`x="0x${T_0[0].toString(16).padStart(64, '0')}"`);
 console.log(`y="0x${T_0[1].toString(16).padStart(64, '0')}"`);
-
-// console.log('');
-// console.log('[c_1]');
-// console.log(`x="0x${c_1[0].toString(16).padStart(64, '0')}"`);
-// console.log(`y="0x${c_1[1].toString(16).padStart(64, '0')}"`);
-
-// console.log('');
-// console.log('[fi_1]');
-// console.log(`x="0x${fi_1[0].toString(16).padStart(64, '0')}"`);
-// console.log(`y="0x${fi_1[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 console.log('[fi_2]');
@@ -422,7 +317,7 @@ console.log(`x="0x${pubkey_KES[0].toString(16).padStart(64, '0')}"`);
 console.log(`y="0x${pubkey_KES[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
-console.log('[pubkey_peer]');
+console.log('[pubkey_peer]');//TODO: Remove this unused value
 console.log(`x="0x${pubkey_peer[0].toString(16).padStart(64, '0')}"`);
 console.log(`y="0x${pubkey_peer[1].toString(16).padStart(64, '0')}"`);
 

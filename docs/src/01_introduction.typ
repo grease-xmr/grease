@@ -76,7 +76,7 @@ will suffice.
 The initial implementation uses any Noir-compatible execution environment that supports the Barretenberg PLONK
 proving system, the Aztec blockchain being one candidate.
 
-The KES acts as a third‑party judge in disputes. At initialization, each peer encrypts a secret for the KES. If a dispute arises, the KES identifies the violating peer and releases that peer’s secret to the wronged peer. The wronged peer can use the secret to simulate the missing online interaction to close the channel with the latest agreed balance. Only valid channel states can be unilaterally closed; fabricated updates cannot be simulated.
+The KES acts as a third‑party judge in disputes. At initialization, each peer encrypts a secret (their ω₀ witness) for the KES. If a dispute arises, the KES identifies the violating peer and releases that peer’s secret to the wronged peer. The wronged peer can use the secret to simulate the missing online interaction to close the channel with the latest agreed balance. Only valid channel states can be unilaterally closed; fabricated updates cannot be simulated.
 
 = Design principles
 

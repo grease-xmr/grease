@@ -168,7 +168,6 @@ use.
 During the initialization stage, the following operations are performed:
 
 - #link(label("verify-witness0"), [*VerifyWitness0*])
-- #link(label("verify-witness-sharing"), [*VerifyWitnessSharing*])
 - #link(label("verify-equivalent-modulo"), [*VerifyEquivalentModulo*])
 - #link(label("verify-dleq"), [*VerifyDLEQ*])
 
@@ -317,39 +316,6 @@ $
   omega_0 = C mod L_bjj \
   T_0 = omega_0 dot.c G_bjj
 $
-
-== VerifyWitnessSharing <verify-witness-sharing>
-
-=== Inputs
-#table( columns: 3,
-  [*Input*], [*Visibility*], [],
-  [$witness_0$], [Private], [The root private key protecting access to the user's locked value (`witness_0`)],
-  [$a_1$], [Private], [Random 251 bit value],
-  [$nu_1$], [Private], [Random 251 bit value (`r_1`)],
-  [$PubBjj("peer")$], [Public], [The public key/curve point on Baby Jubjub for the peer],
-  [$nu_2$], [Private], [Random 251 bit value (`r_2`)],
-  [$PubBjj("KES")$], [Public], [The public key/curve point on Baby Jubjub for the KES],
-)
-
-=== Outputs
-#table( columns: 3,
-  [*Output*], [*Visibility*], [],
-  [$Phi_1$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer (`fi_1`)],
-  [$chi_1$], [Public], [The encrypted value of $sigma_1$ (`enc_1`)],
-  [$Phi_2$], [Public], [The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES (`fi_2`)],
-  [$chi_2$], [Public], [The encrypted value of $sigma_2$ (`enc_2`)],
-)
-
-=== Summary
-
-The *VerifyWitnessSharing* operation is a Noir ZK circuit using the UltraHonk prover/verifier. It passes through the the provided inputs and calls the *VerifyEncryptMessage* operation.
-
-=== Methods
-
-$
-  (Phi_2,chi_2) = "VerifyEncryptMessage"(omega_0,nu_2,Pi_"KES") \
-$
-
 
 == VerifyEquivalentModulo <verify-equivalent-modulo>
 
