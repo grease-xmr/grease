@@ -1038,8 +1038,9 @@ pub fn bb_verify_init(
 
     let target_path = get_target_path();
 
-    let vk_key_file_path = target_path.join("vk_init").join("vk");
-    create_dir_if_not_exists(&vk_key_file_path)?;
+    let vk_key_file_dir = target_path.join("vk_init");
+    create_dir_if_not_exists(&vk_key_file_dir)?;
+    let vk_key_file_path = vk_key_file_dir.join("vk");
     std::fs::write(&vk_key_file_path, verification_key)?;
 
     let vk_key_filename = vk_key_file_path.to_string_lossy().to_string();
@@ -1281,11 +1282,13 @@ pub fn bb_verify_update(
     )?;
 
     let target_path = get_target_path();
-    let vk_update_key_path = target_path.join("vk_update");
-    create_dir_if_not_exists(&vk_update_key_path)?;
-    std::fs::write(vk_update_key_path.join("vk"), verification_key)?;
 
-    let vk_update_filename = vk_update_key_path.join("vk").to_string_lossy().to_string();
+    let vk_update_key_dir = target_path.join("vk_update");
+    create_dir_if_not_exists(&vk_update_key_dir)?;
+    let vk_update_key_path = vk_update_key_dir.join("vk");
+    std::fs::write(&vk_update_key_path, verification_key)?;
+
+    let vk_update_filename = vk_update_key_path.to_string_lossy().to_string();
 
     let verify_dir = "verify_update";
     create_dir_if_not_exists(&target_path.join(verify_dir))?;
