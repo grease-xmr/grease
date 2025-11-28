@@ -17,7 +17,6 @@ const BABY_JUBJUB_PRIME = r;
 
 //Settings - External
 const nonce_peer = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
-const privateKey_peer = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 const privateKey_KES = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 
 //Settings - Internal
@@ -27,7 +26,6 @@ const blinding_DLEQ_Init = BigInt('0x' + crypto.randomBytes(32).toString("hex"))
 const blinding_DLEQ_Update = BigInt('0x' + crypto.randomBytes(32).toString("hex")) % BABY_JUBJUB_ORDER;
 
 //Derives
-const pubkey_peer = mulPointEscalar(Base8, privateKey_peer);//TODO: Remove this unused value
 const pubkey_KES = mulPointEscalar(Base8, privateKey_KES);
 
 
@@ -315,11 +313,6 @@ console.log('');
 console.log('[pubkey_KES]');
 console.log(`x="0x${pubkey_KES[0].toString(16).padStart(64, '0')}"`);
 console.log(`y="0x${pubkey_KES[1].toString(16).padStart(64, '0')}"`);
-
-console.log('');
-console.log('[pubkey_peer]');//TODO: Remove this unused value
-console.log(`x="0x${pubkey_peer[0].toString(16).padStart(64, '0')}"`);
-console.log(`y="0x${pubkey_peer[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 //Update/VerifyCOF

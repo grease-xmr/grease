@@ -317,11 +317,7 @@ pub struct Comm0PublicOutputs {
 pub struct Comm0PrivateOutputs {
     /// **ω₀** - The root private key protecting access to the user's locked value (witness₀).
     pub witness_0: GenericScalar,
-    // /// **σ₁** - The split of ω₀ shared with the peer (share₁).
-    // pub peer_share: GenericScalar,
-    /// **σ₂** - The split of ω₀ shared with the KES (share₂).
-    // pub kes_share: GenericScalar,
-    // /// **Δ_BabyJubjub** - Optimization parameter (response_div_BabyJubjub).
+    /// **Δ_BabyJubjub** - Optimization parameter (response_div_BabyJubjub).
     pub delta_bjj: GenericScalar,
     /// **Δ_Ed25519** - Optimization parameter (response_div_BabyJubJub).
     pub delta_ed: GenericScalar,
