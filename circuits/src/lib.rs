@@ -619,7 +619,7 @@ pub struct ZeroKnowledgeProofInitPublic {
 impl ZeroKnowledgeProofInitPublic {
     pub fn from_vec(public: Vec<u8>) -> Result<Self, BBError> {
         if public.len() != 1184 {
-                        return Err(BBError::String("Invalid public input length".to_string()));
+            return Err(BBError::String("Invalid public input length".to_string()));
         }
         let public_input: [u8; 1184] =
             public.try_into().map_err(|_| BBError::String("Invalid public input length".to_string()))?;
@@ -630,20 +630,15 @@ impl ZeroKnowledgeProofInitPublic {
         self.public_input.to_vec()
     }
 
-    pub fn new(
-        nonce_peer: &BigUint,
-        t_0: &Point,
-        kes_public_key: &Point,
-        c: &BigUint,
-    ) -> Result<Self, BBError> {
-        let mut public_input = Vec::with_capacity(288 + (32 * 32));
+    pub fn new(nonce_peer: &BigUint, t_0: &Point, kes_public_key: &Point, c: &BigUint) -> Result<Self, BBError> {
+        let mut public_input = Vec::with_capacity(1184);// 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
         public_input.extend_from_slice(&left_pad_bytes_32(&nonce_peer.to_bytes_be())?);
         public_input.extend_from_slice(&get_field_bytes(&t_0.x));
         public_input.extend_from_slice(&get_field_bytes(&t_0.y));
         public_input.extend_from_slice(&get_field_bytes(&kes_public_key.x));
         public_input.extend_from_slice(&get_field_bytes(&kes_public_key.y));
 
-        // challenge bytes
+        // challenge bytes (as 32 left-padded BigUint slots)
         let challenge_bytes = c.to_bytes_be();
         if challenge_bytes.len() > 32 {
             return Err(BBError::String(
@@ -651,12 +646,14 @@ impl ZeroKnowledgeProofInitPublic {
             ));
         }
         let leading_zeroes = 32 - challenge_bytes.len();
+        // First the leading zeros
         for _ in 0..leading_zeroes {
-            public_input.extend_from_slice(&BigUint::zero().to_bytes_be());
+            public_input.extend_from_slice(&left_pad_bytes_32(&BigUint::zero().to_bytes_be())?);
         }
+        // Then the non-zero bytes
         for i in leading_zeroes..32 {
             let byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
-            public_input.extend_from_slice(&byte.to_bytes_be());
+            public_input.extend_from_slice(&left_pad_bytes_32(&byte.to_bytes_be())?);
         }
 
         Ok(Self {
@@ -714,7 +711,7 @@ impl ZeroKnowledgeProofInitPublic {
         for i in leading_zeroes..32 {
             let public_input_index = 160 + (i * 32);
             let public_input_index_until = public_input_index + 32;
-            let challenge_byte = BigUint::from(challenge_bytes[leading_zeroes + i]);
+            let challenge_byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
 
             if challenge_byte != BigUint::from_bytes_be(&p.public_input[public_input_index..public_input_index_until]) {
                 return Err(BBError::String("challenge_bytes does not match".to_string()));
@@ -829,7 +826,7 @@ impl ZeroKnowledgeProofUpdatePublic {
         for i in leading_zeroes..32 {
             let public_input_index = 128 + (i * 32);
             let public_input_index_until = public_input_index + 32;
-            let challenge_byte = BigUint::from(challenge_bytes[leading_zeroes + i]);
+            let challenge_byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
 
             if challenge_byte != BigUint::from_bytes_be(&p.public_input[public_input_index..public_input_index_until]) {
                 return Err(BBError::String(format!(
@@ -996,17 +993,23 @@ fn get_target_path() -> PathBuf {
     env::var("NARGO_TARGET_PATH").map(PathBuf::from).unwrap_or_else(|_| get_noir_project_path().join("./grease-proofs"))
 }
 
-pub(crate) fn bb_verify(proof: &[u8; 14080], public_inputs: &Vec<u8>, view_key_file: &str, verify_dir: &str) -> Result<bool, BBError> {
+pub(crate) fn bb_verify(
+    proof: &[u8; 14080],
+    public_inputs: &[u8],
+    view_key_file: &str,
+    verify_dir: &str,
+) -> Result<bool, BBError> {
     // Create named temporary files
-    let target_dir = get_target_path();
-    let proof_file_path = target_dir.join(verify_dir).join("proof");
-    let inputs_file_path = target_dir.join(verify_dir).join("public_inputs");
+    let target_path = get_target_path();
+    create_dir_if_not_exists(&target_path.join(verify_dir))?;
+    let proof_file_path = target_path.join(verify_dir).join("proof");
+    let inputs_file_path = target_path.join(verify_dir).join("public_inputs");
     let proof_file = proof_file_path.to_string_lossy().to_string();
     let inputs_file = inputs_file_path.to_string_lossy().to_string();
 
     // Write content to the temporary files
     std::fs::write(proof_file_path, *proof)?;
-    std::fs::write(target_dir.join(verify_dir).join("public_inputs"), public_inputs)?;
+    std::fs::write(target_path.join(verify_dir).join("public_inputs"), public_inputs)?;
 
     //nargo verify
     let args: Vec<&str> = vec!["verify", "-v", "-k", view_key_file, "-p", &proof_file, "-i", &inputs_file];
@@ -1038,17 +1041,22 @@ pub fn bb_verify_init(
 
     let target_path = get_target_path();
 
-    let vk_key_file_dir = target_path.join("vk_init");
-    create_dir_if_not_exists(&vk_key_file_dir)?;
-    let vk_key_file_path = vk_key_file_dir.join("vk");
-    std::fs::write(&vk_key_file_path, verification_key)?;
+    let vk_init_file_dir = target_path.join("vk_init");
+    create_dir_if_not_exists(&vk_init_file_dir)?;
+    let vk_init_file_path = vk_init_file_dir.join("vk");
+    std::fs::write(&vk_init_file_path, verification_key)?;
 
-    let vk_key_filename = vk_key_file_path.to_string_lossy().to_string();
+    let vk_init_filename = vk_init_file_path.to_string_lossy().to_string();
 
     let verify_dir = "verify_init";
     create_dir_if_not_exists(&target_path.join(verify_dir))?;
 
-    let res = bb_verify(&zero_knowledge_proof_init.proof, &zero_knowledge_proof_init.public_input.public_input.to_vec(), &vk_key_filename, verify_dir)?;
+    let res = bb_verify(
+        &zero_knowledge_proof_init.proof,
+        &zero_knowledge_proof_init.public_input.public_input,
+        &vk_init_filename,
+        verify_dir,
+    )?;
 
     Ok(res)
 }
@@ -1271,11 +1279,11 @@ impl PublicUpdate {
 
 pub fn bb_verify_update(
     public_update: &PublicUpdate,
-    zk_proof_update: &ZeroKnowledgeProofUpdate,
+    zero_knowledge_proof_update: &ZeroKnowledgeProofUpdate,
     verification_key: &[u8],
 ) -> Result<bool, BBError> {
     ZeroKnowledgeProofUpdatePublic::check(
-        &zk_proof_update.public_input,
+        &zero_knowledge_proof_update.public_input,
         &public_update.T_prev,
         &public_update.T_current,
         &public_update.challenge,
@@ -1294,8 +1302,8 @@ pub fn bb_verify_update(
     create_dir_if_not_exists(&target_path.join(verify_dir))?;
 
     let res = bb_verify(
-        &zk_proof_update.proof,
-        &zk_proof_update.public_input.to_vec(),
+        &zero_knowledge_proof_update.proof,
+        &zero_knowledge_proof_update.public_input.public_input,
         &vk_update_filename,
         verify_dir,
     )?;
@@ -1551,7 +1559,7 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
         &r2,
     );
 
-    let verification_key = load_vk("grease_proofs", "vk_update")?;
+    let verification_key = load_vk(get_target_path(), "vk_update")?;
     let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &verification_key)?;
     if !verification {
         return Err(BBError::SelfVerify);
