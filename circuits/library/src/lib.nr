@@ -4,7 +4,7 @@ use dep::bignum::fields::U256::U256;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
-use edwards::scalar_field::ScalarField;
+use edwards::ScalarField;
 use std::field::bn254::assert_lt;
 use dep::bignum::fields::U512::U512;
 use std::{hash::blake2s, ops::Mul};

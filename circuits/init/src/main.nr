@@ -1,7 +1,7 @@
 use dep::bignum;
 use dep::bignum::BigNum;
 use dep::bignum::fields::U256::U256;
-use edwards::bjj::{BabyJubJubParams};
+use edwards::bjj::BabyJubJubParams;
 use std::field::bn254::assert_lt;
 use std::hash::blake2s;
 
