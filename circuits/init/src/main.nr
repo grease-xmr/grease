@@ -1,9 +1,7 @@
 use dep::bignum;
 use dep::bignum::BigNum;
 use dep::bignum::fields::U256::U256;
-use edwards::bjj::{BabyJubJub, BabyJubJubParams};
-use edwards::Curve;
-use edwards::CurveTrait;
+use edwards::bjj::{BabyJubJubParams};
 use std::field::bn254::assert_lt;
 use std::hash::blake2s;
 
@@ -55,38 +53,18 @@ fn VerifyWitness0(
 
 }
 
-/// Verify protocol conformance of using the Feldman 2-of-2 Verifiable Secret Share on `witness_0` and encryption of shares to peer and KES [given VerifyWitness0()]
-fn VerifyWitnessSharing(
+/// Verify protocol conformance of encryption of `witness_0` to KES [given VerifyWitness0()]
+fn EncryptToKES(
     witness_0: Field,
-    a_1: Field,
-    c_1: edwards::Curve<BabyJubJubParams>,
-    fi_1: edwards::Curve<BabyJubJubParams>,
-    enc_1: Field,
-    share_1: Field,
-    r_1: Field,
-    pubkey_peer: edwards::Curve<BabyJubJubParams>,
     fi_2: edwards::Curve<BabyJubJubParams>,
     enc_2: Field,
-    share_2: Field,
     r_2: Field,
     pubkey_KES: edwards::Curve<BabyJubJubParams>,
 ) {
     // Given: VerifyWitness0(nonce_peer, T_0, witness_0, blinding);
 
-    //Produce VSS values
-    let (c_1_calc, share_1_calc, share_2_calc) =
-        library::FeldmanSecretShare_2_of_2_Optimized(witness_0, a_1);
-    assert_eq(c_1_calc, c_1);
-    assert_eq(share_1_calc, share_1);
-    assert_eq(share_2_calc, share_2);
-
-    //Encrypt to peer
-    let (fi_1_calc, enc_1_calc) = library::VerifyEncryptMessage_ECDH(share_1, r_1, pubkey_peer);
-    assert_eq(fi_1_calc, fi_1);
-    assert_eq(enc_1_calc, enc_1);
-
     //Encrypt to KES
-    let (fi_2_calc, enc_2_calc) = library::VerifyEncryptMessage_ECDH(share_2, r_2, pubkey_KES);
+    let (fi_2_calc, enc_2_calc) = library::VerifyEncryptMessage_ECDH(witness_0, r_2, pubkey_KES);
     assert_eq(fi_2_calc, fi_2);
     assert_eq(enc_2_calc, enc_2);
 }
@@ -97,16 +75,8 @@ fn main(
     T_0: pub edwards::Curve<BabyJubJubParams>,
     witness_0: Field,
     blinding: Field,
-    a_1: Field,
-    c_1: pub edwards::Curve<BabyJubJubParams>,
-    fi_1: edwards::Curve<BabyJubJubParams>,
-    enc_1: Field,
-    share_1: Field,
-    r_1: Field,
-    pubkey_peer: pub edwards::Curve<BabyJubJubParams>,
     fi_2: edwards::Curve<BabyJubJubParams>,
     enc_2: Field,
-    share_2: Field,
     r_2: Field,
     pubkey_KES: pub edwards::Curve<BabyJubJubParams>,
     challenge_bytes: pub [u8; 32],
@@ -118,18 +88,10 @@ fn main(
 ) {
     VerifyWitness0(nonce_peer, T_0, witness_0, blinding);
 
-    VerifyWitnessSharing(
+    EncryptToKES(
         witness_0,
-        a_1,
-        c_1,
-        fi_1,
-        enc_1,
-        share_1,
-        r_1,
-        pubkey_peer,
         fi_2,
         enc_2,
-        share_2,
         r_2,
         pubkey_KES,
     );

@@ -104,48 +104,6 @@ pub(crate) fn make_witness0(
     Ok((witness_0, t_0, s_0))
 }
 
-//FeldmanSecretShare_2_of_2
-pub(crate) fn feldman_secret_share_2_of_2(
-    witness_0: &BigUint,
-    a_1: &BigUint,
-) -> Result<(Point, BigUint, BigUint), BBError> {
-    let c_1 = B8.mul_scalar(&a_1.clone().into());
-
-    let share_1: BigUint = BABY_JUBJUB_ORDER.clone() - witness_0 + BABY_JUBJUB_ORDER.clone() - a_1;
-    let share_1: BigUint = share_1.rem_euclid(&BABY_JUBJUB_ORDER);
-
-    let share_2: BigUint = witness_0 + witness_0 + a_1;
-    let share_2: BigUint = share_2.rem_euclid(&BABY_JUBJUB_ORDER);
-
-    {
-        //Verify reconstruction
-        let witness_0_calc: BigUint = &share_1 + &share_2;
-        let witness_0_calc: BigUint = witness_0_calc.rem_euclid(&BABY_JUBJUB_ORDER);
-        assert_eq!(witness_0, &witness_0_calc);
-
-        //Verify peer verification
-        let witness_0_t = B8.mul_scalar(&witness_0.clone().into());
-        let t_plus_c_1: PointProjective = witness_0_t.projective().add(&c_1.projective());
-        let peer_v_rhs = point_negate(t_plus_c_1.affine());
-        let peer_v_lhs = B8.mul_scalar(&share_1.clone().into());
-        assert_eq!(peer_v_rhs.x, peer_v_lhs.x);
-        assert_eq!(peer_v_rhs.y, peer_v_lhs.y);
-
-        //Verify KES verification
-        let t_double_alpha: Point = witness_0_t.mul_scalar(&BigInt::from(2));
-        let t_double_beta: PointProjective = witness_0_t.projective().add(&witness_0_t.projective());
-        assert_eq!(t_double_alpha.x, t_double_beta.affine().x);
-        assert_eq!(t_double_alpha.y, t_double_beta.affine().y);
-
-        let kes_v_rhs = t_double_beta.add(&c_1.projective());
-        let kes_v_lhs = B8.mul_scalar(&share_2.clone().into());
-        assert_eq!(kes_v_rhs.affine().x, kes_v_lhs.x);
-        assert_eq!(kes_v_rhs.affine().y, kes_v_lhs.y);
-    }
-
-    Ok((c_1, share_1, share_2))
-}
-
 //Encrypt to peer/KES
 pub(crate) fn encrypt_message_ecdh(
     message: &BigUint,
@@ -533,7 +491,6 @@ fn call_shell(program: &str, args: &[&str], working_dir: Option<PathBuf>) -> io:
             status,
             stderr_output.trim()
         );
-        // panic!("args: {:?}\terror: {}", args, stderr_output.trim().to_string());
         return Err(io::Error::other(format!("Script failed with status: {}", status,)));
     }
 
@@ -617,29 +574,21 @@ fn get_point_config_baby_jubjub(point: &Point) -> PointConfig {
 #[expect(non_snake_case)]
 #[derive(Serialize)]
 struct InitConfig {
-    a_1: String,
     blinding: String,
     blinding_DLEQ: String,
     challenge_bytes: [String; 32],
-    enc_1: String,
     enc_2: String,
     nonce_peer: String,
-    r_1: String,
     r_2: String,
     response_div_BabyJubJub: [String; 32],
     response_div_ed25519: [String; 32],
     response_BabyJubJub: String,
     response_ed25519: [String; 32],
-    share_1: String,
-    share_2: String,
     witness_0: String,
 
     T_0: PointConfig,
-    c_1: PointConfig,
-    fi_1: PointConfig,
     fi_2: PointConfig,
     pubkey_KES: PointConfig,
-    pubkey_peer: PointConfig,
 }
 
 #[expect(non_snake_case)]
@@ -664,15 +613,15 @@ pub struct ZeroKnowledgeProofInitPublic {
         serialize_with = "crate::helpers::init_public_to_hex",
         deserialize_with = "crate::helpers::init_public_from_hex"
     )]
-    pub public_input: [u8; 1312],
+    pub public_input: [u8; 1184],
 }
 
 impl ZeroKnowledgeProofInitPublic {
     pub fn from_vec(public: Vec<u8>) -> Result<Self, BBError> {
-        if public.len() != 1312 {
+        if public.len() != 1184 {
             return Err(BBError::String("Invalid public input length".to_string()));
         }
-        let public_input: [u8; 1312] =
+        let public_input: [u8; 1184] =
             public.try_into().map_err(|_| BBError::String("Invalid public input length".to_string()))?;
         Ok(Self { public_input })
     }
@@ -681,26 +630,15 @@ impl ZeroKnowledgeProofInitPublic {
         self.public_input.to_vec()
     }
 
-    pub fn new(
-        nonce_peer: &BigUint,
-        t_0: &Point,
-        c_1: &Point,
-        public_key_bjj_peer: &Point,
-        kes_public_key: &Point,
-        c: &BigUint,
-    ) -> Result<Self, BBError> {
-        let mut public_input = Vec::with_capacity(288 + (32 * 32));
+    pub fn new(nonce_peer: &BigUint, t_0: &Point, kes_public_key: &Point, c: &BigUint) -> Result<Self, BBError> {
+        let mut public_input = Vec::with_capacity(1184);// 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
         public_input.extend_from_slice(&left_pad_bytes_32(&nonce_peer.to_bytes_be())?);
         public_input.extend_from_slice(&get_field_bytes(&t_0.x));
         public_input.extend_from_slice(&get_field_bytes(&t_0.y));
-        public_input.extend_from_slice(&get_field_bytes(&c_1.x));
-        public_input.extend_from_slice(&get_field_bytes(&c_1.y));
-        public_input.extend_from_slice(&get_field_bytes(&public_key_bjj_peer.x));
-        public_input.extend_from_slice(&get_field_bytes(&public_key_bjj_peer.y));
         public_input.extend_from_slice(&get_field_bytes(&kes_public_key.x));
         public_input.extend_from_slice(&get_field_bytes(&kes_public_key.y));
 
-        // challenge bytes
+        // challenge bytes (as 32 left-padded BigUint slots)
         let challenge_bytes = c.to_bytes_be();
         if challenge_bytes.len() > 32 {
             return Err(BBError::String(
@@ -708,12 +646,14 @@ impl ZeroKnowledgeProofInitPublic {
             ));
         }
         let leading_zeroes = 32 - challenge_bytes.len();
+        // First the leading zeros
         for _ in 0..leading_zeroes {
-            public_input.extend_from_slice(&BigUint::zero().to_bytes_be());
+            public_input.extend_from_slice(&left_pad_bytes_32(&BigUint::zero().to_bytes_be())?);
         }
+        // Then the non-zero bytes
         for i in leading_zeroes..32 {
             let byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
-            public_input.extend_from_slice(&byte.to_bytes_be());
+            public_input.extend_from_slice(&left_pad_bytes_32(&byte.to_bytes_be())?);
         }
 
         Ok(Self {
@@ -727,8 +667,6 @@ impl ZeroKnowledgeProofInitPublic {
         p: &ZeroKnowledgeProofInitPublic,
         nonce_peer: &BigUint,
         t_0: &Point,
-        c_1: &Point,
-        public_key_bjj_peer: &Point,
         kes_public_key: &Point,
         c: &BigUint,
     ) -> Result<(), BBError> {
@@ -743,28 +681,12 @@ impl ZeroKnowledgeProofInitPublic {
         if t_0_y != p.public_input[64..96] {
             return Err(BBError::String("t_0.y does not match".to_string()));
         }
-        let c_1_x_bytes = get_field_bytes(&c_1.x);
-        if c_1_x_bytes != p.public_input[96..128] {
-            return Err(BBError::String("c_1.x does not match".to_string()));
-        }
-        let c_1_y_bytes = get_field_bytes(&c_1.y);
-        if c_1_y_bytes != p.public_input[128..160] {
-            return Err(BBError::String("c_1.y does not match".to_string()));
-        }
-        let public_key_peer_x_bytes = get_field_bytes(&public_key_bjj_peer.x);
-        if public_key_peer_x_bytes != p.public_input[160..192] {
-            return Err(BBError::String("public_key_peer.x does not match".to_string()));
-        }
-        let public_key_peer_y_bytes = get_field_bytes(&public_key_bjj_peer.y);
-        if public_key_peer_y_bytes != p.public_input[192..224] {
-            return Err(BBError::String("public_key_peer.y does not match".to_string()));
-        }
         let kes_public_key_x_bytes = get_field_bytes(&kes_public_key.x);
-        if kes_public_key_x_bytes != p.public_input[224..256] {
+        if kes_public_key_x_bytes != p.public_input[96..128] {
             return Err(BBError::String("kes_public_key.x does not match".to_string()));
         }
         let kes_public_key_y_bytes = get_field_bytes(&kes_public_key.y);
-        if kes_public_key_y_bytes != p.public_input[256..288] {
+        if kes_public_key_y_bytes != p.public_input[128..160] {
             return Err(BBError::String("kes_public_key.y does not match".to_string()));
         }
         let challenge_bytes = c.to_bytes_be();
@@ -776,7 +698,7 @@ impl ZeroKnowledgeProofInitPublic {
         let leading_zeroes = 32 - challenge_bytes.len();
         if leading_zeroes > 0 {
             for i in 0..leading_zeroes {
-                let public_input_index = 288 + (i * 32);
+                let public_input_index = 160 + (i * 32);
                 let public_input_index_until = public_input_index + 32;
 
                 if BigUint::zero()
@@ -787,9 +709,9 @@ impl ZeroKnowledgeProofInitPublic {
             }
         }
         for i in leading_zeroes..32 {
-            let public_input_index = 288 + (i * 32);
+            let public_input_index = 160 + (i * 32);
             let public_input_index_until = public_input_index + 32;
-            let challenge_byte = BigUint::from(challenge_bytes[leading_zeroes + i]);
+            let challenge_byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
 
             if challenge_byte != BigUint::from_bytes_be(&p.public_input[public_input_index..public_input_index_until]) {
                 return Err(BBError::String("challenge_bytes does not match".to_string()));
@@ -904,7 +826,7 @@ impl ZeroKnowledgeProofUpdatePublic {
         for i in leading_zeroes..32 {
             let public_input_index = 128 + (i * 32);
             let public_input_index_until = public_input_index + 32;
-            let challenge_byte = BigUint::from(challenge_bytes[leading_zeroes + i]);
+            let challenge_byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
 
             if challenge_byte != BigUint::from_bytes_be(&p.public_input[public_input_index..public_input_index_until]) {
                 return Err(BBError::String(format!(
@@ -928,70 +850,54 @@ pub struct ZeroKnowledgeProofUpdate {
 }
 
 pub(crate) fn bb_prove_init(
-    a_1: &BigUint,
     blinding: &BigUint,
     blinding_dleq: &BigUint,
     challenge_bytes: &[u8; 32],
-    enc_1: &BigUint,
     enc_2: &BigUint,
     nonce_peer: &BigUint,
-    r_1: &BigUint,
     r_2: &BigUint,
     response_div_baby_jub_jub: &[u8; 32],
     response_div_ed25519: &[u8; 32],
     response_baby_jub_jub: &BigUint,
     response_ed25519: &[u8; 32],
-    share_1: &BigUint,
-    share_2: &BigUint,
     witness_0: &BigUint,
 
     t_0: &Point,
-    c_1: &Point,
-    fi_1: &Point,
     fi_2: &Point,
     kes_public_key: &Point,
-    public_key_peer: &Point,
 ) -> Result<ZeroKnowledgeProofInit, BBError> {
     let config = InitConfig {
-        a_1: a_1.to_string(),
         blinding: blinding.to_string(),
         blinding_DLEQ: blinding_dleq.to_string(),
         challenge_bytes: byte_array_to_string_array(challenge_bytes),
-        enc_1: enc_1.to_string(),
         enc_2: enc_2.to_string(),
         nonce_peer: nonce_peer.to_string(),
-        r_1: r_1.to_string(),
         r_2: r_2.to_string(),
         response_div_BabyJubJub: byte_array_to_string_array(response_div_baby_jub_jub),
         response_div_ed25519: byte_array_to_string_array(response_div_ed25519),
         response_BabyJubJub: response_baby_jub_jub.to_string(),
         response_ed25519: byte_array_to_string_array(response_ed25519),
-        share_1: share_1.to_string(),
-        share_2: share_2.to_string(),
         witness_0: witness_0.to_string(),
 
         T_0: get_point_config_baby_jubjub(t_0),
-        c_1: get_point_config_baby_jubjub(c_1),
-        fi_1: get_point_config_baby_jubjub(fi_1),
         fi_2: get_point_config_baby_jubjub(fi_2),
         pubkey_KES: get_point_config_baby_jubjub(kes_public_key),
-        pubkey_peer: get_point_config_baby_jubjub(public_key_peer),
     };
 
     // Serialize to TOML string
     let toml_string = toml::to_string_pretty(&config).map_err(io::Error::other)?;
 
-    let target_dir = get_target_path();
-    create_dir_if_not_exists(&target_dir)?;
-    let witness_config_path = target_dir.join("Grease.toml");
+    let target_path = get_target_path();
+    create_dir_if_not_exists(&target_path)?;
+    let witness_config_path = target_path.join("Grease.toml");
     let witness_config_filename = format!("{}", witness_config_path.display());
     debug!("Writing witness config to {witness_config_filename}");
     std::fs::write(&witness_config_path, &toml_string)?;
-    let output_path = format!("{}", target_dir.join("Grease").display());
+    let output_path = format!("{}", target_path.join("Grease").display());
     //nargo execute
     let args: Vec<&str> = vec!["execute", "-p", &witness_config_filename, "--package", "Grease", &output_path];
-    let nargo_working_dir = get_noir_project_path();
-    match call_shell("nargo", &args, Some(nargo_working_dir)) {
+    let nargo_path = get_noir_project_path();
+    match call_shell("nargo", &args, Some(nargo_path.clone())) {
         Ok((stdout, _stderr)) => match str::from_utf8(&stdout) {
             Ok(v) => {
                 println!("nargo output\n---\n{v}\n---")
@@ -1004,10 +910,18 @@ pub(crate) fn bb_prove_init(
         }
     };
 
+    let witness_binary_file_path = target_path.join("Grease.gz").to_string_lossy().to_string();
+    if !Path::new(&witness_binary_file_path).exists() {
+        return Err(BBError::String(format!(
+            "no witness_binary_file_path file for nargo PATH and ARGS: {:?}\t{:?}\t{:?}",
+            witness_binary_file_path, nargo_path, args
+        )));
+    }
+
     // generate verification key
     debug!("Generating verification key");
-    create_dir_if_not_exists(target_dir.join("vk_init"))?;
-    let vk_init_dir = target_dir.join("vk_init").to_string_lossy().to_string();
+    create_dir_if_not_exists(target_path.join("vk_init"))?;
+    let vk_init_dir = target_path.join("vk_init").to_string_lossy().to_string();
     let grease_init_json_path = get_noir_project_path().join("target").join("Grease.json");
     let grease_init_json_filename = grease_init_json_path.to_string_lossy().to_string();
     let args = vec!["write_vk", "-b", &grease_init_json_filename, "-o", &vk_init_dir];
@@ -1024,7 +938,7 @@ pub(crate) fn bb_prove_init(
 
     //bb prove
     debug!("Generating bb_init proof");
-    match std::fs::create_dir(target_dir.join("proof_init")) {
+    match std::fs::create_dir(target_path.join("proof_init")) {
         Ok(_) => {}
         Err(e) => {
             if e.kind() != io::ErrorKind::AlreadyExists {
@@ -1032,8 +946,7 @@ pub(crate) fn bb_prove_init(
             }
         }
     }
-    let witness_binary_file_path = target_dir.join("Grease.gz").to_string_lossy().to_string();
-    let proof_path = target_dir.join("proof_init").to_string_lossy().to_string();
+    let proof_path = target_path.join("proof_init").to_string_lossy().to_string();
     let args: Vec<&str> =
         vec!["prove", "-b", &grease_init_json_filename, "-w", &witness_binary_file_path, "-o", &proof_path];
     match call_shell("bb", &args, None) {
@@ -1049,9 +962,9 @@ pub(crate) fn bb_prove_init(
 
     // Load proof and public input
     debug!("Retrieving proof");
-    let proof = std::fs::read(target_dir.join("proof_init").join("proof"))?;
+    let proof = std::fs::read(target_path.join("proof_init").join("proof"))?;
     debug!("Retrieving public inputs");
-    let public_input = std::fs::read(target_dir.join("proof_init").join("public_inputs"))?;
+    let public_input = std::fs::read(target_path.join("proof_init").join("public_inputs"))?;
 
     if proof.len() != 14080 {
         return Err(BBError::String("Invalid proof length".to_string()));
@@ -1080,17 +993,23 @@ fn get_target_path() -> PathBuf {
     env::var("NARGO_TARGET_PATH").map(PathBuf::from).unwrap_or_else(|_| get_noir_project_path().join("./grease-proofs"))
 }
 
-pub(crate) fn bb_verify(proof: &[u8; 14080], public_inputs: &Vec<u8>, view_key_file: &str) -> Result<bool, BBError> {
+pub(crate) fn bb_verify(
+    proof: &[u8; 14080],
+    public_inputs: &[u8],
+    view_key_file: &str,
+    verify_dir: &str,
+) -> Result<bool, BBError> {
     // Create named temporary files
-    let target_dir = get_target_path();
-    let proof_file_path = target_dir.join("proof");
-    let inputs_file_path = target_dir.join("public_inputs");
+    let target_path = get_target_path();
+    create_dir_if_not_exists(&target_path.join(verify_dir))?;
+    let proof_file_path = target_path.join(verify_dir).join("proof");
+    let inputs_file_path = target_path.join(verify_dir).join("public_inputs");
     let proof_file = proof_file_path.to_string_lossy().to_string();
     let inputs_file = inputs_file_path.to_string_lossy().to_string();
 
     // Write content to the temporary files
     std::fs::write(proof_file_path, *proof)?;
-    std::fs::write(target_dir.join("public_inputs"), public_inputs)?;
+    std::fs::write(target_path.join(verify_dir).join("public_inputs"), public_inputs)?;
 
     //nargo verify
     let args: Vec<&str> = vec!["verify", "-v", "-k", view_key_file, "-p", &proof_file, "-i", &inputs_file];
@@ -1106,21 +1025,38 @@ pub(crate) fn bb_verify(proof: &[u8; 14080], public_inputs: &Vec<u8>, view_key_f
 }
 
 pub fn bb_verify_init(
-    _nonce_peer: &BigUint,
-    _public_key_bjj_peer: &Point,
-    _kes_public_key: &Point,
-    _public_init: &PublicInit,
+    nonce_peer: &BigUint,
+    kes_public_key: &Point,
+    public_init: &PublicInit,
     verification_key: &[u8],
     zero_knowledge_proof_init: &ZeroKnowledgeProofInit,
 ) -> Result<bool, BBError> {
-    let target_dir = get_target_path();
+    ZeroKnowledgeProofInitPublic::check(
+        &zero_knowledge_proof_init.public_input,
+        &nonce_peer,
+        &public_init.T_0,
+        &kes_public_key,
+        &public_init.c,
+    )?;
 
-    let vk_key_file_path = target_dir.join("vk_init").join("vk");
-    create_dir_if_not_exists(&vk_key_file_path)?;
-    std::fs::write(&vk_key_file_path, verification_key)?;
-    let vk_key_filename = vk_key_file_path.to_string_lossy().to_string();
-    let input = zero_knowledge_proof_init.public_input.public_input.to_vec();
-    let res = bb_verify(&zero_knowledge_proof_init.proof, &input, &vk_key_filename)?;
+    let target_path = get_target_path();
+
+    let vk_init_file_dir = target_path.join("vk_init");
+    create_dir_if_not_exists(&vk_init_file_dir)?;
+    let vk_init_file_path = vk_init_file_dir.join("vk");
+    std::fs::write(&vk_init_file_path, verification_key)?;
+
+    let vk_init_filename = vk_init_file_path.to_string_lossy().to_string();
+
+    let verify_dir = "verify_init";
+    create_dir_if_not_exists(&target_path.join(verify_dir))?;
+
+    let res = bb_verify(
+        &zero_knowledge_proof_init.proof,
+        &zero_knowledge_proof_init.public_input.public_input,
+        &vk_init_filename,
+        verify_dir,
+    )?;
 
     Ok(res)
 }
@@ -1156,20 +1092,16 @@ pub(crate) fn bb_prove_update(
 
     // hard-code this working directory and leave temp files in place until all the bugs have been ironed out.
     let target_path = get_target_path();
+    create_dir_if_not_exists(&target_path)?;
     let witness_config_file = target_path.join("GreaseUpdate.toml");
     let witness_config_filename = witness_config_file.to_string_lossy().to_string();
     debug!("Writing witness config to {witness_config_filename}");
-    create_dir_if_not_exists(&target_path)?;
     std::fs::write(witness_config_file, toml_string)?;
-
-    let witness_binary_file = target_path.join("GreaseUpdate.gz");
-    let witness_binary_file_path = witness_binary_file.to_string_lossy().to_string();
-
+    let output_path = format!("{}", target_path.join("GreaseUpdate").display());
     //nargo execute
-    let args: Vec<&str> =
-        vec!["execute", "-p", &witness_config_filename, "--package", "GreaseUpdate", &witness_binary_file_path];
+    let args: Vec<&str> = vec!["execute", "-p", &witness_config_filename, "--package", "GreaseUpdate", &output_path];
     let nargo_path = get_noir_project_path();
-    let _ = match call_shell("nargo", &args, Some(nargo_path)) {
+    match call_shell("nargo", &args, Some(nargo_path.clone())) {
         Ok((stdout, _stderr)) => match str::from_utf8(&stdout) {
             Ok(v) => v.to_string(),
             Err(e) => return Err(format!("Invalid UTF-8 sequence: {}", e).into()),
@@ -1179,6 +1111,14 @@ pub(crate) fn bb_prove_update(
             return Err(BBError::IoError(e));
         }
     };
+
+    let witness_binary_file_path = target_path.join("GreaseUpdate.gz").to_string_lossy().to_string();
+    if !Path::new(&witness_binary_file_path).exists() {
+        return Err(BBError::String(format!(
+            "no witness_binary_file_path file for nargo PATH and ARGS: {:?}\t{:?}\t{:?}",
+            witness_binary_file_path, nargo_path, args
+        )));
+    }
 
     // generate verification key
     debug!("Generating verification key");
@@ -1241,12 +1181,6 @@ pub(crate) fn bb_prove_update(
 pub struct PublicInit {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
     pub T_0: Point,
-    /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
-    pub c_1: Point,
-    /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
-    pub phi_1: Point,
-    /// **χ₁** - The encrypted value of σ₁.
-    pub enc_1: BigUint,
     /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
     pub phi_2: Point,
     /// **χ₂** - The encrypted value of σ₂ (enc₂).
@@ -1269,9 +1203,6 @@ pub struct PublicInit {
 impl PublicInit {
     pub fn new(
         T_0: &Point,
-        c_1: &Point,
-        phi_1: &Point,
-        enc_1: &BigUint,
         phi_2: &Point,
         enc_2: &BigUint,
         S_0: &MontgomeryPoint,
@@ -1285,9 +1216,6 @@ impl PublicInit {
 
         PublicInit {
             T_0: T_0.clone(),
-            c_1: c_1.clone(),
-            phi_1: phi_1.clone(),
-            enc_1: enc_1.clone(),
             phi_2: phi_2.clone(),
             enc_2: enc_2.clone(),
             S_0: *S_0,
@@ -1351,27 +1279,33 @@ impl PublicUpdate {
 
 pub fn bb_verify_update(
     public_update: &PublicUpdate,
-    zk_proof_update: &ZeroKnowledgeProofUpdate,
+    zero_knowledge_proof_update: &ZeroKnowledgeProofUpdate,
     verification_key: &[u8],
 ) -> Result<bool, BBError> {
-    let target_dir = get_target_path();
-    let vk_update_key_path = target_dir.join("vk_update");
-    create_dir_if_not_exists(&vk_update_key_path)?;
-    std::fs::write(vk_update_key_path.join("vk"), verification_key)?;
-
     ZeroKnowledgeProofUpdatePublic::check(
-        &zk_proof_update.public_input,
+        &zero_knowledge_proof_update.public_input,
         &public_update.T_prev,
         &public_update.T_current,
         &public_update.challenge,
     )?;
 
-    let vk_update_filename = vk_update_key_path.join("vk").to_string_lossy().to_string();
+    let target_path = get_target_path();
+
+    let vk_update_key_dir = target_path.join("vk_update");
+    create_dir_if_not_exists(&vk_update_key_dir)?;
+    let vk_update_key_path = vk_update_key_dir.join("vk");
+    std::fs::write(&vk_update_key_path, verification_key)?;
+
+    let vk_update_filename = vk_update_key_path.to_string_lossy().to_string();
+
+    let verify_dir = "verify_update";
+    create_dir_if_not_exists(&target_path.join(verify_dir))?;
 
     let res = bb_verify(
-        &zk_proof_update.proof,
-        &zk_proof_update.public_input.to_vec(),
+        &zero_knowledge_proof_update.proof,
+        &zero_knowledge_proof_update.public_input.public_input,
         &vk_update_filename,
+        verify_dir,
     )?;
 
     Ok(res)
@@ -1380,12 +1314,6 @@ pub fn bb_verify_update(
 pub struct InitialProof {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
     pub t_0: Point,
-    /// **c₁** - Feldman commitment 1 (used in tandem with Feldman commitment 0 = Τ₀), which is a public key/curve point on Baby Jubjub.
-    pub c_1: Point,
-    /// **Φ₁** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the peer.
-    pub phi_1: Point,
-    /// **χ₁** - The encrypted value of σ₁.
-    pub enc_1: BigUint,
     /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
     pub phi_2: Point,
     /// **χ₂** - The encrypted value of σ₂ (enc₂).
@@ -1403,8 +1331,6 @@ pub struct InitialProof {
 
     pub challenge_bytes: [u8; 32],
     pub witness_0: BigUint,
-    pub share_1: BigUint,
-    pub share_2: BigUint,
     pub response_div_baby_jub_jub: [u8; 32],
     pub response_div_ed25519: [u8; 32],
     pub zero_knowledge_proof_init: ZeroKnowledgeProofInit,
@@ -1414,9 +1340,6 @@ impl InitialProof {
     pub fn as_public_outputs(&self) -> Comm0PublicOutputs {
         Comm0PublicOutputs {
             T_0: GenericPoint::new(self.t_0.compress()),
-            c_1: GenericPoint::new(self.c_1.compress()),
-            phi_1: GenericPoint::new(self.phi_1.compress()),
-            enc_1: big_int_to_generic(&self.enc_1).unwrap(),
             phi_2: GenericPoint::new(self.phi_2.compress()),
             enc_2: big_int_to_generic(&self.enc_2).unwrap(),
             S_0: GenericPoint::new(self.s_0.to_bytes()),
@@ -1429,8 +1352,6 @@ impl InitialProof {
     pub fn as_private_outputs(&self) -> Comm0PrivateOutputs {
         Comm0PrivateOutputs {
             witness_0: big_int_to_generic(&self.witness_0).unwrap(),
-            peer_share: big_int_to_generic(&self.share_1).unwrap(),
-            kes_share: big_int_to_generic(&self.share_2).unwrap(),
             delta_bjj: GenericScalar::new(self.response_div_baby_jub_jub),
             delta_ed: GenericScalar::new(self.response_div_ed25519),
         }
@@ -1441,9 +1362,6 @@ impl InitialProof {
 pub fn generate_initial_proofs(
     nonce_peer: &BigUint,
     blinding: &BigUint,
-    a_1: &BigUint,
-    r_1: &BigUint,
-    public_key_bjj_peer: &Point,
     r_2: &BigUint,
     kes_public_key: &Point,
     blinding_dleq: &BigUint,
@@ -1456,11 +1374,7 @@ pub fn generate_initial_proofs(
 
     let (witness_0, t_0, s_0) = make_witness0(nonce_peer, blinding)?;
 
-    let (c_1, share_1, share_2) = feldman_secret_share_2_of_2(&witness_0, a_1)?;
-
-    let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, r_1, public_key_bjj_peer, None)?;
-
-    let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, r_2, kes_public_key, None)?;
+    let (fi_2, enc_2) = encrypt_message_ecdh(&witness_0, r_2, kes_public_key, None)?;
 
     //NIZK DLEQ
     let (
@@ -1497,36 +1411,25 @@ pub fn generate_initial_proofs(
 
     //Prove
     let zero_knowledge_proof_init = bb_prove_init(
-        a_1,
         blinding,
         blinding_dleq,
         &challenge_bytes,
-        &enc_1,
         &enc_2,
         nonce_peer,
-        r_1,
         r_2,
         &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
         &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
         &response_baby_jub_jub,
         &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-        &share_1,
-        &share_2,
         &witness_0,
         &t_0,
-        &c_1,
-        &fi_1,
         &fi_2,
         kes_public_key,
-        public_key_bjj_peer,
     )?;
 
     //Verify
     let public_init = PublicInit::new(
         &t_0,
-        &c_1,
-        &fi_1,
-        &enc_1,
         &fi_2,
         &enc_2,
         &s_0,
@@ -1541,7 +1444,6 @@ pub fn generate_initial_proofs(
 
     let verification = bb_verify_init(
         nonce_peer,
-        public_key_bjj_peer,
         kes_public_key,
         &public_init,
         &verification_key,
@@ -1553,9 +1455,6 @@ pub fn generate_initial_proofs(
 
     Ok(InitialProof {
         t_0,
-        c_1,
-        phi_1: fi_1,
-        enc_1,
         phi_2: fi_2,
         enc_2,
         s_0,
@@ -1566,8 +1465,6 @@ pub fn generate_initial_proofs(
 
         challenge_bytes,
         witness_0,
-        share_1,
-        share_2,
         response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
         response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
         zero_knowledge_proof_init,
@@ -1662,7 +1559,7 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
         &r2,
     );
 
-    let verification_key = load_vk("grease_proofs", "vk_update")?;
+    let verification_key = load_vk(get_target_path(), "vk_update")?;
     let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &verification_key)?;
     if !verification {
         return Err(BBError::SelfVerify);
@@ -1690,9 +1587,8 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
 #[cfg(test)]
 mod test {
     use super::*;
-    use log::*;
     use num_bigint::BigUint;
-    use std::path::Path;
+    use serial_test::serial;
 
     #[test]
     fn test_generate_dleqproof_simple() {
@@ -1853,9 +1749,9 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_bb_prove_init() {
         env_logger::try_init().ok();
-        let nargo_path: &Path = Path::new(".");
 
         let rng = &mut rand::rng();
 
@@ -1864,16 +1760,9 @@ mod test {
 
         let (witness_0, t_0, s_0) = make_witness0(&nonce_peer, &blinding).unwrap();
 
-        let a_1 = make_scalar_bjj(rng);
-        let (c_1, share_1, share_2) = feldman_secret_share_2_of_2(&witness_0, &a_1).unwrap();
-
-        let r_1 = make_scalar_bjj(rng);
-        let (_, public_key_peer) = make_keypair_bjj(rng);
-        let (fi_1, enc_1) = encrypt_message_ecdh(&share_1, &r_1, &public_key_peer, None).unwrap();
-
         let r_2 = make_scalar_bjj(rng);
         let (_, kes_public_key) = make_keypair_bjj(rng);
-        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &kes_public_key, None).unwrap();
+        let (fi_2, enc_2) = encrypt_message_ecdh(&witness_0, &r_2, &kes_public_key, None).unwrap();
 
         let blinding_dleq = make_scalar_bjj(rng);
 
@@ -1888,37 +1777,26 @@ mod test {
         ) = generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
 
         let zero_knowledge_proof_init = bb_prove_init(
-            &a_1,
             &blinding,
             &blinding_dleq,
             &challenge_bytes,
-            &enc_1,
             &enc_2,
             &nonce_peer,
-            &r_1,
             &r_2,
             &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
             &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
             &response_baby_jub_jub,
             &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-            &share_1,
-            &share_2,
             &witness_0,
             &t_0,
-            &c_1,
-            &fi_1,
             &fi_2,
             &kes_public_key,
-            &public_key_peer,
         )
         .unwrap();
 
         //Verify
         let public_init = PublicInit::new(
             &t_0,
-            &c_1,
-            &fi_1,
-            &enc_1,
             &fi_2,
             &enc_2,
             &s_0,
@@ -1933,7 +1811,6 @@ mod test {
 
         let verification = bb_verify_init(
             &nonce_peer,
-            &public_key_peer,
             &kes_public_key,
             &public_init,
             &verification_key,
@@ -1944,9 +1821,9 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_bb_prove_update() {
         env_logger::try_init().ok();
-        let nargo_path: &Path = Path::new(".");
 
         let mut rng = &mut rand::rng();
 
@@ -2000,9 +1877,9 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_demo() {
         env_logger::try_init().ok();
-        let nargo_path: &Path = Path::new(".");
 
         let (major, minor, build) = get_bb_version().unwrap();
         info!("`bb` version: {}.{}.{}", major, minor, build);
@@ -2048,72 +1925,6 @@ mod test {
             "Fr(0x2a8a23239d91f7c2ff94c2b094bb91ff6751c03b76fd69a8770186628753ad4f)"
         );
 
-        // a_1 = "70143195093839929636068986763442859911856008756585124285077086015668936144"
-        let a_1: BigUint = BigUint::parse_bytes(
-            b"70143195093839929636068986763442859911856008756585124285077086015668936144",
-            10,
-        )
-        .unwrap();
-
-        // share_1 = "365173736425792519363861589744101528712591672182017486917907141004474053036"
-        // share_2 = "1935539691034484434417008551905513468739774619037947161079324292923830330825"
-        // [c_1]
-        //   x="0x2c5e461e413c866bcf8a62d8cdff41e557f79c0629b7383dbe91b18096e09540"
-        //   y="0x13a5434cda8f9d6c64724d2171ac4f9bb873b26c175e87c5dd5473b502b85312"
-
-        let (c_1, share_1, share_2) = feldman_secret_share_2_of_2(&witness_0, &a_1).unwrap();
-
-        assert_eq!(
-            c_1.x.to_string(),
-            "Fr(0x2c5e461e413c866bcf8a62d8cdff41e557f79c0629b7383dbe91b18096e09540)"
-        );
-        assert_eq!(
-            c_1.y.to_string(),
-            "Fr(0x13a5434cda8f9d6c64724d2171ac4f9bb873b26c175e87c5dd5473b502b85312)"
-        );
-        assert_eq!(
-            share_1,
-            BigUint::parse_bytes(
-                b"365173736425792519363861589744101528712591672182017486917907141004474053036",
-                10
-            )
-            .unwrap()
-        );
-        assert_eq!(
-            share_2,
-            BigUint::parse_bytes(
-                b"1935539691034484434417008551905513468739774619037947161079324292923830330825",
-                10
-            )
-            .unwrap()
-        );
-
-        let r_1: BigUint = BigUint::parse_bytes(
-            b"2422852404430683902810753577573102653260911761556849713949680014072177383950",
-            10,
-        )
-        .unwrap();
-        let private_key_bjj_peer: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
-        let public_key_bjj_peer = get_scalar_to_point_bjj(&private_key_bjj_peer);
-
-        // enc_1 = "1220122097491108282229984040904504012545109624322527294624787674340936491877"
-        // [fi_1]
-        //   x="0x09d58da0c2ab2b11cc1f8579f739e7e463235185753ab5d4719e8db6aa476a23"
-        //   y="0x1bc9eb7eab983bfd017433c4ed524b8bfde9db0abda7c7940e9c43822268b4ce"
-
-        let (fi_1, enc_1) =
-            encrypt_message_ecdh(&share_1, &r_1, &public_key_bjj_peer, Some(&private_key_bjj_peer)).unwrap();
-
-        assert_eq!(
-            fi_1.x.to_string(),
-            "Fr(0x09d58da0c2ab2b11cc1f8579f739e7e463235185753ab5d4719e8db6aa476a23)"
-        );
-        assert_eq!(
-            fi_1.y.to_string(),
-            "Fr(0x1bc9eb7eab983bfd017433c4ed524b8bfde9db0abda7c7940e9c43822268b4ce)"
-        );
-        // assert_eq!(enc_1, BigUint::parse_bytes(b"1220122097491108282229984040904504012545109624322527294624787674340936491877", 10).unwrap());
-
         // r_2 = "2044680745167638013838014513951032949701446715960700123553928808460151041757"
         let r_2: BigUint = BigUint::parse_bytes(
             b"2044680745167638013838014513951032949701446715960700123553928808460151041757",
@@ -2126,12 +1937,7 @@ mod test {
         let private_key_kes: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
         let kes_public_key = get_scalar_to_point_bjj(&private_key_kes);
 
-        // enc_2 = "321084871571726505169933431313947177118001726846734186078876149279016535274"
-        // [fi_2]
-        //   x="0x0ac31edd3af81f177137239a950c8f70662c4b6fbbeec57dae63bfcb61d931ee"
-        //   y="0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0"
-
-        let (fi_2, enc_2) = encrypt_message_ecdh(&share_2, &r_2, &kes_public_key, Some(&private_key_kes)).unwrap();
+        let (fi_2, enc_2) = encrypt_message_ecdh(&witness_0, &r_2, &kes_public_key, Some(&private_key_kes)).unwrap();
 
         assert_eq!(
             fi_2.x.to_string(),
@@ -2141,7 +1947,6 @@ mod test {
             fi_2.y.to_string(),
             "Fr(0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0)"
         );
-        // assert_eq!(enc_2, BigUint::parse_bytes(b"321084871571726505169933431313947177118001726846734186078876149279016535274", 10).unwrap());
 
         //NIZK DLEQ
         //witness_0 = "2300713427460276953780870141649614997452366291219964647997231433928304383861"
@@ -2203,37 +2008,26 @@ mod test {
 
         //Prove
         let zero_knowledge_proof_init = bb_prove_init(
-            &a_1,
             &blinding,
             &blinding_dleq,
             &challenge_bytes_init,
-            &enc_1,
             &enc_2,
             &nonce_peer,
-            &r_1,
             &r_2,
             &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
             &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
             &response_baby_jub_jub,
             &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-            &share_1,
-            &share_2,
             &witness_0,
             &t_0,
-            &c_1,
-            &fi_1,
             &fi_2,
             &kes_public_key,
-            &public_key_bjj_peer,
         )
         .unwrap();
 
         //Verify
         let public_init = PublicInit::new(
             &t_0,
-            &c_1,
-            &fi_1,
-            &enc_1,
             &fi_2,
             &enc_2,
             &s_0,
@@ -2244,14 +2038,13 @@ mod test {
             &r2,
         );
 
-        let vk = load_vk(get_target_path(), "vk_init").unwrap();
+        let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
 
         let verification = bb_verify_init(
             &nonce_peer,
-            &public_key_bjj_peer,
             &kes_public_key,
             &public_init,
-            &vk,
+            &verification_key,
             &zero_knowledge_proof_init,
         )
         .unwrap();

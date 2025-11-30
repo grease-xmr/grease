@@ -13,8 +13,7 @@ sequenceDiagram
             KES->>KES: Wait for expiration
         end
         Merchant->>KES: Request resolution
-        KES->>Merchant: Release Customer's KES-shard
-        Merchant->>Merchant: Reconstruct secret using peer-shard and KES-shard
+        KES->>Merchant: Release Customer's secret
         Merchant->>Merchant: Adapt signatures to create valid closing transaction
         Merchant->>Monero: Broadcast closing transaction
         Monero-->>Merchant: Transaction confirmed

@@ -89,7 +89,8 @@ _files_ and not their enclosing directories.
 ```bash
 rm -rf target && \
 nargo compile --workspace && \
-nargo execute -p Prover.toml --workspace && \
+nargo execute -p Prover.toml --package Grease && \
+nargo execute -p Prover.toml --package GreaseUpdate && \
 mkdir target/vk_init && \
 bb write_vk -b ./target/Grease.json -o ./target/vk_init -v && \
 mkdir target/vk_update && \
@@ -106,5 +107,5 @@ bb verify -v -k ./target/vk_update/vk -p ./target/proof_update/proof -i ./target
 
 | Stage      | Gates      | Proof size |
 | :--------- | :--------- | :--------- |
-| init       | 34 215     | 3 456 B    |
-| update     | 19 332     | 3 296 B    |
+| init       | 34 185     | 14 080 B    |
+| update     | 12 679     | 14 080 B    |
