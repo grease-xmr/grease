@@ -21,7 +21,7 @@ tempfile = "3.13"
 thiserror = { workspace = true }
 rand = { workspace = true }
 log = { workspace = true }
-zkuh-rs = { version = "1.6", git = "https://github.com/grease-xmr/aztec-packages.git", branch = "main" }
+zkuh-rs = { git = "https://github.com/grease-xmr/aztec-packages.git", rev = "fa5766e6bc4b2e3d9adeb017c721ebfd88ba7bf7" }
 
 [dev-dependencies]
 env_logger = "0.11.8"

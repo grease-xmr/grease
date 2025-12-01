@@ -1,14 +1,11 @@
 use dep::bignum;
 use dep::bignum::BigNum;
 use dep::bignum::fields::U256::U256;
-use edwards::bjj::{BabyJubJub, BabyJubJubParams};
-use edwards::Curve;
-use edwards::CurveTrait;
-use std::{hash::blake2s, ops::Mul};
-use dep::bignum::fields::U512::U512;
+use edwards::bjj::BabyJubJubParams;
+use std::hash::blake2s;
 
 // This is the constant for VCOF hashing
-global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32];//TODO: Create a domain-separation constant
+global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32]; //TODO: Create a domain-separation constant
 
 /// Verify COF [given VerifyWitness0() at initialization]
 fn VerifyCOF(
@@ -36,7 +33,7 @@ fn VerifyCOF(
     let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
 
     let value_bignum = hash_bignum.umod(l_bignum);
-    let mut value_field = bignum::bignum::to_field(value_bignum);
+    let mut value_field: Field = bignum::bignum::to_field(value_bignum) as Field;
     if value_field == 0 {
         value_field = library::BABY_JUBJUB_ORDER;
     }
@@ -66,6 +63,6 @@ fn main(
         response_div_BabyJubJub,
         response_BabyJubJub,
         response_div_ed25519,
-        response_ed25519
+        response_ed25519,
     );
 }

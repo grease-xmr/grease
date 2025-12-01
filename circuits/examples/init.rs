@@ -1,5 +1,5 @@
-use std::time::Instant;
 use log::*;
+use std::time::Instant;
 use zkuh_rs::noir_api::{Inputs, NoirError, VecInput};
 use zkuh_rs::{noir_api, noir_api::compile, noir_api::CompileOptions, ultra_honk};
 
@@ -29,7 +29,8 @@ fn main() {
     info!(
         "Compilation completed successfully in {}ms with noir {}. Output hash {}.",
         compile_duration.as_millis(),
-        program.noir_version, program.hash,
+        program.noir_version,
+        program.hash,
     );
     info!(
         "Code comprises {} functions and {} unconstrained functions.",
@@ -63,7 +64,7 @@ fn main() {
             "r_2",
             "1072106140184681314352975995361112083950550273446077810276345662155291208434",
         )
-        .expect("to add addr_2")
+        .expect("to add r_2")
         .try_add_field(
             "response_BabyJubJub",
             "854235210834499667423973962419711656071325410723767426196126191188738516312",
@@ -74,8 +75,6 @@ fn main() {
             "2568166237609188807669846780611238875106975738847244883423726835401425291323",
         )
         .expect("to add witness_0")
-        .add_field("response_div_ed25519", [ 86u8, 159, 195, 153, 184, 214, 25, 77, 147, 109, 184, 144, 248, 
-            206, 0, 209, 43, 78, 99, 142, 229, 221, 113, 23, 169, 53, 142, 87, 243, 100, 94, 248, ])
         .add_point(
             "T_0",
             "0x291b35800fd8393946e6dd8196fc0282b6fa9b251c350c3c6cb554fb6e105710",
@@ -94,41 +93,59 @@ fn main() {
             "0x17301fd22acecfb6158e8bb8b42475a5fe1084deac5f64198ae3b8301840b568",
         )
         .expect("to add point pubkey_KES")
-        .add("challenge_bytes", VecInput::new(vec![244u8, 26, 141, 141, 26, 33, 174, 44, 172, 62, 93, 61, 20,
-            158, 129, 136, 138, 61, 77, 64, 160, 117, 160, 101, 241, 75, 208, 244, 192, 232, 130, 39]))
+        .add(
+            "challenge_bytes",
+            VecInput::new(vec![
+                244u8, 26, 141, 141, 26, 33, 174, 44, 172, 62, 93, 61, 20, 158, 129, 136, 138, 61, 77, 64, 160, 117,
+                160, 101, 241, 75, 208, 244, 192, 232, 130, 39,
+            ]),
+        )
         .expect("to add point challenge")
-        .add("response_div_BabyJubJub", VecInput::new(vec![229u8, 32, 143, 75, 113, 63, 229, 174, 161, 218,
-            119, 35, 132, 100, 56, 52, 177, 120, 57, 228, 89, 99, 0, 157, 20, 88, 96, 20, 119, 23, 44, 115]))
+        .add(
+            "response_div_BabyJubJub",
+            VecInput::new(vec![
+                229u8, 32, 143, 75, 113, 63, 229, 174, 161, 218, 119, 35, 132, 100, 56, 52, 177, 120, 57, 228, 89, 99,
+                0, 157, 20, 88, 96, 20, 119, 23, 44, 115,
+            ]),
+        )
         .expect("to add point response_div_BabyJubJub")
-        .add("response_ed25519", VecInput::new(vec![
-            2u8, 181, 34, 27, 16, 113, 96, 218, 91, 117, 140, 181, 65, 84, 200, 176, 122, 124, 116,
-            167, 254, 232, 76, 52, 121, 234, 57, 141, 58, 13, 188, 3,
-        ])).expect("to add point response_ed25519")
-        .add("response_div_ed25519", VecInput::new(vec![86u8, 159, 195, 153, 184, 214, 25, 77, 147, 109, 184,
-            144, 248, 206, 0, 209, 43, 78, 99, 142, 229, 221, 113, 23, 169, 53, 142, 87, 243, 100, 94, 248]))
+        .add(
+            "response_ed25519",
+            VecInput::new(vec![
+                2u8, 181, 34, 27, 16, 113, 96, 218, 91, 117, 140, 181, 65, 84, 200, 176, 122, 124, 116, 167, 254, 232,
+                76, 52, 121, 234, 57, 141, 58, 13, 188, 3,
+            ]),
+        )
+        .expect("to add point response_ed25519")
+        .add(
+            "response_div_ed25519",
+            VecInput::new(vec![
+                86u8, 159, 195, 153, 184, 214, 25, 77, 147, 109, 184, 144, 248, 206, 0, 209, 43, 78, 99, 142, 229, 221,
+                113, 23, 169, 53, 142, 87, 243, 100, 94, 248,
+            ]),
+        )
         .expect("to add point response_div_ed25519");
 
     let input_map = inputs.as_input_map();
     let lap_duration = lap_start.elapsed();
-    info!("Input processing complete in {}ms. Input map has {} entries. Executing program",
+    info!(
+        "Input processing complete in {}ms. Input map has {} entries. Executing program",
         lap_duration.as_millis(),
         input_map.len()
     );
     let lap_start = Instant::now();
-    let execution_result = noir_api::execute(&program, inputs, false)
-        .expect("to execute program");
+    let execution_result = noir_api::execute(&program, inputs, false).expect("to execute program");
     let lap_duration = lap_start.elapsed();
     info!("Execution success in {}ms.", lap_duration.as_millis());
     //let witness = execution_result.witness_stack.serialize()
-    let witness = noir_api::bincode_serialize(&execution_result.witness_stack)
-        .expect("to serialize witness");
-    let bytecode = noir_api::bincode_serialize(&program.bytecode)
-        .expect("to bincode serialize bytecode");
+    let witness = noir_api::bincode_serialize(&execution_result.witness_stack).expect("to serialize witness");
+    let bytecode = noir_api::bincode_serialize(&program.bytecode).expect("to bincode serialize bytecode");
     let lap_start = Instant::now();
     let proof = ultra_honk::prove(&bytecode, &witness, &[]).expect("while initializing proof");
     let lap_duration = lap_start.elapsed();
     info!("Proving completed in {}ms.", lap_duration.as_millis());
-    info!("Proof has {} public inputs and {} proof elements.",
+    info!(
+        "Proof has {} public inputs and {} proof elements.",
         proof.public_inputs.len(),
         proof.proof.len(),
     );

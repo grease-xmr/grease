@@ -4,5 +4,5 @@ version = "0.1.0"
 type = "lib"
 
 [dependencies]
-bignum = { tag = "v0.8.2", git = "https://github.com/noir-lang/noir-bignum" }
+bignum = { tag = "v0.8.3", git = "https://github.com/noir-lang/noir-bignum" }
 edwards = { tag = "v0.2.5", git = "https://github.com/noir-lang/noir-edwards" }
