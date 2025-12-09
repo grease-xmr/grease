@@ -1,7 +1,7 @@
 use dep::bignum;
 use dep::bignum::BigNum;
 use dep::bignum::fields::U256::U256;
-use edwards::bjj::{BabyJubJubParams};
+use edwards::bjj::BabyJubJubParams;
 use std::field::bn254::assert_lt;
 use std::hash::blake2s;
 
@@ -50,7 +50,6 @@ fn VerifyWitness0(
     assert_eq(witness_0_calc_field, witness_0);
 
     library::VerifyTi(T_0, witness_0);
-
 }
 
 /// Verify protocol conformance of encryption of `witness_0` to KES [given VerifyWitness0()]
@@ -88,13 +87,7 @@ fn main(
 ) {
     VerifyWitness0(nonce_peer, T_0, witness_0, blinding);
 
-    EncryptToKES(
-        witness_0,
-        fi_2,
-        enc_2,
-        r_2,
-        pubkey_KES,
-    );
+    EncryptToKES(witness_0, fi_2, enc_2, r_2, pubkey_KES);
 
     library::VerifyEquivalentModulo(
         challenge_bytes,
@@ -103,6 +96,6 @@ fn main(
         response_div_BabyJubJub,
         response_BabyJubJub,
         response_div_ed25519,
-        response_ed25519
+        response_ed25519,
     );
 }

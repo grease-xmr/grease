@@ -8,7 +8,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      NOIR_VERSION: "1.0.0-beta.4"
+      NOIR_VERSION: "1.0.0-beta.16"
+      BB_VERSION: "3.0.0-nightly.20251104"
       NARGO_HOME: ${{ github.workspace }}/.nargo
 
     steps:
@@ -40,7 +41,7 @@ jobs:
           # Install bb
           curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/refs/heads/master/barretenberg/bbup/install | bash
           source ~/.bashrc
-          bbup
+          bbup --version $BB_VERSION
           echo NARGO: $(nargo --version)
           echo BB: $(bb --version)
 

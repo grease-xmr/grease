@@ -497,7 +497,7 @@ fn call_shell(program: &str, args: &[&str], working_dir: Option<PathBuf>) -> io:
     Ok((stdout_output, stderr_output.trim().to_string()))
 }
 
-pub(crate) fn get_bb_version() -> Result<(u8, u8, u8), BBError> {
+pub(crate) fn get_bb_version() -> Result<String, BBError> {
     //bb --version
     let args: Vec<&'static str> = vec!["--version"];
     match call_shell("bb", &args, None) {
@@ -506,25 +506,8 @@ pub(crate) fn get_bb_version() -> Result<(u8, u8, u8), BBError> {
                 Ok(v) => v,
                 Err(e) => return Err(format!("Invalid UTF-8 sequence: {}", e).into()),
             };
-            let stdout: String = stdout.chars().filter(|&c| !c.is_whitespace()).collect();
-            // Split the string by periods
-            let parts: Vec<&str> = stdout.split('.').collect();
 
-            // Check if exactly 3 parts
-            if parts.len() != 3 {
-                return Err("Version string must have exactly three parts separated by periods".into());
-            }
-
-            // Parse each part into u8
-            let mut result = [0u8; 3];
-            for (i, part) in parts.iter().enumerate() {
-                match part.parse::<u8>() {
-                    Ok(num) => result[i] = num,
-                    Err(_) => return Err(format!("Each part must be a valid u8 (0-255): {}", stdout).into()),
-                }
-            }
-
-            Ok((result[0], result[1], result[2]))
+            Ok(stdout.to_string())
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -631,7 +614,7 @@ impl ZeroKnowledgeProofInitPublic {
     }
 
     pub fn new(nonce_peer: &BigUint, t_0: &Point, kes_public_key: &Point, c: &BigUint) -> Result<Self, BBError> {
-        let mut public_input = Vec::with_capacity(1184);// 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
+        let mut public_input = Vec::with_capacity(1184); // 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
         public_input.extend_from_slice(&left_pad_bytes_32(&nonce_peer.to_bytes_be())?);
         public_input.extend_from_slice(&get_field_bytes(&t_0.x));
         public_input.extend_from_slice(&get_field_bytes(&t_0.y));
@@ -726,7 +709,7 @@ impl ZeroKnowledgeProofInitPublic {
 pub struct ZeroKnowledgeProofInit {
     pub public_input: ZeroKnowledgeProofInitPublic,
     #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
-    pub proof: Box<[u8; 14080]>,
+    pub proof: Box<[u8; 16256]>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -846,7 +829,7 @@ impl ZeroKnowledgeProofUpdatePublic {
 pub struct ZeroKnowledgeProofUpdate {
     pub public_input: ZeroKnowledgeProofUpdatePublic,
     #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
-    pub proof: Box<[u8; 14080]>,
+    pub proof: Box<[u8; 16256]>,
 }
 
 pub(crate) fn bb_prove_init(
@@ -935,6 +918,7 @@ pub(crate) fn bb_prove_init(
             return Err(BBError::IoError(e));
         }
     };
+    let vk_init_filename = target_path.join("vk_init").join("vk").to_string_lossy().to_string();
 
     //bb prove
     debug!("Generating bb_init proof");
@@ -947,8 +931,17 @@ pub(crate) fn bb_prove_init(
         }
     }
     let proof_path = target_path.join("proof_init").to_string_lossy().to_string();
-    let args: Vec<&str> =
-        vec!["prove", "-b", &grease_init_json_filename, "-w", &witness_binary_file_path, "-o", &proof_path];
+    let args: Vec<&str> = vec![
+        "prove",
+        "-b",
+        &grease_init_json_filename,
+        "-w",
+        &witness_binary_file_path,
+        "-k",
+        &vk_init_filename,
+        "-o",
+        &proof_path,
+    ];
     match call_shell("bb", &args, None) {
         Ok((stdout, _stderr)) => {
             let output = str::from_utf8(&stdout).unwrap_or_default();
@@ -966,14 +959,14 @@ pub(crate) fn bb_prove_init(
     debug!("Retrieving public inputs");
     let public_input = std::fs::read(target_path.join("proof_init").join("public_inputs"))?;
 
-    if proof.len() != 14080 {
+    if proof.len() != 16256 {
         return Err(BBError::String("Invalid proof length".to_string()));
     }
 
     info!("Proofs generated successfully");
     Ok(ZeroKnowledgeProofInit {
         public_input: ZeroKnowledgeProofInitPublic::from_vec(public_input)?,
-        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 14080 bytes".to_string()))?,
+        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 16256 bytes".to_string()))?,
     })
 }
 
@@ -994,7 +987,7 @@ fn get_target_path() -> PathBuf {
 }
 
 pub(crate) fn bb_verify(
-    proof: &[u8; 14080],
+    proof: &[u8; 16256],
     public_inputs: &[u8],
     view_key_file: &str,
     verify_dir: &str,
@@ -1124,9 +1117,9 @@ pub(crate) fn bb_prove_update(
     debug!("Generating verification key");
     create_dir_if_not_exists(target_path.join("vk_update"))?;
     let vk_update_dir = target_path.join("vk_update").to_string_lossy().to_string();
-    let grease_init_json_path = get_noir_project_path().join("target").join("GreaseUpdate.json");
-    let grease_init_json_filename = grease_init_json_path.to_string_lossy().to_string();
-    let args = vec!["write_vk", "-b", &grease_init_json_filename, "-o", &vk_update_dir];
+    let grease_update_json_path = get_noir_project_path().join("target").join("GreaseUpdate.json");
+    let grease_update_json_filename = grease_update_json_path.to_string_lossy().to_string();
+    let args = vec!["write_vk", "-b", &grease_update_json_filename, "-o", &vk_update_dir];
 
     match call_shell("bb", &args, None) {
         Ok((stdout, _stderr)) => {
@@ -1138,6 +1131,7 @@ pub(crate) fn bb_prove_update(
             return Err(BBError::IoError(e));
         }
     };
+    let vk_update_filename = target_path.join("vk_update").join("vk").to_string_lossy().to_string();
 
     //bb prove
     let noir_path = get_noir_project_path();
@@ -1151,6 +1145,8 @@ pub(crate) fn bb_prove_update(
         &grease_update_json_path,
         "-w",
         &witness_binary_file_path,
+        "-k",
+        &vk_update_filename,
         "-v",
         "-o",
         &grease_update_proof_path,
@@ -1171,7 +1167,7 @@ pub(crate) fn bb_prove_update(
 
     Ok(ZeroKnowledgeProofUpdate {
         public_input: ZeroKnowledgeProofUpdatePublic::from_vec(public_input)?,
-        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 14080 bytes".to_string()))?,
+        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 16256 bytes".to_string()))?,
     })
 }
 
@@ -1366,8 +1362,8 @@ pub fn generate_initial_proofs(
     kes_public_key: &Point,
     blinding_dleq: &BigUint,
 ) -> Result<InitialProof, BBError> {
-    let (major, minor, build) = get_bb_version()?;
-    info!("`bb` version: {}.{}.{}", major, minor, build);
+    let bb_version = get_bb_version()?;
+    info!("`bb` version: {}", bb_version);
 
     let nargo_version = get_nargo_version()?;
     info!("`nargo` version: {}", nargo_version);
@@ -1881,8 +1877,8 @@ mod test {
     fn test_demo() {
         env_logger::try_init().ok();
 
-        let (major, minor, build) = get_bb_version().unwrap();
-        info!("`bb` version: {}.{}.{}", major, minor, build);
+        let bb_version = get_bb_version().unwrap();
+        info!("`bb` version: {}", bb_version);
 
         let nargo_version = get_nargo_version().unwrap();
         info!("`nargo` version: {}", nargo_version);

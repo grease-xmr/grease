@@ -91,14 +91,16 @@ rm -rf target && \
 nargo compile --workspace && \
 nargo execute -p Prover.toml --package Grease && \
 nargo execute -p Prover.toml --package GreaseUpdate && \
+bb gates -b ./target/Grease.json -v  && \
+bb gates -b ./target/GreaseUpdate.json -v && \
 mkdir target/vk_init && \
 bb write_vk -b ./target/Grease.json -o ./target/vk_init -v && \
 mkdir target/vk_update && \
 bb write_vk -b ./target/GreaseUpdate.json -o ./target/vk_update -v && \
 mkdir target/proof_init && \
-bb prove -b ./target/Grease.json -w ./target/Grease.gz -o ./target/proof_init -v && \
+bb prove -b ./target/Grease.json -w ./target/Grease.gz -k ./target/vk_init/vk -o ./target/proof_init -v && \
 mkdir target/proof_update && \
-bb prove -b ./target/GreaseUpdate.json -w ./target/GreaseUpdate.gz -o ./target/proof_update -v && \
+bb prove -b ./target/GreaseUpdate.json -w ./target/GreaseUpdate.gz -k ./target/vk_update/vk -o ./target/proof_update -v && \
 bb verify -v -k ./target/vk_init/vk -p ./target/proof_init/proof -i ./target/proof_init/public_inputs && \
 bb verify -v -k ./target/vk_update/vk -p ./target/proof_update/proof -i ./target/proof_update/public_inputs 
 ```
@@ -107,5 +109,5 @@ bb verify -v -k ./target/vk_update/vk -p ./target/proof_update/proof -i ./target
 
 | Stage      | Gates      | Proof size |
 | :--------- | :--------- | :--------- |
-| init       | 34 185     | 14 080 B    |
-| update     | 12 679     | 14 080 B    |
+| init       | 32 637     | 16 256 B    |
+| update     | 17 416     | 16 256 B    |

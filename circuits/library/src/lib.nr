@@ -1,12 +1,12 @@
 use dep::bignum;
 use dep::bignum::BigNum;
 use dep::bignum::fields::U256::U256;
+use dep::bignum::fields::U512::U512;
 use edwards::bjj::{BabyJubJub, BabyJubJubParams};
 use edwards::Curve;
 use edwards::CurveTrait;
-use edwards::scalar_field::ScalarField;
+use edwards::ScalarField;
 use std::field::bn254::assert_lt;
-use dep::bignum::fields::U512::U512;
 use std::{hash::blake2s, ops::Mul};
 
 // Generator point of Baby Jubjub curve.
@@ -19,7 +19,8 @@ global BASE8: [Field; 2] = [
 global generator: Curve<BabyJubJubParams> = BabyJubJub::from((BASE8[0], BASE8[1]));
 
 // Baby Jubjub curve order [251 bit value]
-pub global BABY_JUBJUB_ORDER: Field = 2736030358979909402780800718157159386076813972158567259200215660948447373041;
+pub global BABY_JUBJUB_ORDER: Field =
+    2736030358979909402780800718157159386076813972158567259200215660948447373041;
 pub global BABY_JUBJUB_ORDER_PLUS_ONE: Field = BABY_JUBJUB_ORDER + 1;
 
 /// Creates a Baby Jubjub point from a scalar, specifically a Baby Jubjub public key from a secret scalar.
@@ -94,7 +95,8 @@ pub fn VerifyTi(T_i: edwards::Curve<BabyJubJubParams>, witness_i: Field) {
 }
 
 // Ed25519 curve order  [>252 bit value]
-global ED25519_ORDER: Field = 7237005577332262213973186563042994240857116359379907606001950938285454250989;
+global ED25519_ORDER: Field =
+    7237005577332262213973186563042994240857116359379907606001950938285454250989;
 
 pub fn VerifyEquivalentModulo(
     challenge_bytes: [u8; 32],
@@ -121,11 +123,14 @@ pub fn VerifyEquivalentModulo(
     let l_bignum: U512 = U512::from(BABY_JUBJUB_ORDER);
 
     // U512 from_be_bytes expects 64 bytes + 1 byte for potential overflow
-    let response_div_BabyJubJub_bytes_65: [u8] = &[0; 33].append(response_div_BabyJubJub.as_slice());
-    let response_div_BabyJubJub_bignum: U512 = U512::from_be_bytes(response_div_BabyJubJub_bytes_65.as_array());
+    let response_div_BabyJubJub_bytes_65: [u8] =
+        &[0; 33].append(response_div_BabyJubJub.as_slice());
+    let response_div_BabyJubJub_bignum: U512 =
+        U512::from_be_bytes(response_div_BabyJubJub_bytes_65.as_array());
 
     let response_BabyJubJub_bignum: U512 = U512::from(response_BabyJubJub);
-    let response_calc_BabyJubJub = l_bignum.mul(response_div_BabyJubJub_bignum) + response_BabyJubJub_bignum;
+    let response_calc_BabyJubJub =
+        l_bignum.mul(response_div_BabyJubJub_bignum) + response_BabyJubJub_bignum;
     assert_eq(response_calc_BabyJubJub, response_calc);
 
     //Ed25519 order [>252 bit value]
@@ -133,12 +138,14 @@ pub fn VerifyEquivalentModulo(
 
     // U512 from_be_bytes expects 64 bytes + 1 byte for potential overflow
     let response_div_ed25519_bytes_65: [u8] = &[0; 33].append(response_div_ed25519.as_slice());
-    let response_div_ed25519_bignum: U512 = U512::from_be_bytes(response_div_ed25519_bytes_65.as_array());
+    let response_div_ed25519_bignum: U512 =
+        U512::from_be_bytes(response_div_ed25519_bytes_65.as_array());
 
     // U512 from_be_bytes expects 64 bytes + 1 byte for potential overflow
     let response_ed25519_bytes_65: [u8] = &[0; 33].append(response_ed25519.as_slice());
     let response_ed25519_bignum: U512 = U512::from_be_bytes(response_ed25519_bytes_65.as_array());
 
-    let response_calc_ed25519 = ed25519_order_bignum.mul(response_div_ed25519_bignum) + response_ed25519_bignum;
+    let response_calc_ed25519 =
+        ed25519_order_bignum.mul(response_div_ed25519_bignum) + response_ed25519_bignum;
     assert_eq(response_calc_ed25519, response_calc);
 }
