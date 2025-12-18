@@ -1,6 +1,7 @@
 //! Implements traits to make BabyJubJub compatible with Serai's `CipherSuite`
 
 use crate::{BjjConfig, Fr, constants::*};
+use num_bigint::BigUint;
 use ark_ec::CurveConfig;
 use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
 use ark_serialize::CanonicalSerialize;
@@ -20,6 +21,24 @@ pub struct Scalar(pub <BjjConfig as CurveConfig>::ScalarField);
 impl From<u64> for Scalar {
     fn from(value: u64) -> Self {
         Self(Fr::from(value))
+    }
+}
+
+impl From<BigUint> for Scalar {
+    fn from(value: BigUint) -> Self {
+        Self(Fr::from(value))
+    }
+}
+
+impl From<&BigUint> for Scalar {
+    fn from(value: &BigUint) -> Self {
+        Self(Fr::from(value.clone()))
+    }
+}
+
+impl From<Scalar> for BigUint {
+    fn from(value: Scalar) -> Self {
+        value.into()
     }
 }
 
