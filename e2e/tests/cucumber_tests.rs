@@ -15,7 +15,7 @@ fn main() {
         GreaseWorld::cucumber()
             .with_writer(writer::Libtest::or_basic())
             .after(|_f, _r, scenario, ev, w| post_test_hook(scenario, ev, w))
-            .run("tests/features"),
+            .run_and_exit("tests/features"),
     );
     info!("🚀️ Tests complete");
 }
