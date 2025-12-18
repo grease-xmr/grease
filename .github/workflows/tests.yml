@@ -52,7 +52,7 @@ jobs:
           NARGO_TARGET_PATH: ${{ github.workspace }}/grease-proofs
         run: |
           export PATH="${PATH}:${NARGO_HOME}/bin:${HOME}/.bb"
-          cargo test --all-features --workspace --exclude e2e
+          cargo test --all-features --workspace --release --exclude e2e
 
   cucumber:
     name: Cucumber end-to-end tests
