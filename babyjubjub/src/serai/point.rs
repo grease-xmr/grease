@@ -1,4 +1,4 @@
-use crate::{BabyJubJub, ProjectivePoint, Scalar, hash_to_curve};
+use crate::{BabyJubJub, ProjectivePoint, Scalar, hash_to_curve, Point};
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::{AdditiveGroup, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -18,6 +18,18 @@ pub struct BjjPoint(ProjectivePoint);
 impl From<ProjectivePoint> for BjjPoint {
     fn from(value: ProjectivePoint) -> Self {
         Self(value)
+    }
+}
+
+impl From<Point> for BjjPoint {
+    fn from(value: Point) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<BjjPoint> for Point {
+    fn from(value: BjjPoint) -> Self {
+        value.into()
     }
 }
 

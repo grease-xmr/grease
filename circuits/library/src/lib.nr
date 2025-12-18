@@ -7,7 +7,16 @@ use edwards::Curve;
 use edwards::CurveTrait;
 use edwards::ScalarField;
 use std::field::bn254::assert_lt;
-use std::{hash::blake2s, ops::Mul};
+use std::hash::blake2s;
+use std::ops::Mul;
+
+// This is the constant for VerifyWitness0 hashing
+pub global HASH_HEADER_CONSTANT_INIT_0: Field = 1; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_INIT_1: Field = 1; //TODO: Create a domain-separation constant
+
+// This is the constant for VCOF hashing
+pub global HASH_HEADER_CONSTANT_UPDATE_0: Field = 1; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_UPDATE_1: Field = 1; //TODO: Create a domain-separation constant
 
 // Generator point of Baby Jubjub curve.
 // ref: https://github.com/noir-lang/noir-edwards/blob/main/src/test.nr#L6C8-L6C13

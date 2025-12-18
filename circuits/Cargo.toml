@@ -21,6 +21,12 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 log = { workspace = true }
 zkuh-rs = { git = "https://github.com/grease-xmr/aztec-packages.git", rev = "588cb26402913c1b592d64fa75201e6b2b3ba49f" }
+grease-babyjubjub = { workspace = true, features = ["serai"] }
+ark-ff = { version = "0.5.0", features = ["std"] }
+ark-std = { version = "0.5.0", features = ["std"] }
+group = { version = "0.13.0" }
+elliptic-curve = { version = "0.13", default-features = false, features = ["hash2curve"] }
+rand_core = { version = "0.6.4" }
 
 [dev-dependencies]
 env_logger = "0.11.8"

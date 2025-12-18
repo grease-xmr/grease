@@ -3,10 +3,11 @@ use dep::bignum::BigNum;
 use dep::bignum::fields::U256::U256;
 use edwards::bjj::BabyJubJubParams;
 use std::field::bn254::assert_lt;
-use std::hash::blake2s;
+// use std::hash::blake2s;
+use std::hash::poseidon2_permutation;
 
-// This is the constant for VerifyWitness0 hashing
-global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32]; //TODO: Create a domain-separation constant
+// // This is the constant for VerifyWitness0 hashing
+// global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32]; //TODO: Create a domain-separation constant
 
 /// Verify witness_0 [no given]
 fn VerifyWitness0(
@@ -22,19 +23,37 @@ fn VerifyWitness0(
     assert_lt(witness_0, library::BABY_JUBJUB_ORDER_PLUS_ONE);
     assert_lt(blinding, library::BABY_JUBJUB_ORDER_PLUS_ONE);
 
-    //Create hash (random oracle) from both peers' entropy to ensure uniqueness
-    let constant_slice: [u8] = HASH_HEADER_CONSTANT.as_slice();
-    let nonce_peer_array: [u8; 32] = nonce_peer.to_be_bytes();
-    let blinding_array: [u8; 32] = blinding.to_be_bytes();
+    // //Create hash (random oracle) from both peers' entropy to ensure uniqueness
+    // let constant_slice: [u8] = HASH_HEADER_CONSTANT.as_slice();
+    // let nonce_peer_array: [u8; 32] = nonce_peer.to_be_bytes();
+    // let blinding_array: [u8; 32] = blinding.to_be_bytes();
 
-    let pre_image_slice: [u8] = constant_slice.append(nonce_peer_array).append(blinding_array);
-    let pre_image_array: [u8; 96] = pre_image_slice.as_array();
-    let hash_bytes: [u8; 32] = blake2s(pre_image_array);
-    let hash_bytes_slice: [u8] = hash_bytes.as_slice();
-    // U256 from_be_bytes expects 32 bytes + 1 byte for potential overflow
-    // We add a leading 0u8 since our data won't use the full 256-bit range and is ignored in the modulo
-    let hash_bytes_33: [u8] = &[0].append(hash_bytes_slice);
-    let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
+    // let pre_image_slice: [u8] = constant_slice.append(nonce_peer_array).append(blinding_array);
+    // let pre_image_array: [u8; 96] = pre_image_slice.as_array();
+    // let hash_bytes: [u8; 32] = blake2s(pre_image_array);
+    // let hash_bytes_slice: [u8] = hash_bytes.as_slice();
+    // // U256 from_be_bytes expects 32 bytes + 1 byte for potential overflow
+    // // We add a leading 0u8 since our data won't use the full 256-bit range and is ignored in the modulo
+    // let hash_bytes_33: [u8] = &[0].append(hash_bytes_slice);
+    // let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
+
+    // //Clamp to Baby Jubjub order
+    // let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
+
+    // let witness_0_calc_bignum = hash_bignum.umod(l_bignum);
+    // let mut witness_0_calc_field = bignum::bignum::to_field(witness_0_calc_bignum);
+    // if witness_0_calc_field == 0 {
+    //     witness_0_calc_field = library::BABY_JUBJUB_ORDER;
+    // }
+
+    // assert_lt(witness_0_calc_field, library::BABY_JUBJUB_ORDER_PLUS_ONE); //TODO: Is this necessary since the function has already been calculated?
+    // // Ensure the witness matches the reduced hash
+    // assert_eq(witness_0_calc_field, witness_0);
+
+    let input: [Field; 4] = [library::HASH_HEADER_CONSTANT_INIT_0, nonce_peer, blinding, library::HASH_HEADER_CONSTANT_INIT_1];
+    let output: [Field; 4] = poseidon2_permutation(input, input.len());
+    let hash = output[0];
+    let hash_bignum: U256 = U256::from(hash);
 
     //Clamp to Baby Jubjub order
     let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);

@@ -3,6 +3,7 @@ const { Base8, mulPointEscalar, addPoint, packPoint, r, inCurve } = require( "@z
 const { ed25519 } = require('@noble/curves/ed25519');
 const crypto = require('crypto');
 const os = require('os');
+const poseidon = require('poseidon2/bn256-4');
 
 //Constants
 // Baby Jubjub curve order [251 bit value]
@@ -236,15 +237,19 @@ function generateDLEQProof_simple(secret, blinding_DLEQ) {
 
 //Init: VerifyWitness0 + Encrypt to KES
 
-const byteArray_VerifyWitness0 = Buffer.from([
-  ...Array(32).fill(0x00), // VerifyWitness0 HASH_HEADER_CONSTANT
-  ...bigIntTo32ByteArray(nonce_peer),
-  ...bigIntTo32ByteArray(blinding),
-]);
-const hash_VerifyWitness0 = blake.blake2sHex(byteArray_VerifyWitness0);
-const hashBig_VerifyWitness0 = BigInt('0x' + hash_VerifyWitness0); // Convert hex to BigInt
+// const byteArray_VerifyWitness0 = Buffer.from([
+//   ...Array(32).fill(0x00), // VerifyWitness0 HASH_HEADER_CONSTANT
+//   ...bigIntTo32ByteArray(nonce_peer),
+//   ...bigIntTo32ByteArray(blinding),
+// ]);
+// const hash_VerifyWitness0 = blake.blake2sHex(byteArray_VerifyWitness0);
+// const hashBig_VerifyWitness0 = BigInt('0x' + hash_VerifyWitness0); // Convert hex to BigInt
+// var witness_0 = hashBig_VerifyWitness0 % BABY_JUBJUB_ORDER;
 
-var witness_0 = hashBig_VerifyWitness0 % BABY_JUBJUB_ORDER;
+const hash_VerifyWitness0_array = poseidon.permute([1, nonce_peer, blinding, 1])
+const hash_VerifyWitness0 = hash_VerifyWitness0_array[0];
+
+var witness_0 = hash_VerifyWitness0 % BABY_JUBJUB_ORDER;
 if (witness_0 == 0) witness_0 = BABY_JUBJUB_ORDER;
 let T_0 = mulPointEscalar(Base8, witness_0);
 
@@ -316,13 +321,18 @@ console.log(`y="0x${pubkey_KES[1].toString(16).padStart(64, '0')}"`);
 
 console.log('');
 //Update/VerifyCOF
-const byteArray = Buffer.from([
-  ...Array(32).fill(0x00), // VCOF HASH_HEADER_CONSTANT
-  ...bigIntTo32ByteArray(witness_0),
-]);
-const hash = blake.blake2sHex(byteArray);
-const hashBig = BigInt('0x' + hash); // Convert hex to BigInt
-const witness_1 = hashBig % BABY_JUBJUB_ORDER;
+// const byteArray = Buffer.from([
+//   ...Array(32).fill(0x00), // VCOF HASH_HEADER_CONSTANT
+//   ...bigIntTo32ByteArray(witness_0),
+// ]);
+// const hash = blake.blake2sHex(byteArray);
+// const hashBig = BigInt('0x' + hash); // Convert hex to BigInt
+// const witness_1 = hashBig % BABY_JUBJUB_ORDER;
+
+const hash_VCOF_array = poseidon.permute([1, witness_0, 1, 1])
+const hash_VCOF = hash_VCOF_array[0];
+
+const witness_1 = hash_VCOF % BABY_JUBJUB_ORDER;
 if (witness_1 == 0) witness_1 = BABY_JUBJUB_ORDER;
 
 const proof_Update = generateDLEQProof_simple(witness_1, blinding_DLEQ_Update);
