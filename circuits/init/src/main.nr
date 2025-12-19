@@ -5,6 +5,7 @@ use edwards::bjj::BabyJubJubParams;
 use std::field::bn254::assert_lt;
 // use std::hash::blake2s;
 use std::hash::poseidon2_permutation;
+use library::assert_valid_bjj_scalar_field;
 
 // // This is the constant for VerifyWitness0 hashing
 // global HASH_HEADER_CONSTANT: [u8; 32] = [0; 32]; //TODO: Create a domain-separation constant
@@ -16,12 +17,9 @@ fn VerifyWitness0(
     witness_0: Field,
     blinding: Field,
 ) {
-    assert(nonce_peer != 0);
-    assert(witness_0 != 0);
-    assert(blinding != 0);
-    assert_lt(nonce_peer, library::BABY_JUBJUB_ORDER_PLUS_ONE);
-    assert_lt(witness_0, library::BABY_JUBJUB_ORDER_PLUS_ONE);
-    assert_lt(blinding, library::BABY_JUBJUB_ORDER_PLUS_ONE);
+    assert_valid_bjj_scalar_field(nonce_peer);
+    assert_valid_bjj_scalar_field(witness_0);
+    assert_valid_bjj_scalar_field(blinding);
 
     // //Create hash (random oracle) from both peers' entropy to ensure uniqueness
     // let constant_slice: [u8] = HASH_HEADER_CONSTANT.as_slice();

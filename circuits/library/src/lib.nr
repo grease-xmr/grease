@@ -18,7 +18,7 @@ pub global HASH_HEADER_CONSTANT_INIT_1: Field = 1; //TODO: Create a domain-separ
 pub global HASH_HEADER_CONSTANT_UPDATE_0: Field = 1; //TODO: Create a domain-separation constant
 pub global HASH_HEADER_CONSTANT_UPDATE_1: Field = 1; //TODO: Create a domain-separation constant
 
-// Generator point of Baby Jubjub curve.
+// Generator point of Baby Jubjub curve (8.B where B is the base point).
 // ref: https://github.com/noir-lang/noir-edwards/blob/main/src/test.nr#L6C8-L6C13
 global BASE8: [Field; 2] = [
     5299619240641551281634865583518297030282874472190772894086521144482721001553,
@@ -32,11 +32,15 @@ pub global BABY_JUBJUB_ORDER: Field =
     2736030358979909402780800718157159386076813972158567259200215660948447373041;
 pub global BABY_JUBJUB_ORDER_PLUS_ONE: Field = BABY_JUBJUB_ORDER + 1;
 
-/// Creates a Baby Jubjub point from a scalar, specifically a Baby Jubjub public key from a secret scalar.
-pub fn field_scalar_to_point(value: Field) -> edwards::Curve<BabyJubJubParams> {
-    // Ensure 0 < value <= l.
+// Asserts that a field value is a valid Baby Jubjub scalar field element.
+// i.e. that Ensure 0 < value <= l.
+pub fn assert_valid_bjj_scalar_field(value: Field) {
     assert(value != 0);
     assert_lt(value, BABY_JUBJUB_ORDER_PLUS_ONE);
+}
+/// Creates a Baby Jubjub point from a scalar, specifically a Baby Jubjub public key from a secret scalar.
+pub fn field_scalar_to_point(value: Field) -> edwards::Curve<BabyJubJubParams> {
+    assert_valid_bjj_scalar_field(value);
 
     // ScalarField is parameterised by the number of 4-bit slices it contains.
     // Since value is already known to be max 251 bits, there are 63 slices.
@@ -53,13 +57,8 @@ pub fn VerifyEncryptMessage_ECDH(
     pubkey: edwards::Curve<BabyJubJubParams>,
 ) -> (edwards::Curve<BabyJubJubParams>, Field) {
     // Ensure 0 < message <= l.
-    assert(message != 0);
-    assert_lt(message, BABY_JUBJUB_ORDER_PLUS_ONE);
-    // Ensure 0 < r <= l.
-    assert(r != 0);
-    assert_lt(r, BABY_JUBJUB_ORDER_PLUS_ONE);
-
-    // R = r * G (G is the generator)
+    assert_valid_bjj_scalar_field(message);
+    // R = r * G (G is the generator) - also asserts that r is in range
     let R: Curve<BabyJubJubParams> = field_scalar_to_point(r);
 
     // Convert the randomness to Scalar
