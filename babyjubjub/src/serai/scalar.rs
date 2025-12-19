@@ -1,7 +1,7 @@
 //! Implements traits to make BabyJubJub compatible with Serai's `CipherSuite`
 
 use crate::{BjjConfig, Fr, constants::*};
-use ark_algebra_test_templates::num_bigint::BigUint;
+use num_bigint::BigUint;
 use ark_ec::CurveConfig;
 use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
 use ark_serialize::CanonicalSerialize;
