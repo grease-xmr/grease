@@ -4,6 +4,7 @@ use thiserror::Error;
 use zkuh_rs::noir_api::{ExecutionResult, Inputs, Program, ProgramArtifact};
 use zkuh_rs::{noir_api, ultra_honk, BbApiError, CircuitComputeVkResponse, CircuitProveResponse};
 
+/// Errors that can occur during bytecode verification.
 #[derive(Debug, Error)]
 pub enum BytecodeError {
     #[error("The Bytecode does not match expected checksum")]
@@ -16,6 +17,7 @@ pub enum BytecodeError {
     InvalidChecksum(String),
 }
 
+/// Errors that can occur during execution and proof generation.
 #[derive(Debug, Error)]
 pub enum ExecutionError {
     #[error("No program artifact has been loaded yet. Nothing to execute.")]
@@ -36,6 +38,7 @@ impl ExecutionError {
     }
 }
 
+/// Errors that can occur during proof verification.
 #[derive(Debug, Error)]
 pub enum ProofVerificationError {
     #[error("No program artifact has been loaded yet. Nothing to execute.")]
@@ -54,6 +57,12 @@ impl ProofVerificationError {
     }
 }
 
+/// A convenience wrapper for generating ZK-SNARK proofs for a given Noir program.
+///
+/// The `ProofRunner` allows you to set up a Noir program, provide inputs, verify the bytecode integrity,
+/// and generate a proof. It supports customizable bytecode verification strategies through the `ByteCodeVerification` trait.
+///
+/// The verification key can be cached to speed up subsequent proof generations for the same program.
 pub struct ProofRunner<'p, V: ByteCodeVerification = HashByteCodeVerifier<Blake2b512>> {
     /// A checksum for the bytecode being executed. It must have been generated using the same digest algorithm as D.
     checksum: String,
@@ -99,6 +108,9 @@ impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
         self.verification_key.as_ref()
     }
 
+    /// Verifies that the loaded program's bytecode matches the expected checksum.
+    ///
+    /// By default, the `HashByteCodeVerifier<Blake512>` is used to perform the verification.
     pub fn verify_bytecode(&self) -> Result<(), BytecodeError> {
         let program = self.program.ok_or_else(|| BytecodeError::NoProgram)?;
         verify_bytecode(program, &self.checksum, &self.verifier)
@@ -113,6 +125,12 @@ impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
         self
     }
 
+    /// Executes the loaded program with the provided inputs and generates a ZK-SNARK proof.
+    ///
+    /// Both `[Self::set_program]` and `[Self::with_inputs]` must have been called before invoking this method.
+    /// If no verification key has been set, one will be generated and cached for future calls.
+    ///
+    /// Returns a `CircuitProveResponse` containing the proof and public inputs upon success.
     pub fn prove(&mut self) -> Result<CircuitProveResponse, ExecutionError> {
         let program =
             self.program.ok_or_else(|| noir_api::NoirError::Execution("No program artifact set".to_string()))?;
@@ -137,6 +155,16 @@ impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
     }
 }
 
+/// A convenience wrapper for verifying ZK-SNARK proofs for a given Noir program.
+///
+/// The `VerificationRunner` allows you to set up a Noir program, verify the bytecode integrity,
+/// and verify proofs. It supports customizable bytecode verification strategies through the `ByteCodeVerification` trait.
+///
+/// The verification key can be cached to speed up subsequent proof verifications for the same program. It is
+/// *critical* that the verifier calculates the verification key _himself_ from the expected bytecode to avoid accepting
+/// old or invalid proofs.
+///
+/// This is done by default in [`VerificationRunner::verify_proof`] if the key is not already cached.
 pub struct VerificationRunner<'p, V: ByteCodeVerification = HashByteCodeVerifier<Blake2b512>> {
     verifier: V,
     /// A checksum for the bytecode being executed.
@@ -148,15 +176,37 @@ pub struct VerificationRunner<'p, V: ByteCodeVerification = HashByteCodeVerifier
 }
 
 impl<'p, V: ByteCodeVerification> VerificationRunner<'p, V> {
+    /// Creates a new VerificationRunner with the given bytecode checksum. Before executing any proof validation, the
+    /// program must be set using [`VerificationRunner::set_program`].
     pub fn new<S: Into<String>>(checksum: S) -> Self {
         Self { checksum: checksum.into(), verifier: V::default(), program: None, verification_key: None }
     }
 
+    /// Sets the program artifact to be used for verification.
     pub fn set_program(&mut self, program: &'p ProgramArtifact) {
         self.program = Some(program);
         self.verification_key = None;
     }
 
+    /// Provers may optionally set a verification key to speed up proof verification.
+    ///
+    /// This is useful when the same proof type is being verified multiple times. However, it is *critical* that the
+    /// verifier calculates the verification key _himself_ from the expected bytecode to avoid accepting invalid proofs.
+    ///
+    /// **Never** accept a verification key from an untrusted source.
+    ///
+    /// In general, it is safe to never call this method, as the key will be calculated from the bytecode when needed.
+    ///
+    /// However, if you have a trusted source for the verification key (e.g., you're calculating it anyway in your
+    /// [`ProofRunner`]) for the same bytecode, you can save some cycles by providing it here.
+    pub fn set_verification_key(&mut self, vk: CircuitComputeVkResponse) -> &mut Self {
+        self.verification_key = Some(vk);
+        self
+    }
+
+    /// Verifies that the loaded program's bytecode matches the expected checksum.
+    ///
+    /// It is recommended to call this method before verifying any proofs.
     pub fn verify_bytecode(&self) -> Result<(), BytecodeError> {
         let program = self.program.ok_or_else(|| BytecodeError::NoProgram)?;
         verify_bytecode(program, &self.checksum, &self.verifier)
