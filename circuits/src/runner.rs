@@ -116,10 +116,7 @@ impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
         verify_bytecode(program, &self.checksum, &self.verifier)
     }
 
-    /// Updates the input values for the program.
-    ///
-    /// `with_inputs` takes a closure that receives the current `Inputs` and returns a modified `Inputs`.
-    /// Inputs are added in the closure, so calling it more than once will accumulate inputs.
+    /// Sets the input values for the program.
     pub fn with_inputs(&mut self, inputs: Inputs) -> &mut Self {
         self.inputs = Some(inputs);
         self
