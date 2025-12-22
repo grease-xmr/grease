@@ -1,3 +1,3 @@
 [workspace]
-members = ["init", "update", "library"]
+members = ["init", "update", "library", "test_vectors/demo"]
 default-member = "init"

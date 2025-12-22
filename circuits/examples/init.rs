@@ -1,3 +1,4 @@
+use circuits::ExecutionError::ExecutionError;
 use log::*;
 use std::time::Instant;
 use zkuh_rs::noir_api::{Inputs, NoirError, VecInput};
