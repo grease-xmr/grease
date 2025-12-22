@@ -50,7 +50,7 @@
     },
     "50": {
       "source": "use std::field::bn254::assert_lt;\n\n// I know 2 numbers under 1,000 that multiply to get the given product\nfn main(a: Field, b: Field, product: pub Field) {\n    //assert_lt(a, 1000);\n    //assert_lt(b, 1000);\n    //assert(a * b == product);\n    // Evil contract. Doesn't prove anything except a & b < product\n    assert_lt(a, product);\n    assert_lt(b, product);\n}\n\n#[test]\nfn test_main() {\n    main(6, 7, 42);\n}\n",
-      "path": "/home/code/projects/grease/circuits/test_vectors/demo/src/main.nr"
+      "path": "demo/src/main.nr"
     }
   },
   "expression_width": {

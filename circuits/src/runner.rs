@@ -20,6 +20,8 @@ pub enum BytecodeError {
 pub enum ExecutionError {
     #[error("No program artifact has been loaded yet. Nothing to execute.")]
     NoProgram,
+    #[error("No inputs have been provided for execution.")]
+    NoInputs,
     #[error("Execution error: {0}")]
     ExecutionError(#[from] noir_api::NoirError),
     #[error("Error serializing {src}: {reason}")]
@@ -59,43 +61,42 @@ pub struct ProofRunner<'p, V: ByteCodeVerification = HashByteCodeVerifier<Blake2
     /// The complied Noir program to execute.,
     program: Option<&'p ProgramArtifact>,
     /// The inputs to the program.
-    inputs: Inputs,
-    /// The result of the last execution.
-    execution_result: Option<ExecutionResult>,
+    inputs: Option<Inputs>,
     /// The verification key associated with the program. If present, substantially speeds up proof generation.
     verification_key: Option<CircuitComputeVkResponse>,
-    proof: Option<CircuitProveResponse>,
 }
 
 impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
+    /// Creates a new ProofRunner with the given bytecode checksum. Before proving, the program must be set using
+    /// [`ProofRunner::set_program`].
+    ///
+    /// One may verify the bytecode using [`ProofRunner::verify_bytecode`] before proving.
     pub fn new<S: Into<String>>(checksum: S) -> Self {
-        Self {
-            checksum: checksum.into(),
-            verifier: V::default(),
-            program: None,
-            inputs: Inputs::new(),
-            execution_result: None,
-            verification_key: None,
-            proof: None,
-        }
+        Self { checksum: checksum.into(), verifier: V::default(), program: None, inputs: None, verification_key: None }
     }
 
+    /// Sets the program artifact to be used for proving.
+    ///
+    /// The program reference must outlive the ProofRunner.
     pub fn set_program(&mut self, program: &'p ProgramArtifact) -> &mut Self {
         self.program = Some(program);
         self
     }
 
+    /// Provers may optionally set a verification key to speed up proof generation.
+    ///
+    /// This is useful when the same proof type is being executed multiple times with different inputs.
     pub fn set_verification_key(&mut self, vk: CircuitComputeVkResponse) -> &mut Self {
         self.verification_key = Some(vk);
         self
     }
 
+    /// The verification key for the program, if available.
+    ///
+    /// This may be `None` if no key has been set or generated yet. When present, you can save yourself calculating
+    /// the key for the equivalent [`VerificationRunner`] instance.
     pub fn verification_key(&self) -> Option<&CircuitComputeVkResponse> {
         self.verification_key.as_ref()
-    }
-
-    pub fn proof(&self) -> Option<CircuitProveResponse> {
-        self.proof.clone()
     }
 
     pub fn verify_bytecode(&self) -> Result<(), BytecodeError> {
@@ -107,27 +108,23 @@ impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
     ///
     /// `with_inputs` takes a closure that receives the current `Inputs` and returns a modified `Inputs`.
     /// Inputs are added in the closure, so calling it more than once will accumulate inputs.
-    pub fn with_inputs<F>(&mut self, updater: F)
-    where
-        F: FnOnce(Inputs) -> Inputs,
-    {
-        let mut temp = Inputs::new();
-        // We swap out the existing input here so that `with_inputs` can be called multiple times.
-        std::mem::swap(&mut self.inputs, &mut temp);
-        // temp holds the original; self.inputs holds empty Inputs.
-        self.inputs = updater(temp);
+    pub fn with_inputs(&mut self, inputs: Inputs) -> &mut Self {
+        self.inputs = Some(inputs);
+        self
     }
 
-    pub fn prove(&mut self) -> Result<(), ExecutionError> {
-        self.proof = None;
+    pub fn prove(&mut self) -> Result<CircuitProveResponse, ExecutionError> {
         let program =
             self.program.ok_or_else(|| noir_api::NoirError::Execution("No program artifact set".to_string()))?;
-        let result = noir_api::execute(program, self.inputs.clone(), true)?;
+        if self.inputs.is_none() {
+            return Err(ExecutionError::NoInputs);
+        }
+        let inputs = self.inputs.clone().unwrap();
+        let result = noir_api::execute(program, inputs, true)?;
         let witness = noir_api::bincode_serialize(&result.witness_stack)
             .map_err(|e| ExecutionError::ser_error("Witness", e.to_string()))?;
         let bytecode = noir_api::bincode_serialize(&program.bytecode)
             .map_err(|e| ExecutionError::ser_error("ByteCode", e.to_string()))?;
-        self.execution_result = Some(result);
         let vk = match self.verification_key {
             Some(ref vk) => vk.bytes.as_slice(),
             None => &[],
@@ -136,12 +133,7 @@ impl<'p, V: ByteCodeVerification> ProofRunner<'p, V> {
         if self.verification_key.is_none() {
             self.verification_key = Some(proof.vk.clone());
         }
-        self.proof = Some(proof);
-        Ok(())
-    }
-
-    pub fn execution_result(&self) -> Option<&ExecutionResult> {
-        self.execution_result.as_ref()
+        Ok(proof)
     }
 }
 
@@ -263,22 +255,19 @@ mod tests {
             "b1d36d379f6ad2986b900d9f5ca859bec8e24ad29f9dde0bebb6521a6df9b054da9ab9a883196017d8ab5d0e35ab6c6493ea1d79c9a425f2dc9330750dbb31b0";
         let mut runner: ProofRunner = ProofRunner::new(checksum);
         let artifact = load_program("demo");
-        runner.set_program(&artifact);
-        runner.with_inputs(|inputs| {
-            inputs
-                .try_add_field("a", "456")
-                .expect("to add private input a")
-                .try_add_field("b", "654")
-                .expect("to add input blinding_DLEQ")
-                .try_add_field("product", "500000")
-                .expect("to add product")
-        });
+        let inputs = Inputs::new()
+            .try_add_field("a", "456")
+            .expect("to add private input a")
+            .try_add_field("b", "654")
+            .expect("to add input blinding_DLEQ")
+            .try_add_field("product", "500000")
+            .expect("to add product");
+        runner.set_program(&artifact).with_inputs(inputs);
         match runner.prove() {
             Ok(_) => panic!("Proof generation should have failed"),
             Err(ExecutionError::ExecutionError(e)) => assert_eq!(e.to_string(), "Execution of contract failed: Witness execution failed: Failed to solve program: 'Cannot satisfy constraint'"),
             Err(e) => panic!("Unexpected error: {e}"),
         }
-        assert!(runner.proof.is_none())
     }
 
     #[test]
@@ -287,21 +276,18 @@ mod tests {
             "b1d36d379f6ad2986b900d9f5ca859bec8e24ad29f9dde0bebb6521a6df9b054da9ab9a883196017d8ab5d0e35ab6c6493ea1d79c9a425f2dc9330750dbb31b0";
         let mut runner: ProofRunner = ProofRunner::new(checksum);
         let artifact = load_program("demo");
-        runner.set_program(&artifact);
+        let inputs = Inputs::new()
+            .try_add_field("a", "456")
+            .expect("to add private input a")
+            .try_add_field("b", "654")
+            .expect("to add input blinding_DLEQ")
+            .try_add_field("product", "298224")
+            .expect("to add product");
+        runner.set_program(&artifact).with_inputs(inputs);
         let verified = runner.verify_bytecode();
         assert!(verified.is_ok(), "{verified:?}");
-        runner.with_inputs(|inputs| {
-            inputs
-                .try_add_field("a", "456")
-                .expect("to add private input a")
-                .try_add_field("b", "654")
-                .expect("to add input blinding_DLEQ")
-                .try_add_field("product", "298224")
-                .expect("to add product")
-        });
-        assert!(runner.prove().is_ok(), "Proof generation failed");
-        let proof = runner.proof().unwrap();
-        // Proving.
+        let proof = runner.prove().expect("proof generation should have succeeded");
+        // Verifying.
         let mut verifier: VerificationRunner = VerificationRunner::new(checksum);
         verifier.set_program(&artifact);
         assert!(verifier.verify_bytecode().is_ok(), "Bytecode verification failed");
@@ -317,21 +303,19 @@ mod tests {
             "b1d36d379f6ad2986b900d9f5ca859bec8e24ad29f9dde0bebb6521a6df9b054da9ab9a883196017d8ab5d0e35ab6c6493ea1d79c9a425f2dc9330750dbb31b0";
         let mut runner: ProofRunner = ProofRunner::new(checksum);
         let artifact = load_program("evil_demo");
-        runner.set_program(&artifact);
+        let inputs = Inputs::new()
+            .try_add_field("a", "10000")
+            .expect("to add private input a")
+            .try_add_field("b", "20000")
+            .expect("to add input blinding_DLEQ")
+            .try_add_field("product", "298224")
+            .expect("to add product");
+        runner.set_program(&artifact).with_inputs(inputs);
         let verified = runner.verify_bytecode();
         assert!(verified.is_err());
-        runner.with_inputs(|inputs| {
-            inputs
-                .try_add_field("a", "10000")
-                .expect("to add private input a")
-                .try_add_field("b", "20000")
-                .expect("to add input blinding_DLEQ")
-                .try_add_field("product", "298224")
-                .expect("to add product")
-        });
+
         // Clearly a*b != product, but we still get a proof.
-        assert!(runner.prove().is_ok(), "Proof generation failed");
-        let proof = runner.proof().unwrap();
+        let proof = runner.prove().expect("proof generation should have succeeded");
         // A naive verifier can be fooled.
         let mut verifier: VerificationRunner = VerificationRunner::new(checksum);
         verifier.set_program(&artifact);
@@ -348,5 +332,37 @@ mod tests {
             Err(ProofVerificationError::InvalidProof) => { /* success */ }
             Err(e) => panic!("Unexpected error: {e}"),
         }
+    }
+
+    #[test]
+    fn consecutive_proofs() {
+        let checksum =
+            "b1d36d379f6ad2986b900d9f5ca859bec8e24ad29f9dde0bebb6521a6df9b054da9ab9a883196017d8ab5d0e35ab6c6493ea1d79c9a425f2dc9330750dbb31b0";
+        let mut runner: ProofRunner = ProofRunner::new(checksum);
+        let artifact = load_program("demo");
+        let inputs = Inputs::new()
+            .try_add_field("a", "456")
+            .expect("to add private input a")
+            .try_add_field("b", "654")
+            .expect("to add input blinding_DLEQ")
+            .try_add_field("product", "298224")
+            .expect("to add product");
+        runner.set_program(&artifact).with_inputs(inputs);
+        let proof = runner.prove().expect("Proof 1 generation should have succeeded");
+        // Verifying.
+        let mut verifier: VerificationRunner = VerificationRunner::new(checksum);
+        verifier.set_program(&artifact);
+        assert!(verifier.verify_proof(&proof).is_ok(), "Proof 1 verification failed");
+        // Proof 2
+        let inputs = Inputs::new()
+            .try_add_field("a", "912")
+            .expect("to add private input a")
+            .try_add_field("b", "327")
+            .expect("to add input blinding_DLEQ")
+            .try_add_field("product", "298224")
+            .expect("to add product");
+        runner.with_inputs(inputs);
+        let proof = runner.prove().expect("Proof 2 generation should have succeeded");
+        assert!(verifier.verify_proof(&proof).is_ok(), "Proof 2 verification failed");
     }
 }
