@@ -1,7 +1,7 @@
 use crate::bytecode_verification::{ByteCodeVerification, HashByteCodeVerifier};
 use blake2::Blake2b512;
 use thiserror::Error;
-use zkuh_rs::noir_api::{ExecutionResult, Inputs, Program, ProgramArtifact};
+use zkuh_rs::noir_api::{Inputs, ProgramArtifact};
 use zkuh_rs::{noir_api, ultra_honk, BbApiError, CircuitComputeVkResponse, CircuitProveResponse};
 
 /// Errors that can occur during bytecode verification.
@@ -64,10 +64,10 @@ impl ProofVerificationError {
 ///
 /// The verification key can be cached to speed up subsequent proof generations for the same program.
 pub struct ProofRunner<'p, V: ByteCodeVerification = HashByteCodeVerifier<Blake2b512>> {
-    /// A checksum for the bytecode being executed. It must have been generated using the same digest algorithm as D.
+    /// A checksum for the bytecode being executed. It must have been generated using the algorithm as V.
     checksum: String,
     verifier: V,
-    /// The complied Noir program to execute.,
+    /// The compiled Noir program to execute.,
     program: Option<&'p ProgramArtifact>,
     /// The inputs to the program.
     inputs: Option<Inputs>,
@@ -166,9 +166,9 @@ pub struct VerificationRunner<'p, V: ByteCodeVerification = HashByteCodeVerifier
     verifier: V,
     /// A checksum for the bytecode being executed.
     checksum: String,
-    /// The complied Noir program to execute.,
+    /// The compiled Noir program to execute.,
     program: Option<&'p ProgramArtifact>,
-    /// The verification key associated with the program. If present, substantially speeds up proof generation.
+    /// The verification key associated with the program. If present, substantially speeds up proof verification.
     verification_key: Option<CircuitComputeVkResponse>,
 }
 
@@ -306,7 +306,7 @@ mod tests {
             .try_add_field("a", "456")
             .expect("to add private input a")
             .try_add_field("b", "654")
-            .expect("to add input blinding_DLEQ")
+            .expect("to add input b")
             .try_add_field("product", "500000")
             .expect("to add product");
         runner.set_program(&artifact).with_inputs(inputs);
@@ -327,7 +327,7 @@ mod tests {
             .try_add_field("a", "456")
             .expect("to add private input a")
             .try_add_field("b", "654")
-            .expect("to add input blinding_DLEQ")
+            .expect("to add input b")
             .try_add_field("product", "298224")
             .expect("to add product");
         runner.set_program(&artifact).with_inputs(inputs);
@@ -354,7 +354,7 @@ mod tests {
             .try_add_field("a", "10000")
             .expect("to add private input a")
             .try_add_field("b", "20000")
-            .expect("to add input blinding_DLEQ")
+            .expect("to add input b")
             .try_add_field("product", "298224")
             .expect("to add product");
         runner.set_program(&artifact).with_inputs(inputs);
@@ -391,7 +391,7 @@ mod tests {
             .try_add_field("a", "456")
             .expect("to add private input a")
             .try_add_field("b", "654")
-            .expect("to add input blinding_DLEQ")
+            .expect("to add private input b")
             .try_add_field("product", "298224")
             .expect("to add product");
         runner.set_program(&artifact).with_inputs(inputs);
@@ -405,7 +405,7 @@ mod tests {
             .try_add_field("a", "912")
             .expect("to add private input a")
             .try_add_field("b", "327")
-            .expect("to add input blinding_DLEQ")
+            .expect("to add private input b")
             .try_add_field("product", "298224")
             .expect("to add product");
         runner.with_inputs(inputs);
