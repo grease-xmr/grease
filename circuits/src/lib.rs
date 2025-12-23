@@ -15,13 +15,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
 
-mod bytecode_verification;
 pub mod helpers;
-mod runner;
 use helpers::*;
 
-pub use bytecode_verification::{ByteCodeVerification, DummyByteCodeVerifier, HashByteCodeVerifier};
-pub use runner::{BytecodeError, ExecutionError, ProofRunner, VerificationRunner};
+
 
 use lazy_static::lazy_static;
 use libgrease::cryptography::zk_objects::{Comm0PrivateOutputs, Comm0PublicOutputs, GenericPoint, GenericScalar};
