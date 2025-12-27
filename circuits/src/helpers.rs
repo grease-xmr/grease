@@ -1,3 +1,7 @@
+use crate::{
+    PROOF_SIZE_INIT, PROOF_SIZE_INIT_HEX, PROOF_SIZE_UPDATE, PROOF_SIZE_UPDATE_HEX, PUBLIC_INPUT_SIZE_INIT,
+    PUBLIC_INPUT_SIZE_UPDATE,
+};
 use ark_bn254::Fr;
 use curve25519_dalek::constants::X25519_BASEPOINT;
 use curve25519_dalek::{MontgomeryPoint, Scalar as MontgomeryScalar};
@@ -16,14 +20,14 @@ use std::ops::{Mul, Neg};
 use std::path::Path;
 use std::str::FromStr;
 
-pub(crate) fn init_public_to_hex<S>(bytes: &[u8; 1184], s: S) -> Result<S::Ok, S::Error>
+pub(crate) fn init_public_to_hex<S>(bytes: &[u8; PUBLIC_INPUT_SIZE_INIT], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     hex::encode(*bytes).serialize(s)
 }
 
-pub(crate) fn init_public_from_hex<'de, D>(de: D) -> Result<[u8; 1184], D::Error>
+pub(crate) fn init_public_from_hex<'de, D>(de: D) -> Result<[u8; PUBLIC_INPUT_SIZE_INIT], D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -31,28 +35,28 @@ where
     if hex_str.is_empty() {
         return Err(serde::de::Error::custom("Hex string must not be empty"));
     }
-    if hex_str.len() != 32512 {
+    if hex_str.len() != PROOF_SIZE_INIT_HEX {
         return Err(serde::de::Error::custom("Invalid hex string length for public"));
     }
-    // Ensure the hex string can be decoded into a 1184-byte array
+    // Ensure the hex string can be decoded into a PUBLIC_INPUT_SIZE_INIT-byte array
     if hex_str.len() % 2 != 0 {
         return Err(serde::de::Error::custom("Hex string must have an even length"));
     }
     // Create an array to hold the decoded bytes
-    let mut result = [0u8; 1184];
+    let mut result = [0u8; PUBLIC_INPUT_SIZE_INIT];
     hex::decode_to_slice(hex_str, &mut result)
         .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
     Ok(result)
 }
 
-pub(crate) fn update_public_to_hex<S>(bytes: &[u8; 1152], s: S) -> Result<S::Ok, S::Error>
+pub(crate) fn update_public_to_hex<S>(bytes: &[u8; PUBLIC_INPUT_SIZE_UPDATE], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     hex::encode(*bytes).serialize(s)
 }
 
-pub(crate) fn update_public_from_hex<'de, D>(de: D) -> Result<[u8; 1152], D::Error>
+pub(crate) fn update_public_from_hex<'de, D>(de: D) -> Result<[u8; PUBLIC_INPUT_SIZE_UPDATE], D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -60,28 +64,35 @@ where
     if hex_str.is_empty() {
         return Err(serde::de::Error::custom("Hex string must not be empty"));
     }
-    if hex_str.len() != 32512 {
+    if hex_str.len() != PROOF_SIZE_UPDATE {
         return Err(serde::de::Error::custom("Invalid hex string length for public"));
     }
-    // Ensure the hex string can be decoded into a 1152-byte array
+    // Ensure the hex string can be decoded into a PUBLIC_INPUT_SIZE_UPDATE-byte array
     if hex_str.len() % 2 != 0 {
         return Err(serde::de::Error::custom("Hex string must have an even length"));
     }
     // Create an array to hold the decoded bytes
-    let mut result = [0u8; 1152];
+    let mut result = [0u8; PUBLIC_INPUT_SIZE_UPDATE];
     hex::decode_to_slice(hex_str, &mut result)
         .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
     Ok(result)
 }
 
-pub(crate) fn proof_to_hex<S>(proof: &[u8; 16256], s: S) -> Result<S::Ok, S::Error>
+pub(crate) fn init_proof_to_hex<S>(proof: &[u8; PROOF_SIZE_INIT], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     hex::encode(*proof).serialize(s)
 }
 
-pub(crate) fn proof_from_hex<'de, D>(de: D) -> Result<Box<[u8; 16256]>, D::Error>
+pub(crate) fn update_proof_to_hex<S>(proof: &[u8; PROOF_SIZE_UPDATE], s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    hex::encode(*proof).serialize(s)
+}
+
+pub(crate) fn init_proof_from_hex<'de, D>(de: D) -> Result<Box<[u8; PROOF_SIZE_INIT]>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -89,15 +100,37 @@ where
     if hex_str.is_empty() {
         return Err(serde::de::Error::custom("Hex string must not be empty"));
     }
-    if hex_str.len() != 32512 {
+    if hex_str.len() != PROOF_SIZE_INIT_HEX {
         return Err(serde::de::Error::custom("Invalid hex string length for proof"));
     }
-    // Ensure the hex string can be decoded into a 16256-byte array
+    // Ensure the hex string can be decoded into a PROOF_SIZE_INIT-byte array
     if hex_str.len() % 2 != 0 {
         return Err(serde::de::Error::custom("Hex string must have an even length"));
     }
     // Create an array to hold the decoded bytes
-    let mut result = [0u8; 16256];
+    let mut result = [0u8; PROOF_SIZE_INIT];
+    hex::decode_to_slice(hex_str, &mut result)
+        .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
+    Ok(Box::new(result))
+}
+
+pub(crate) fn update_proof_from_hex<'de, D>(de: D) -> Result<Box<[u8; PROOF_SIZE_UPDATE]>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(de)?;
+    if hex_str.is_empty() {
+        return Err(serde::de::Error::custom("Hex string must not be empty"));
+    }
+    if hex_str.len() != PROOF_SIZE_UPDATE_HEX {
+        return Err(serde::de::Error::custom("Invalid hex string length for proof"));
+    }
+    // Ensure the hex string can be decoded into a PROOF_SIZE_UPDATE-byte array
+    if hex_str.len() % 2 != 0 {
+        return Err(serde::de::Error::custom("Hex string must have an even length"));
+    }
+    // Create an array to hold the decoded bytes
+    let mut result = [0u8; PROOF_SIZE_UPDATE];
     hex::decode_to_slice(hex_str, &mut result)
         .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
     Ok(Box::new(result))

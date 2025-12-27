@@ -31,6 +31,12 @@ lazy_static! {
     )
     .unwrap();
 }
+static PROOF_SIZE_INIT: usize = 16256usize;
+static PROOF_SIZE_INIT_HEX: usize = PROOF_SIZE_INIT * 2usize;
+static PROOF_SIZE_UPDATE: usize = 16256usize;
+static PROOF_SIZE_UPDATE_HEX: usize = PROOF_SIZE_UPDATE * 2usize;
+static PUBLIC_INPUT_SIZE_INIT: usize = 1184usize;
+static PUBLIC_INPUT_SIZE_UPDATE: usize = 1152usize;
 
 #[derive(Error, Debug)]
 pub enum BBError {
@@ -595,15 +601,15 @@ pub struct ZeroKnowledgeProofInitPublic {
         serialize_with = "crate::helpers::init_public_to_hex",
         deserialize_with = "crate::helpers::init_public_from_hex"
     )]
-    pub public_input: [u8; 1184],
+    pub public_input: [u8; PUBLIC_INPUT_SIZE_INIT],
 }
 
 impl ZeroKnowledgeProofInitPublic {
     pub fn from_vec(public: Vec<u8>) -> Result<Self, BBError> {
-        if public.len() != 1184 {
+        if public.len() != PUBLIC_INPUT_SIZE_INIT {
             return Err(BBError::String("Invalid public input length".to_string()));
         }
-        let public_input: [u8; 1184] =
+        let public_input: [u8; PUBLIC_INPUT_SIZE_INIT] =
             public.try_into().map_err(|_| BBError::String("Invalid public input length".to_string()))?;
         Ok(Self { public_input })
     }
@@ -613,7 +619,7 @@ impl ZeroKnowledgeProofInitPublic {
     }
 
     pub fn new(nonce_peer: &BigUint, t_0: &Point, kes_public_key: &Point, c: &BigUint) -> Result<Self, BBError> {
-        let mut public_input = Vec::with_capacity(1184); // 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
+        let mut public_input = Vec::with_capacity(PUBLIC_INPUT_SIZE_INIT); // 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
         public_input.extend_from_slice(&left_pad_bytes_32(&nonce_peer.to_bytes_be())?);
         public_input.extend_from_slice(&get_field_bytes(&t_0.x));
         public_input.extend_from_slice(&get_field_bytes(&t_0.y));
@@ -707,8 +713,11 @@ impl ZeroKnowledgeProofInitPublic {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ZeroKnowledgeProofInit {
     pub public_input: ZeroKnowledgeProofInitPublic,
-    #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
-    pub proof: Box<[u8; 16256]>,
+    #[serde(
+        serialize_with = "crate::helpers::init_proof_to_hex",
+        deserialize_with = "crate::helpers::init_proof_from_hex"
+    )]
+    pub proof: Box<[u8; PROOF_SIZE_INIT]>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -717,15 +726,15 @@ pub struct ZeroKnowledgeProofUpdatePublic {
         serialize_with = "crate::helpers::update_public_to_hex",
         deserialize_with = "crate::helpers::update_public_from_hex"
     )]
-    pub public_input: [u8; 1152],
+    pub public_input: [u8; PUBLIC_INPUT_SIZE_UPDATE],
 }
 
 impl ZeroKnowledgeProofUpdatePublic {
     pub fn from_vec(public: Vec<u8>) -> Result<Self, BBError> {
-        if public.len() != 1152 {
+        if public.len() != PUBLIC_INPUT_SIZE_UPDATE {
             return Err(BBError::String("Invalid public input length".to_string()));
         }
-        let public_input: [u8; 1152] =
+        let public_input: [u8; PUBLIC_INPUT_SIZE_UPDATE] =
             public.try_into().map_err(|_| BBError::String("Invalid public input length".to_string()))?;
         Ok(Self { public_input })
     }
@@ -815,7 +824,7 @@ impl ZeroKnowledgeProofUpdatePublic {
                     "challenge_bytes does not match: {}, {:?}, {:?}",
                     i,
                     challenge_bytes,
-                    &p.public_input[0..1152]
+                    &p.public_input[0..PUBLIC_INPUT_SIZE_UPDATE]
                 )));
             }
         }
@@ -827,8 +836,11 @@ impl ZeroKnowledgeProofUpdatePublic {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ZeroKnowledgeProofUpdate {
     pub public_input: ZeroKnowledgeProofUpdatePublic,
-    #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
-    pub proof: Box<[u8; 16256]>,
+    #[serde(
+        serialize_with = "crate::helpers::update_proof_to_hex",
+        deserialize_with = "crate::helpers::update_proof_from_hex"
+    )]
+    pub proof: Box<[u8; PROOF_SIZE_INIT]>,
 }
 
 pub(crate) fn bb_prove_init(
@@ -965,7 +977,7 @@ pub(crate) fn bb_prove_init(
     debug!("Retrieving public inputs");
     let public_input = std::fs::read(target_path.join("proof_init").join("public_inputs"))?;
 
-    if proof.len() != 16256 {
+    if proof.len() != PROOF_SIZE_INIT {
         return Err(BBError::String("Invalid proof length".to_string()));
     }
 
@@ -973,7 +985,9 @@ pub(crate) fn bb_prove_init(
 
     Ok(ZeroKnowledgeProofInit {
         public_input: ZeroKnowledgeProofInitPublic::from_vec(public_input)?,
-        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 16256 bytes".to_string()))?,
+        proof: proof
+            .try_into()
+            .map_err(|_| BBError::String("proof must be exactly {PROOF_SIZE_INIT} bytes".to_string()))?,
     })
 }
 
@@ -994,7 +1008,7 @@ fn get_target_path() -> PathBuf {
 }
 
 pub(crate) fn bb_verify(
-    proof: &[u8; 16256],
+    proof: &[u8; PROOF_SIZE_INIT],
     public_inputs: &[u8],
     view_key_file: &str,
     verify_dir: &str,
@@ -1174,7 +1188,9 @@ pub(crate) fn bb_prove_update(
 
     Ok(ZeroKnowledgeProofUpdate {
         public_input: ZeroKnowledgeProofUpdatePublic::from_vec(public_input)?,
-        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 16256 bytes".to_string()))?,
+        proof: proof
+            .try_into()
+            .map_err(|_| BBError::String("proof must be exactly {PROOF_SIZE_INIT} bytes".to_string()))?,
     })
 }
 
