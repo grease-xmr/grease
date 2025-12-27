@@ -15,13 +15,11 @@ fn VerifyCOF(
     library::VerifyTi(T_i, witness_i);
 
     //Create hash (random oracle) from previous entropy
-    let update_round: Field = 0; //TODO: Feature: add round parameter to minimize witness recognition attacks
-
     let input: [Field; 4] = [
         library::HASH_HEADER_CONSTANT_UPDATE_0,
         witness_im1,
-        update_round,
         library::HASH_HEADER_CONSTANT_UPDATE_1,
+        library::HASH_HEADER_CONSTANT_UPDATE_2,
     ];
     let output: [Field; 4] = poseidon2_permutation(input, input.len());
     let hash = output[0];

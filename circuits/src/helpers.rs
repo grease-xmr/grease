@@ -183,15 +183,6 @@ pub(crate) fn get_fr_from_big_uint(field: &BigUint) -> Fr {
     Fr::from_str(&field.to_str_radix(10)).unwrap()
 }
 
-// pub(crate) fn get_field_bytes_fr(field: &Fr) -> [u8; 32] {
-//     let field_object: String = field.to_string();
-//     assert!(
-//         field_object.len() <= 77,
-//         "get_field_bytes: field is not correctly self-describing"
-//     ); //TODO: Confirm this is correct for MAX(Fr) in BJJ
-
-//     BigUint::from_str_radix(&field_object, 10).unwrap().to_bytes_be().try_into().unwrap_or([0u8; 32])
-// }
 pub(crate) fn get_field_bytes(field: &Fq) -> [u8; 32] {
     let field_object: String = field.to_string();
     assert!(
@@ -199,7 +190,8 @@ pub(crate) fn get_field_bytes(field: &Fq) -> [u8; 32] {
         "get_field_bytes: field is not correctly self-describing"
     ); //TODO: Confirm this is correct for MAX(Fq) in BJJ
 
-    BigUint::from_str_radix(&field_object, 10).unwrap().to_bytes_be().try_into().unwrap_or([0u8; 32])
+    let bytes = BigUint::from_str_radix(&field_object, 10).unwrap().to_bytes_be();
+    left_pad_bytes_32_vec(&bytes)
 }
 pub(crate) fn get_fr_from_fq(field: &Fq) -> Fr {
     let field_object: String = field.to_string();

@@ -146,7 +146,7 @@ pub(crate) fn verify_encrypt_message_ecdh(
     let r_p: Point = r_p.into();
 
     //Verify
-    let private_key_i: BigUint = private_key.clone().into();
+    let private_key_i: BigUint = private_key.clone();
 
     let fi_projective: BjjPoint = (*fi).into();
     let fi_s = fi_projective.mul(Scalar::from(private_key_i));
@@ -201,7 +201,7 @@ pub(crate) fn make_vcof(witness_im1: &BigUint) -> Result<(BigUint, Point, Montgo
     let witness_i: BigUint = hash_verify_witnessi.rem_euclid(&suborder_bjj_big_uint);
 
     // BJJ key point
-    let t_i = get_scalar_to_point_bjj(&witness_i.clone().into());
+    let t_i = get_scalar_to_point_bjj(&witness_i);
 
     let s_i: MontgomeryPoint = get_scalar_to_point_ed25519(&witness_i);
 
@@ -219,12 +219,12 @@ pub(crate) fn generate_dleqproof_simple(
     assert!(*blinding_dleq <= suborder_bjj_big_uint);
 
     // Compute T = secret * G1 (Baby Jubjub)
-    let t: Point = get_scalar_to_point_bjj(&secret.clone().into());
+    let t: Point = get_scalar_to_point_bjj(secret);
 
     let s: MontgomeryPoint = get_scalar_to_point_ed25519(secret);
 
     // Compute commitments: R1 = blinding_DLEQ * G1 (Baby Jubjub)
-    let r1: Point = get_scalar_to_point_bjj(&blinding_dleq.clone().into());
+    let r1: Point = get_scalar_to_point_bjj(blinding_dleq);
 
     // Compute commitments: R2 = blinding_DLEQ * G2 (Ed25519)
     let r2: MontgomeryPoint = get_scalar_to_point_ed25519(blinding_dleq);
@@ -549,16 +549,6 @@ impl From<BjjPoint> for PointConfig {
     }
 }
 
-fn get_point_config_baby_jubjub(point: &Point) -> PointConfig {
-    let x: String = point.x.to_string();
-    assert!(x.len() <= 77, "get_field_bytes: field is not correctly self-describing"); //TODO: Confirm this is correct for MAX(Fr) in BJJ
-
-    let y: String = point.y.to_string();
-    assert!(y.len() <= 77, "get_field_bytes: field is not correctly self-describing"); //TODO: Confirm this is correct for MAX(Fr) in BJJ
-
-    PointConfig { x: x, y: y }
-}
-
 #[expect(non_snake_case)]
 #[derive(Serialize)]
 pub struct InitConfig {
@@ -873,9 +863,9 @@ pub(crate) fn bb_prove_init(
         response_ed25519: byte_array_to_string_array(response_ed25519),
         witness_0: witness_0.to_string(),
 
-        T_0: get_point_config_baby_jubjub(t_0),
-        fi_2: get_point_config_baby_jubjub(fi_2),
-        pubkey_KES: get_point_config_baby_jubjub(kes_public_key),
+        T_0: t_0.into(),
+        fi_2: fi_2.into(),
+        pubkey_KES: kes_public_key.into(),
     };
 
     // Serialize to TOML string
@@ -1097,8 +1087,8 @@ pub(crate) fn bb_prove_update(
         witness_i: witness_i.to_string(),
         witness_im1: witness_im1.to_string(),
 
-        T_i: get_point_config_baby_jubjub(t_i),
-        T_im1: get_point_config_baby_jubjub(t_im1),
+        T_i: t_i.into(),
+        T_im1: t_im1.into(),
     };
 
     // Serialize to TOML string

@@ -16,7 +16,6 @@ subtle = { version = "2.2.1", default-features = false, optional = true }
 ciphersuite = { workspace = true, optional = true }
 elliptic-curve = { version = "0.13", default-features = false, features = ["hash2curve"], optional = true }
 modular-frost = {  workspace = true, optional = true }
-ark-algebra-test-templates = { version = "0.5.0" }
 
 [features]
 default = ["serai"]
@@ -29,6 +28,7 @@ ark-algebra-bench-templates = { version = "0.5.0", features = ["asm", "parallel"
 criterion = { workspace = true }
 ff-group-tests = { version = "0.13.0" }
 serde_json = "1.0.145"
+ark-algebra-test-templates = { version = "0.5.0" }
 
 [[bench]]
 name = "babyjubjub_benchmarks"

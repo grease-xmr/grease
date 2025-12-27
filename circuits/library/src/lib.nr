@@ -17,6 +17,7 @@ pub global HASH_HEADER_CONSTANT_INIT_1: Field = 0; //TODO: Create a domain-separ
 // This is the constant for VCOF hashing
 pub global HASH_HEADER_CONSTANT_UPDATE_0: Field = 0; //TODO: Create a domain-separation constant
 pub global HASH_HEADER_CONSTANT_UPDATE_1: Field = 0; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_UPDATE_2: Field = 0; //TODO: Create a domain-separation constant
 
 // This is the constant for ECDH hashing
 pub global HASH_HEADER_CONSTANT_ECDH_0: Field = 0; //TODO: Create a domain-separation constant

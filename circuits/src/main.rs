@@ -4,17 +4,19 @@ use circuits::UpdateConfig;
 use circuits::{generate_initial_proofs, generate_update};
 use grease_babyjubjub::Scalar;
 use grease_babyjubjub::SUBORDER_BJJ;
+use group::ff::Field;
 use num_bigint::BigUint;
+use rand::rngs::OsRng;
 use std::io;
 use std::ops::Mul;
 use std::path::PathBuf;
 
 fn main() {
-    let mut rng = ark_std::test_rng();
+    let mut rng = OsRng;
 
     //Settings - External
     let nonce_peer: BigUint = num_bigint::RandBigInt::gen_biguint_below(&mut rng, &SUBORDER_BJJ.try_into().unwrap());
-    let private_key_kes: Scalar = Scalar::from(BigUint::from(1u16));
+    let private_key_kes: Scalar = Scalar::random(&mut rng);
 
     //Settings - Internal
     let blinding: BigUint = num_bigint::RandBigInt::gen_biguint_below(&mut rng, &SUBORDER_BJJ.try_into().unwrap());
@@ -57,7 +59,7 @@ fn main() {
 
     // Serialize to TOML string
     let toml_string = toml::to_string_pretty(&config).map_err(io::Error::other).unwrap();
-    let target_path = PathBuf::from("../circuits/init");
+    let target_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("init");
 
     let witness_config_path = target_path.join("Prover.toml");
 
@@ -85,7 +87,7 @@ fn main() {
 
     // Serialize to TOML string
     let toml_string = toml::to_string_pretty(&config).map_err(io::Error::other).unwrap();
-    let target_path = PathBuf::from("../circuits/update");
+    let target_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("update");
 
     let witness_config_path = target_path.join("Prover.toml");
 

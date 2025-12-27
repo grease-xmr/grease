@@ -39,7 +39,6 @@ fn VerifyWitness0(
         witness_0_calc_field = library::BABY_JUBJUB_ORDER;
     }
 
-    assert_lt(witness_0_calc_field, library::BABY_JUBJUB_ORDER_PLUS_ONE); //TODO: Is this necessary since the function has already been calculated?
     // Ensure the witness matches the reduced hash
     assert_eq(witness_0_calc_field, witness_0);
 

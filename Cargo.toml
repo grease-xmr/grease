@@ -28,7 +28,6 @@ libp2p = { version = "0.55", default-features = false }
 log = { version = "0.4" }
 monero = { version = "0.21.0", features = ["serde"] }
 num-bigint = { version = "0.4.6", features = ["serde"] }
-rand = { version = "0.8.5" }
 rand_core = { version = "0.6.4" }
 ron = {  version = "0.10.1" }
 serde = { version = "1.0", features = ["derive"] }

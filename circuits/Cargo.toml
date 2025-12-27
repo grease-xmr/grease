@@ -17,13 +17,13 @@ num-traits = "0.2"
 curve25519-dalek = { version = "4.1.3", features = ["digest"] }
 ff_ce = "0.11.0"
 lazy_static = "1.5"
-taceo-poseidon2 = "*"
+taceo-poseidon2 = "0.2.0"
 ark-bn254 = { version = "0.5.0", features = ["std"] }
 hex = { workspace = true }
 toml = "0.8"
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = { workspace = true }
-rand = { workspace = true }
+rand = { version = "0.8.5" }
 rand_core = { workspace = true }
 log = { workspace = true }
 zkuh-rs = { git = "https://github.com/grease-xmr/aztec-packages.git", rev = "588cb26402913c1b592d64fa75201e6b2b3ba49f" }
