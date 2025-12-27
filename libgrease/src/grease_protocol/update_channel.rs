@@ -1,10 +1,10 @@
+use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
 use crate::grease_protocol::adapter_signature::{AdapterSignatureError, AdapterSignatureHandler};
 use crate::grease_protocol::error::DleqError;
 use crate::payment_channel::HasRole;
 use modular_frost::curve::Curve as FrostCurve;
 use rand_core::{CryptoRng, RngCore};
 use thiserror::Error;
-use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
 
 pub trait UpdateProtocol<C: FrostCurve>: HasRole + AdapterSignatureHandler {
     type VCOF: VerifiableConsecutiveOnewayFunction<C>;
