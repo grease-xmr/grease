@@ -18,7 +18,7 @@ hex = { workspace = true }
 log = "0.4.27"
 modular-frost = { workspace = true }
 monero = { workspace = true, features = ["serde"] }
-rand_core = { version = "0.6.4" }
+rand_core = { workspace = true }
 rand_chacha = {  version = "0.3.1"   }
 serde = { workspace = true }
 serde_json = {workspace = true}

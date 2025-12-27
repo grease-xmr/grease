@@ -1,4 +1,4 @@
-use crate::{BabyJubJub, ProjectivePoint, Scalar, hash_to_curve, Point};
+use crate::{BabyJubJub, Point, ProjectivePoint, Scalar, hash_to_curve};
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::{AdditiveGroup, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -29,7 +29,7 @@ impl From<Point> for BjjPoint {
 
 impl From<BjjPoint> for Point {
     fn from(value: BjjPoint) -> Self {
-        value.into()
+        value.0.into_affine()
     }
 }
 

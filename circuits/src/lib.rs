@@ -1,21 +1,22 @@
-// use babyjubjub_rs::*;
+use ark_bn254::Fr;
 use blake2::{Blake2s256, Digest};
 use curve25519_dalek::montgomery::MontgomeryPoint;
-use ff_ce::PrimeField;
+use grease_babyjubjub::SUBORDER_BJJ;
+use grease_babyjubjub::{BjjPoint, Point, Scalar};
 use log::error;
 use log::*;
-use num_bigint::{BigInt, BigUint};
+use num_bigint::BigUint;
 use num_traits::ops::euclid::Euclid;
 use num_traits::Zero;
-use poseidon_rs::Fr;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{self, Read};
+use std::ops::Add;
+use std::ops::Mul;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use taceo_poseidon2::bn254::t4::permutation;
 use thiserror::Error;
-use grease_babyjubjub::{BabyJubJub, Point}; 
-use grease_babyjubjub::SUBORDER_BJJ;
 
 pub mod helpers;
 use helpers::*;
@@ -24,23 +25,22 @@ use lazy_static::lazy_static;
 use libgrease::cryptography::zk_objects::{Comm0PrivateOutputs, Comm0PublicOutputs, GenericPoint, GenericScalar};
 
 lazy_static! {
-    // static ref B8: Point = Point {
-    //     x: Fr::from_str("5299619240641551281634865583518297030282874472190772894086521144482721001553",).unwrap(),
-    //     y: Fr::from_str("16950150798460657717958625567821834550301663161624707787222815936182638968203",).unwrap(),
-    // };
-    // pub static ref BABY_JUBJUB_ORDER: BigUint = BigUint::parse_bytes(
-    //     b"2736030358979909402780800718157159386076813972158567259200215660948447373041",
-    //     10
-    // )
-    // .unwrap();
-    // static ref BABY_JUBJUB_PRIME: Fr =
-    //     Fr::from_str("21888242871839275222246405745257275088548364400416034343698204186575808495617",).unwrap();
     static ref ED25519_ORDER: BigUint = BigUint::parse_bytes(
         b"7237005577332262213973186563042994240857116359379907606001950938285454250989",
         10
     )
     .unwrap();
+    static ref SUBORDER_BJJ_BIGUINT: BigUint = SUBORDER_BJJ.into();
 }
+ 
+static PROOF_SIZE_INIT: usize = 16256usize;
+static PROOF_SIZE_INIT_HEX: usize = PROOF_SIZE_INIT * 2usize;
+static PROOF_SIZE_UPDATE: usize = 16256usize;
+static PROOF_SIZE_UPDATE_HEX: usize = PROOF_SIZE_UPDATE * 2usize;
+static PUBLIC_INPUT_SIZE_INIT: usize = 1184usize;
+static PUBLIC_INPUT_SIZE_INIT_HEX: usize = PUBLIC_INPUT_SIZE_INIT * 2usize;
+static PUBLIC_INPUT_SIZE_UPDATE: usize = 1152usize;
+static PUBLIC_INPUT_SIZE_UPDATE_HEX: usize = PUBLIC_INPUT_SIZE_UPDATE * 2usize;
 
 #[derive(Error, Debug)]
 pub enum BBError {
@@ -72,34 +72,25 @@ pub(crate) fn make_witness0(
     nonce_peer: &BigUint,
     blinding: &BigUint,
 ) -> Result<(BigUint, Point, MontgomeryPoint), BBError> {
-    assert!(*nonce_peer <= SUBORDER_BJJ.into());
-    assert!(*blinding <= SUBORDER_BJJ.into());
+    assert!(nonce_peer <= &SUBORDER_BJJ_BIGUINT);
+    assert!(blinding <= &SUBORDER_BJJ_BIGUINT);
 
     // Input byte array
-    let header: [u8; 32] = [0; 32]; // VerifyWitness0 HASH_HEADER_CONSTANT
-    let nonce_peer_bytes = nonce_peer.to_bytes_be();
-    let blinding_bytes = blinding.to_bytes_be();
-    let mut result = Vec::with_capacity(96);
-    result.extend_from_slice(&header);
-    result.extend_from_slice(&left_pad_bytes_32(&nonce_peer_bytes)?);
-    result.extend_from_slice(&left_pad_bytes_32(&blinding_bytes)?);
-
-    // Create a BLAKE2s hasher instance
-    let mut hasher = Blake2s256::new();
-
-    // Feed the input bytes to the hasher
-    hasher.update(result);
+    let big_arr: [ark_ff::Fp<ark_ff::MontBackend<ark_bn254::FrConfig, 4>, 4>; 4] =
+        [Fr::zero(), get_fr_from_big_uint(nonce_peer), get_fr_from_big_uint(blinding), Fr::zero()];
 
     // Compute the hash
-    let hash_verify_witness0_bytes = hasher.finalize();
+    let hash: [ark_ff::Fp<ark_ff::MontBackend<ark_bn254::FrConfig, 4>, 4>; 4] = permutation(&big_arr);
+    let hash_verify_witness0 = hash[0];
+
     // Convert hash bytes to BigUint (big-endian)
-    let hash_verify_witness0 = BigUint::from_bytes_be(&hash_verify_witness0_bytes);
+    let hash_verify_witness0: BigUint = get_big_uint_from_fr(&hash_verify_witness0);
 
     // Modulo BABY_JUBJUB_ORDER
-    let witness_0: BigUint = hash_verify_witness0.rem_euclid(&SUBORDER_BJJ.into());
+    let witness_0 = hash_verify_witness0.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     // BJJ key point
-    let t_0: Point = get_scalar_to_point_bjj(&witness_0.clone().into());
+    let t_0: Point = get_scalar_to_point_bjj(&witness_0);
 
     let s_0: MontgomeryPoint = get_scalar_to_point_ed25519(&witness_0);
 
@@ -113,32 +104,27 @@ pub(crate) fn encrypt_message_ecdh(
     public_key: &Point,
     private_key: Option<&BigUint>,
 ) -> Result<(Point, BigUint), BBError> {
-    let r_g = get_scalar_to_point_bjj(&r.clone().into());
-    let r_p = public_key.mul_scalar(&r.clone().into());
+    let r_g: Point = get_scalar_to_point_bjj(r);
+
+    let public_key_projective: BjjPoint = (*public_key).into();
+    let r_p = public_key_projective.mul(Scalar::from(r));
+    let r_p: Point = r_p.into();
+    let r_p_x: Fr = get_fr_from_fq(&r_p.x);
+    let r_p_y: Fr = get_fr_from_fq(&r_p.y);
 
     // Input byte array
-    let r_p_x_bytes = get_field_bytes(&r_p.x);
-    let r_p_y_bytes = get_field_bytes(&r_p.y);
-    let mut result = Vec::with_capacity(64);
-    result.extend_from_slice(&left_pad_bytes_32(&r_p_x_bytes)?);
-    result.extend_from_slice(&left_pad_bytes_32(&r_p_y_bytes)?);
-
-    // Create a BLAKE2s hasher instance
-    let mut hasher = Blake2s256::new();
-
-    // Feed the input bytes to the hasher
-    hasher.update(result);
+    let big_arr = [Fr::zero(), r_p_x, r_p_y, Fr::zero()];
 
     // Compute the hash
-    let hash_shared_secret_bytes = hasher.finalize();
-    // Convert hash bytes to BigUint (big-endian)
-    let hash_shared_secret = BigUint::from_bytes_be(&hash_shared_secret_bytes);
+    let hash_shared_secret_point = permutation(&big_arr);
+    let hash_shared_secret_point = hash_shared_secret_point[0];
 
     // Modulo BABY_JUBJUB_ORDER
-    let shared_secret: BigUint = hash_shared_secret.rem_euclid(&SUBORDER_BJJ.into());
+    let shared_secret: BigUint = get_big_uint_from_fr(&hash_shared_secret_point);
+    let shared_secret = shared_secret.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     let cipher: BigUint = message + &shared_secret;
-    let cipher: BigUint = cipher.rem_euclid(&SUBORDER_BJJ.into());
+    let cipher: BigUint = cipher.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     let fi = r_g;
     let enc = cipher;
@@ -159,39 +145,40 @@ pub(crate) fn verify_encrypt_message_ecdh(
     shared_secret: &BigUint,
     private_key: &BigUint,
 ) -> Result<(), BBError> {
-    let r_p = public_key.mul_scalar(&r.clone().into());
+    let public_key_projective: BjjPoint = (*public_key).into();
+    let r_p = public_key_projective.mul(Scalar::from(r));
+    let r_p: Point = r_p.into();
 
     //Verify
-    let private_key_i: BigInt = private_key.clone().into();
+    let private_key_i: BigUint = private_key.clone();
 
-    let fi_s: Point = fi.mul_scalar(&private_key_i);
+    let fi_projective: BjjPoint = (*fi).into();
+    let fi_s = fi_projective.mul(Scalar::from(private_key_i));
+    let fi_s: Point = fi_s.into();
     assert_eq!(fi_s.x, r_p.x);
     assert_eq!(fi_s.y, r_p.y);
 
     // Input byte array
-    let fi_s_x_bytes = get_field_bytes(&fi_s.x);
-    let fi_s_y_bytes = get_field_bytes(&fi_s.y);
-    let mut result = Vec::with_capacity(64);
-    result.extend_from_slice(&left_pad_bytes_32(&fi_s_x_bytes)?);
-    result.extend_from_slice(&left_pad_bytes_32(&fi_s_y_bytes)?);
+    let r_p_x: Fr = get_fr_from_fq(&r_p.x);
+    let r_p_y: Fr = get_fr_from_fq(&r_p.y);
 
-    // Create a BLAKE2s hasher instance
-    let mut hasher = Blake2s256::new();
-
-    // Feed the input bytes to the hasher
-    hasher.update(result);
+    // Input byte array
+    let big_arr = [Fr::zero(), r_p_x, r_p_y, Fr::zero()];
 
     // Compute the hash
-    let hash_shared_secret_calc_bytes = hasher.finalize();
+    let hash_shared_secret_calc = permutation(&big_arr);
+    let hash_shared_secret_calc = hash_shared_secret_calc[0];
+
     // Convert hash bytes to BigUint (big-endian)
-    let hash_shared_secret_calc = BigUint::from_bytes_be(&hash_shared_secret_calc_bytes);
+    let hash_shared_secret_calc: BigUint = get_big_uint_from_fr(&hash_shared_secret_calc);
 
     // Modulo BABY_JUBJUB_ORDER
-    let shared_secret_calc: BigUint = hash_shared_secret_calc.rem_euclid(&SUBORDER_BJJ.into());
+    let shared_secret_calc: BigUint = hash_shared_secret_calc.rem_euclid(&SUBORDER_BJJ_BIGUINT);
     assert_eq!(shared_secret_calc, *shared_secret);
 
-    let share_calc: BigUint = enc + SUBORDER_BJJ.into() - &shared_secret_calc;
-    let share_calc: BigUint = share_calc.rem_euclid(&SUBORDER_BJJ.into());
+    let share_calc: BigUint = enc.clone() + SUBORDER_BJJ_BIGUINT.clone();
+    let share_calc = share_calc - &shared_secret_calc;
+    let share_calc: BigUint = share_calc.rem_euclid(&SUBORDER_BJJ_BIGUINT);
     assert_eq!(share_calc, *message);
 
     Ok(())
@@ -199,31 +186,24 @@ pub(crate) fn verify_encrypt_message_ecdh(
 
 //Update/VerifyCOF
 pub(crate) fn make_vcof(witness_im1: &BigUint) -> Result<(BigUint, Point, MontgomeryPoint), BBError> {
-    assert!(*witness_im1 < SUBORDER_BJJ.into());
+    assert!(witness_im1 < &SUBORDER_BJJ_BIGUINT);
 
     // Input byte array
-    let header: [u8; 32] = [0; 32]; // VerifyWitness0 HASH_HEADER_CONSTANT
-    let witness_im1_bytes = witness_im1.to_bytes_be();
-    let mut result = Vec::with_capacity(64);
-    result.extend_from_slice(&header);
-    result.extend_from_slice(&left_pad_bytes_32(&witness_im1_bytes)?);
-
-    // Create a BLAKE2s hasher instance
-    let mut hasher = Blake2s256::new();
-
-    // Feed the input bytes to the hasher
-    hasher.update(result);
+    let big_arr: [ark_ff::Fp<ark_ff::MontBackend<ark_bn254::FrConfig, 4>, 4>; 4] =
+        [Fr::zero(), get_fr_from_big_uint(witness_im1), Fr::zero(), Fr::zero()];
 
     // Compute the hash
-    let hash_verify_witnessi_bytes = hasher.finalize();
+    let hash_verify_witnessi = permutation(&big_arr);
+    let hash_verify_witnessi = hash_verify_witnessi[0];
+
     // Convert hash bytes to BigUint (big-endian)
-    let hash_verify_witnessi = BigUint::from_bytes_be(&hash_verify_witnessi_bytes);
+    let hash_verify_witnessi: BigUint = get_big_uint_from_fr(&hash_verify_witnessi);
 
     // Modulo BABY_JUBJUB_ORDER
-    let witness_i: BigUint = hash_verify_witnessi.rem_euclid(SUBORDER_BJJ.into());
+    let witness_i: BigUint = hash_verify_witnessi.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     // BJJ key point
-    let t_i = get_scalar_to_point_bjj(&witness_i.clone().into());
+    let t_i = get_scalar_to_point_bjj(&witness_i);
 
     let s_i: MontgomeryPoint = get_scalar_to_point_ed25519(&witness_i);
 
@@ -235,26 +215,26 @@ pub(crate) fn generate_dleqproof_simple(
     blinding_dleq: &BigUint,
 ) -> Result<([u8; 32], BigUint, BigUint, Point, MontgomeryPoint, BigUint, BigUint), BBError> {
     assert!(secret > &BigUint::from(0u8));
-    assert!(*secret <= SUBORDER_BJJ.into());
+    assert!(secret <= &SUBORDER_BJJ_BIGUINT);
     assert!(blinding_dleq > &BigUint::from(0u8));
-    assert!(*blinding_dleq <= SUBORDER_BJJ.into());
+    assert!(blinding_dleq <= &SUBORDER_BJJ_BIGUINT);
 
     // Compute T = secret * G1 (Baby Jubjub)
-    let t: Point = get_scalar_to_point_bjj(&secret.clone().into());
+    let t: Point = get_scalar_to_point_bjj(secret);
 
     let s: MontgomeryPoint = get_scalar_to_point_ed25519(secret);
 
     // Compute commitments: R1 = blinding_DLEQ * G1 (Baby Jubjub)
-    let r1: Point = get_scalar_to_point_bjj(&blinding_dleq.clone().into());
+    let r1: Point = get_scalar_to_point_bjj(blinding_dleq);
 
     // Compute commitments: R2 = blinding_DLEQ * G2 (Ed25519)
     let r2: MontgomeryPoint = get_scalar_to_point_ed25519(blinding_dleq);
 
     // Input byte array
     let header: [u8; 32] = [0; 32]; // NIZK_DLEQ HASH_HEADER_CONSTANT
-    let t_bytes = t.compress();
+    let t_bytes = point_to_bytes(&t);
     let s_bytes = s.to_bytes();
-    let r1_bytes: [u8; 32] = r1.compress();
+    let r1_bytes = point_to_bytes(&r1);
     let r2_bytes = r2.to_bytes();
     let mut result = Vec::with_capacity(160);
     result.extend_from_slice(&header);
@@ -277,23 +257,20 @@ pub(crate) fn generate_dleqproof_simple(
     challenge_bytes.copy_from_slice(&challenge_hash);
 
     // Compute response s = c * secret - blinding_DLEQ
-    let response = challenge_bigint.clone() * secret;
-    if &response <= blinding_dleq {
-        // throw new Error('s must be positive');
-        return Err(format!("s must be positive: {},{}", response, blinding_dleq).into());
+    let response_left = challenge_bigint.clone() * secret;
+    if &response_left <= blinding_dleq {
+        return Err(format!("response must be positive: {} - {} !<= 0", response_left, blinding_dleq).into());
     }
-    let response: BigUint = response - blinding_dleq;
+    let response: BigUint = response_left - blinding_dleq;
 
     // Compute response s = (c * secret - blinding_DLEQ) mod BABY_JUBJUB_ORDER
-    let (response_div_baby_jub_jub, response_baby_jub_jub) = response.div_rem_euclid(SUBORDER_BJJ.into());
+    let (response_div_baby_jub_jub, response_baby_jub_jub) = response.div_rem_euclid(&SUBORDER_BJJ_BIGUINT);
     if response_div_baby_jub_jub.bits() > 256u64 {
-        // throw new Error('response div BABY_JUBJUB_ORDER too large');
         return Err(format!("response div BABY_JUBJUB_ORDER too large: {}", response_div_baby_jub_jub).into());
     }
 
     let (response_div_ed25519, response_ed25519) = response.div_rem_euclid(&ED25519_ORDER);
     if response_div_ed25519.bits() > 256u64 {
-        //throw new Error('response div ED25519_ORDER too large');
         return Err(format!("response div ED25519_ORDER too large: {}", response_div_ed25519).into());
     }
 
@@ -301,20 +278,23 @@ pub(crate) fn generate_dleqproof_simple(
         //Verify
         let response_baby_jub_jub_g1: Point = get_scalar_to_point_bjj(&response_baby_jub_jub.clone().into());
 
-        let challenge_baby_jub_jub = challenge_bigint.rem_euclid(SUBORDER_BJJ.into());
+        let challenge_baby_jub_jub = challenge_bigint.rem_euclid(&SUBORDER_BJJ_BIGUINT);
         let response_baby_jub_jub_g1_calc = get_scalar_to_point_bjj(
-            &((challenge_baby_jub_jub.clone() * secret) - blinding_dleq).rem_euclid(SUBORDER_BJJ.into()).into(),
+            &((challenge_baby_jub_jub.clone() * secret) - blinding_dleq).rem_euclid(&SUBORDER_BJJ_BIGUINT).into(),
         );
         assert_eq!(response_baby_jub_jub_g1_calc.x, response_baby_jub_jub_g1.x);
         assert_eq!(response_baby_jub_jub_g1_calc.y, response_baby_jub_jub_g1.y);
 
-        let c_t: Point = t.mul_scalar(&challenge_baby_jub_jub.clone().into());
+        let t_bjj_point: BjjPoint = t.into();
+        let c_t: Point = t_bjj_point.mul(&challenge_baby_jub_jub.clone().into()).into();
 
-        let c_t_calc = get_scalar_to_point_bjj(&(challenge_baby_jub_jub * secret).rem_euclid(SUBORDER_BJJ.into()).into());
+        let c_t_calc =
+            get_scalar_to_point_bjj(&(challenge_baby_jub_jub * secret).rem_euclid(&SUBORDER_BJJ_BIGUINT).into());
         assert_eq!(c_t_calc.x, c_t.x);
         assert_eq!(c_t_calc.y, c_t.y);
 
-        let r1_calc = c_t.projective().add(&point_negate(response_baby_jub_jub_g1).projective()).affine();
+        let c_t_bjj_point: BjjPoint = c_t.into();
+        let r1_calc: Point = c_t_bjj_point.add(&point_negate(response_baby_jub_jub_g1).into()).into();
         assert_eq!(r1_calc.x, r1.x);
         assert_eq!(r1_calc.y, r1.y);
 
@@ -365,9 +345,9 @@ pub fn verify_dleq_simple(
 ) -> Result<bool, BBError> {
     // Input byte array
     let header: [u8; 32] = [0; 32]; // NIZK_DLEQ HASH_HEADER_CONSTANT
-    let t_bytes = t.compress();
+    let t_bytes = point_to_bytes(t);
     let s_bytes = s.to_bytes();
-    let r1_bytes: [u8; 32] = r1.compress();
+    let r1_bytes: [u8; 32] = point_to_bytes(r1);
     let r2_bytes = r2.to_bytes();
     let mut result = Vec::with_capacity(160);
     result.extend_from_slice(&header);
@@ -396,11 +376,12 @@ pub fn verify_dleq_simple(
     //Verify: r.G == c.x.G - (c*x-r).G => R == c.T - z.G
     //        R1 == challenge_BabyJubJub.T - response_BabyJubJub_g1.G
     let response_baby_jub_jub_g1: Point = get_scalar_to_point_bjj(&response_baby_jub_jub.clone().into());
-    let challenge_baby_jub_jub: BigUint = challenge_bigint.rem_euclid(SUBORDER_BJJ.into());
-    let challenge_baby_jub_jub_t: Point = t.mul_scalar(&challenge_baby_jub_jub.clone().into());
+    let challenge_baby_jub_jub: BigUint = challenge_bigint.rem_euclid(&SUBORDER_BJJ_BIGUINT);
+    let t_bjj_point: BjjPoint = (*t).into();
+    let challenge_baby_jub_jub_t: Point = t_bjj_point.mul(Scalar::from(&challenge_baby_jub_jub)).into();
 
-    let r1_calc =
-        challenge_baby_jub_jub_t.projective().add(&point_negate(response_baby_jub_jub_g1).projective()).affine();
+    let challenge_baby_jub_jub_t_bjj_point: BjjPoint = challenge_baby_jub_jub_t.into();
+    let r1_calc: Point = challenge_baby_jub_jub_t_bjj_point.add(&point_negate(response_baby_jub_jub_g1).into()).into();
     if r1.x != r1_calc.x {
         return Ok(false);
     }
@@ -506,7 +487,10 @@ pub(crate) fn get_bb_version() -> Result<String, BBError> {
         Ok((stdout, _stderr)) => {
             let stdout = match str::from_utf8(&stdout) {
                 Ok(v) => v,
-                Err(e) => return Err(format!("Invalid UTF-8 sequence: {}", e).into()),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return Err(format!("Invalid UTF-8 sequence: {}", e).into());
+                }
             };
 
             Ok(stdout.to_string())
@@ -525,7 +509,10 @@ pub(crate) fn get_nargo_version() -> Result<String, BBError> {
         Ok((stdout, _stderr)) => {
             let stdout = match str::from_utf8(&stdout) {
                 Ok(v) => v,
-                Err(e) => return Err(format!("Invalid UTF-8 sequence: {}", e).into()),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return Err(format!("Invalid UTF-8 sequence: {}", e).into());
+                }
             };
 
             Ok(stdout.to_string())
@@ -538,58 +525,62 @@ pub(crate) fn get_nargo_version() -> Result<String, BBError> {
 }
 
 #[derive(Serialize)]
-struct PointConfig {
+pub struct PointConfig {
     x: String,
     y: String,
 }
 
-fn get_point_config_baby_jubjub(point: &Point) -> PointConfig {
-    //Fr(0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0)
-    let x: String = point.x.to_string();
-    assert!(x.len() == 70, "get_field_bytes: field is not correctly self-describing");
-    let x_str = &x[3..69];
-
-    let y: String = point.y.to_string();
-    assert!(y.len() == 70, "get_field_bytes: field is not correctly self-describing");
-    let y_str = &y[3..69];
-
-    PointConfig { x: x_str.to_string(), y: y_str.to_string() }
+impl From<&Point> for PointConfig {
+    fn from(p: &Point) -> Self {
+        PointConfig { x: p.x.to_string(), y: p.y.to_string() }
+    }
+}
+impl From<Point> for PointConfig {
+    fn from(p: Point) -> Self {
+        PointConfig { x: p.x.to_string(), y: p.y.to_string() }
+    }
+}
+impl From<BjjPoint> for PointConfig {
+    fn from(p: BjjPoint) -> Self {
+        let p: Point = p.into();
+        Self::from(p)
+    }
 }
 
 #[expect(non_snake_case)]
 #[derive(Serialize)]
-struct InitConfig {
-    blinding: String,
-    blinding_DLEQ: String,
-    challenge_bytes: [String; 32],
-    enc_2: String,
-    nonce_peer: String,
-    r_2: String,
-    response_div_BabyJubJub: [String; 32],
-    response_div_ed25519: [String; 32],
-    response_BabyJubJub: String,
-    response_ed25519: [String; 32],
-    witness_0: String,
+pub struct InitConfig {
+    pub blinding: String,
+    pub blinding_DLEQ: String,
+    pub challenge_bytes: [String; 32],
+    pub enc_2: String,
+    pub nonce_peer: String,
+    pub r_2: String,
+    pub response_div_BabyJubJub: [String; 32],
+    pub response_div_ed25519: [String; 32],
+    pub response_BabyJubJub: [String; 32],
+    pub response_ed25519: [String; 32],
+    pub witness_0: String,
 
-    T_0: PointConfig,
-    fi_2: PointConfig,
-    pubkey_KES: PointConfig,
+    pub T_0: PointConfig,
+    pub fi_2: PointConfig,
+    pub pubkey_KES: PointConfig,
 }
 
 #[expect(non_snake_case)]
 #[derive(Serialize)]
-struct UpdateConfig {
-    blinding_DLEQ: String,
-    challenge_bytes: [String; 32],
-    response_div_BabyJubJub: [String; 32],
-    response_div_ed25519: [String; 32],
-    response_BabyJubJub: String,
-    response_ed25519: [String; 32],
-    witness_i: String,
-    witness_im1: String,
+pub struct UpdateConfig {
+    pub blinding_DLEQ: String,
+    pub challenge_bytes: [String; 32],
+    pub response_div_BabyJubJub: [String; 32],
+    pub response_div_ed25519: [String; 32],
+    pub response_BabyJubJub: [String; 32],
+    pub response_ed25519: [String; 32],
+    pub witness_i: String,
+    pub witness_im1: String,
 
-    T_i: PointConfig,
-    T_im1: PointConfig,
+    pub T_i: PointConfig,
+    pub T_im1: PointConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -598,15 +589,15 @@ pub struct ZeroKnowledgeProofInitPublic {
         serialize_with = "crate::helpers::init_public_to_hex",
         deserialize_with = "crate::helpers::init_public_from_hex"
     )]
-    pub public_input: [u8; 1184],
+    pub public_input: [u8; PUBLIC_INPUT_SIZE_INIT],
 }
 
 impl ZeroKnowledgeProofInitPublic {
     pub fn from_vec(public: Vec<u8>) -> Result<Self, BBError> {
-        if public.len() != 1184 {
+        if public.len() != PUBLIC_INPUT_SIZE_INIT {
             return Err(BBError::String("Invalid public input length".to_string()));
         }
-        let public_input: [u8; 1184] =
+        let public_input: [u8; PUBLIC_INPUT_SIZE_INIT] =
             public.try_into().map_err(|_| BBError::String("Invalid public input length".to_string()))?;
         Ok(Self { public_input })
     }
@@ -616,7 +607,7 @@ impl ZeroKnowledgeProofInitPublic {
     }
 
     pub fn new(nonce_peer: &BigUint, t_0: &Point, kes_public_key: &Point, c: &BigUint) -> Result<Self, BBError> {
-        let mut public_input = Vec::with_capacity(1184); // 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
+        let mut public_input = Vec::with_capacity(PUBLIC_INPUT_SIZE_INIT); // 32 (nonce) + 4 * 32 (points) + 32 * 32 (challenge elements)
         public_input.extend_from_slice(&left_pad_bytes_32(&nonce_peer.to_bytes_be())?);
         public_input.extend_from_slice(&get_field_bytes(&t_0.x));
         public_input.extend_from_slice(&get_field_bytes(&t_0.y));
@@ -710,8 +701,11 @@ impl ZeroKnowledgeProofInitPublic {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ZeroKnowledgeProofInit {
     pub public_input: ZeroKnowledgeProofInitPublic,
-    #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
-    pub proof: Box<[u8; 16256]>,
+    #[serde(
+        serialize_with = "crate::helpers::init_proof_to_hex",
+        deserialize_with = "crate::helpers::init_proof_from_hex"
+    )]
+    pub proof: Box<[u8; PROOF_SIZE_INIT]>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -720,15 +714,15 @@ pub struct ZeroKnowledgeProofUpdatePublic {
         serialize_with = "crate::helpers::update_public_to_hex",
         deserialize_with = "crate::helpers::update_public_from_hex"
     )]
-    pub public_input: [u8; 1152],
+    pub public_input: [u8; PUBLIC_INPUT_SIZE_UPDATE],
 }
 
 impl ZeroKnowledgeProofUpdatePublic {
     pub fn from_vec(public: Vec<u8>) -> Result<Self, BBError> {
-        if public.len() != 1152 {
+        if public.len() != PUBLIC_INPUT_SIZE_UPDATE {
             return Err(BBError::String("Invalid public input length".to_string()));
         }
-        let public_input: [u8; 1152] =
+        let public_input: [u8; PUBLIC_INPUT_SIZE_UPDATE] =
             public.try_into().map_err(|_| BBError::String("Invalid public input length".to_string()))?;
         Ok(Self { public_input })
     }
@@ -752,12 +746,10 @@ impl ZeroKnowledgeProofUpdatePublic {
             ));
         }
         let leading_zeroes = 32 - challenge_bytes.len();
-        for _ in 0..leading_zeroes {
-            public_input.extend_from_slice(&BigUint::zero().to_bytes_be());
-        }
-        for i in leading_zeroes..32 {
-            let byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
-            public_input.extend_from_slice(&byte.to_bytes_be());
+        for i in 0..32 {
+            // Pad each byte to a 32-byte field element, left-aligned zeros when challenge is shorter
+            let byte = if i < leading_zeroes { 0u8 } else { challenge_bytes[i - leading_zeroes] };
+            public_input.extend_from_slice(&left_pad_bytes_32(&[byte])?);
         }
 
         Ok(Self {
@@ -818,7 +810,7 @@ impl ZeroKnowledgeProofUpdatePublic {
                     "challenge_bytes does not match: {}, {:?}, {:?}",
                     i,
                     challenge_bytes,
-                    &p.public_input[0..1152]
+                    &p.public_input[0..PUBLIC_INPUT_SIZE_UPDATE]
                 )));
             }
         }
@@ -830,8 +822,11 @@ impl ZeroKnowledgeProofUpdatePublic {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ZeroKnowledgeProofUpdate {
     pub public_input: ZeroKnowledgeProofUpdatePublic,
-    #[serde(serialize_with = "crate::helpers::proof_to_hex", deserialize_with = "crate::helpers::proof_from_hex")]
-    pub proof: Box<[u8; 16256]>,
+    #[serde(
+        serialize_with = "crate::helpers::update_proof_to_hex",
+        deserialize_with = "crate::helpers::update_proof_from_hex"
+    )]
+    pub proof: Box<[u8; PROOF_SIZE_UPDATE]>,
 }
 
 pub(crate) fn bb_prove_init(
@@ -843,7 +838,7 @@ pub(crate) fn bb_prove_init(
     r_2: &BigUint,
     response_div_baby_jub_jub: &[u8; 32],
     response_div_ed25519: &[u8; 32],
-    response_baby_jub_jub: &BigUint,
+    response_baby_jub_jub: &[u8; 32],
     response_ed25519: &[u8; 32],
     witness_0: &BigUint,
 
@@ -860,13 +855,13 @@ pub(crate) fn bb_prove_init(
         r_2: r_2.to_string(),
         response_div_BabyJubJub: byte_array_to_string_array(response_div_baby_jub_jub),
         response_div_ed25519: byte_array_to_string_array(response_div_ed25519),
-        response_BabyJubJub: response_baby_jub_jub.to_string(),
+        response_BabyJubJub: byte_array_to_string_array(response_baby_jub_jub),
         response_ed25519: byte_array_to_string_array(response_ed25519),
         witness_0: witness_0.to_string(),
 
-        T_0: get_point_config_baby_jubjub(t_0),
-        fi_2: get_point_config_baby_jubjub(fi_2),
-        pubkey_KES: get_point_config_baby_jubjub(kes_public_key),
+        T_0: t_0.into(),
+        fi_2: fi_2.into(),
+        pubkey_KES: kes_public_key.into(),
     };
 
     // Serialize to TOML string
@@ -878,16 +873,23 @@ pub(crate) fn bb_prove_init(
     let witness_config_filename = format!("{}", witness_config_path.display());
     debug!("Writing witness config to {witness_config_filename}");
     std::fs::write(&witness_config_path, &toml_string)?;
+
     let output_path = format!("{}", target_path.join("Grease").display());
     //nargo execute
     let args: Vec<&str> = vec!["execute", "-p", &witness_config_filename, "--package", "Grease", &output_path];
-    let nargo_path = get_noir_project_path();
+    let nargo_path: PathBuf = get_noir_project_path();
+
     match call_shell("nargo", &args, Some(nargo_path.clone())) {
         Ok((stdout, _stderr)) => match str::from_utf8(&stdout) {
             Ok(v) => {
-                println!("nargo output\n---\n{v}\n---")
+                info!("nargo output\n---\n{v}\n---")
             }
-            Err(e) => return Err(format!("Invalid UTF-8 sequence: {}", e).into()),
+            Err(e) => {
+                return {
+                    eprintln!("Error: {}", e);
+                    Err(format!("Invalid UTF-8 sequence: {}", e).into())
+                }
+            }
         },
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -913,7 +915,7 @@ pub(crate) fn bb_prove_init(
     match call_shell("bb", &args, None) {
         Ok((stdout, _stderr)) => {
             let output = str::from_utf8(&stdout).unwrap_or_default();
-            println!("bb write_vk output:\n---\n{}\n---", output);
+            info!("bb write_vk output:\n---\n{}\n---", output);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -947,7 +949,7 @@ pub(crate) fn bb_prove_init(
     match call_shell("bb", &args, None) {
         Ok((stdout, _stderr)) => {
             let output = str::from_utf8(&stdout).unwrap_or_default();
-            println!("bb prove output:\n---\n{}\n---", output);
+            info!("bb prove output:\n---\n{}\n---", output);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -961,14 +963,17 @@ pub(crate) fn bb_prove_init(
     debug!("Retrieving public inputs");
     let public_input = std::fs::read(target_path.join("proof_init").join("public_inputs"))?;
 
-    if proof.len() != 16256 {
+    if proof.len() != PROOF_SIZE_INIT {
         return Err(BBError::String("Invalid proof length".to_string()));
     }
 
     info!("Proofs generated successfully");
+
     Ok(ZeroKnowledgeProofInit {
         public_input: ZeroKnowledgeProofInitPublic::from_vec(public_input)?,
-        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 16256 bytes".to_string()))?,
+        proof: proof
+            .try_into()
+            .map_err(|_| BBError::String(format!("proof must be exactly {} bytes", PROOF_SIZE_INIT)))?,
     })
 }
 
@@ -989,7 +994,7 @@ fn get_target_path() -> PathBuf {
 }
 
 pub(crate) fn bb_verify(
-    proof: &[u8; 16256],
+    proof: &[u8; PROOF_SIZE_INIT],
     public_inputs: &[u8],
     view_key_file: &str,
     verify_dir: &str,
@@ -1061,7 +1066,7 @@ pub(crate) fn bb_prove_update(
     challenge_bytes: &[u8; 32],
     response_div_baby_jub_jub: &[u8; 32],
     response_div_ed25519: &[u8; 32],
-    response_baby_jub_jub: &BigUint,
+    response_baby_jub_jub: &[u8; 32],
     response_ed25519: &[u8; 32],
     witness_i: &BigUint,
     witness_im1: &BigUint,
@@ -1073,13 +1078,13 @@ pub(crate) fn bb_prove_update(
         challenge_bytes: byte_array_to_string_array(challenge_bytes),
         response_div_BabyJubJub: byte_array_to_string_array(response_div_baby_jub_jub),
         response_div_ed25519: byte_array_to_string_array(response_div_ed25519),
-        response_BabyJubJub: response_baby_jub_jub.to_string(),
+        response_BabyJubJub: byte_array_to_string_array(response_baby_jub_jub),
         response_ed25519: byte_array_to_string_array(response_ed25519),
         witness_i: witness_i.to_string(),
         witness_im1: witness_im1.to_string(),
 
-        T_i: get_point_config_baby_jubjub(t_i),
-        T_im1: get_point_config_baby_jubjub(t_im1),
+        T_i: t_i.into(),
+        T_im1: t_im1.into(),
     };
 
     // Serialize to TOML string
@@ -1126,7 +1131,7 @@ pub(crate) fn bb_prove_update(
     match call_shell("bb", &args, None) {
         Ok((stdout, _stderr)) => {
             let output = str::from_utf8(&stdout).unwrap_or_default();
-            println!("bb write_vk output:\n---\n{}\n---", output);
+            info!("bb write_vk output:\n---\n{}\n---", output);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -1155,7 +1160,7 @@ pub(crate) fn bb_prove_update(
     ];
     match call_shell("bb", &args, None) {
         Ok((stdout, _stderr)) => {
-            println!("bb output:\n---\n{}\n---", str::from_utf8(&stdout).unwrap_or_default());
+            info!("bb prove output:\n---\n{}\n---", str::from_utf8(&stdout).unwrap_or_default());
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -1169,7 +1174,9 @@ pub(crate) fn bb_prove_update(
 
     Ok(ZeroKnowledgeProofUpdate {
         public_input: ZeroKnowledgeProofUpdatePublic::from_vec(public_input)?,
-        proof: proof.try_into().map_err(|_| BBError::String("proof must be exactly 16256 bytes".to_string()))?,
+        proof: proof
+            .try_into()
+            .map_err(|_| BBError::String(format!("proof must be exactly {} bytes", PROOF_SIZE_UPDATE)))?,
     })
 }
 
@@ -1179,49 +1186,21 @@ pub(crate) fn bb_prove_update(
 pub struct PublicInit {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
     pub T_0: Point,
-    /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
-    pub phi_2: Point,
-    /// **χ₂** - The encrypted value of σ₂ (enc₂).
-    pub enc_2: BigUint,
-    /// **S₀** - The public key/curve point on Ed25519 for ω₀.
-    pub S_0: MontgomeryPoint,
     /// **c** - The Fiat–Shamir heuristic challenge (challenge_bytes).
     pub c: BigUint,
-    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (response_BabyJubJub).
-    pub rho_bjj: BigUint,
-    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (response_div_ed25519).
-    pub rho_ed: BigUint,
-    /// **R_BabyJubjub** - The ... on the Baby Jubjub curve (R1).
-    pub R1: Point,
-    /// **R_Ed25519** - The ... on the Ed25519 curve (R2).
-    pub R2: MontgomeryPoint,
 }
 
 #[expect(non_snake_case)]
 impl PublicInit {
     pub fn new(
         T_0: &Point,
-        phi_2: &Point,
-        enc_2: &BigUint,
-        S_0: &MontgomeryPoint,
         challenge_bytes: &[u8; 32],
-        rho_bjj: &BigUint,
-        rho_ed: &BigUint,
-        R1: &Point,
-        R2: &MontgomeryPoint,
     ) -> Self {
         let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
 
         PublicInit {
             T_0: T_0.clone(),
-            phi_2: phi_2.clone(),
-            enc_2: enc_2.clone(),
-            S_0: *S_0,
             c: challenge,
-            rho_bjj: rho_bjj.clone(),
-            rho_ed: rho_ed.clone(),
-            R1: R1.clone(),
-            R2: *R2,
         }
     }
 }
@@ -1234,18 +1213,8 @@ pub struct PublicUpdate {
     pub T_prev: Point,
     /// **Τ_i** - The public key/curve point on Baby Jubjub for ω_i.
     pub T_current: Point,
-    /// **S_i** - The public key/curve point on Ed25519 for ω_i.
-    pub S_current: MontgomeryPoint,
     /// **C** - The Fiat–Shamir heuristic challenge (`challenge_bytes`).
     pub challenge: BigUint,
-    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`).
-    pub rho_bjj: BigUint,
-    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`).
-    pub rho_ed: BigUint,
-    /// **R_BabyJubjub** - DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`).
-    pub R_bjj: Point,
-    /// **R_Ed25519** - DLEQ commitment 2, which is a public key/curve point on Ed25519 (`R_2`).
-    pub R_ed: MontgomeryPoint,
 }
 
 #[expect(non_snake_case)]
@@ -1253,24 +1222,14 @@ impl PublicUpdate {
     pub fn new(
         T_prev: &Point,
         T_current: &Point,
-        S_current: &MontgomeryPoint,
         challenge_bytes: &[u8; 32],
-        rho_bjj: &BigUint,
-        rho_ed: &BigUint,
-        R_bjj: &Point,
-        R_ed: &MontgomeryPoint,
     ) -> Self {
         let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
 
         PublicUpdate {
             T_prev: T_prev.clone(),
             T_current: T_current.clone(),
-            S_current: *S_current,
             challenge,
-            rho_bjj: rho_bjj.clone(),
-            rho_ed: rho_ed.clone(),
-            R_bjj: R_bjj.clone(),
-            R_ed: *R_ed,
         }
     }
 }
@@ -1331,14 +1290,15 @@ pub struct InitialProof {
     pub witness_0: BigUint,
     pub response_div_baby_jub_jub: [u8; 32],
     pub response_div_ed25519: [u8; 32],
+    #[cfg(not(feature = "maketestvectors"))]
     pub zero_knowledge_proof_init: ZeroKnowledgeProofInit,
 }
 
 impl InitialProof {
     pub fn as_public_outputs(&self) -> Comm0PublicOutputs {
         Comm0PublicOutputs {
-            T_0: GenericPoint::new(self.t_0.compress()),
-            phi_2: GenericPoint::new(self.phi_2.compress()),
+            T_0: GenericPoint::new(point_to_bytes(&self.t_0)),
+            phi_2: GenericPoint::new(point_to_bytes(&self.phi_2)),
             enc_2: big_int_to_generic(&self.enc_2).unwrap(),
             S_0: GenericPoint::new(self.s_0.to_bytes()),
             c: GenericScalar::new(self.challenge_bytes),
@@ -1364,14 +1324,16 @@ pub fn generate_initial_proofs(
     kes_public_key: &Point,
     blinding_dleq: &BigUint,
 ) -> Result<InitialProof, BBError> {
-    let bb_version = get_bb_version()?;
-    info!("`bb` version: {}", bb_version);
+    #[cfg(not(feature = "maketestvectors"))]
+    {
+        let bb_version = get_bb_version()?;
+        info!("`bb` version: {}", bb_version);
 
-    let nargo_version = get_nargo_version()?;
-    info!("`nargo` version: {}", nargo_version);
+        let nargo_version = get_nargo_version()?;
+        info!("`nargo` version: {}", nargo_version);
+    }
 
     let (witness_0, t_0, s_0) = make_witness0(nonce_peer, blinding)?;
-
     let (fi_2, enc_2) = encrypt_message_ecdh(&witness_0, r_2, kes_public_key, None)?;
 
     //NIZK DLEQ
@@ -1407,66 +1369,80 @@ pub fn generate_initial_proofs(
         }
     };
 
-    //Prove
-    let zero_knowledge_proof_init = bb_prove_init(
-        blinding,
-        blinding_dleq,
-        &challenge_bytes,
-        &enc_2,
-        nonce_peer,
-        r_2,
-        &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
-        &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-        &response_baby_jub_jub,
-        &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-        &witness_0,
-        &t_0,
-        &fi_2,
-        kes_public_key,
-    )?;
+    #[cfg(feature = "maketestvectors")]
+    {
+        Ok(InitialProof {
+            t_0,
+            phi_2: fi_2,
+            enc_2,
+            s_0,
+            rho_bjj: response_baby_jub_jub,
+            rho_ed: response_ed25519,
+            r1,
+            r2,
 
-    //Verify
-    let public_init = PublicInit::new(
-        &t_0,
-        &fi_2,
-        &enc_2,
-        &s_0,
-        &challenge_bytes,
-        &response_baby_jub_jub,
-        &response_ed25519,
-        &r1,
-        &r2,
-    );
-
-    let verification_key = load_vk(get_target_path(), "vk_init")?;
-
-    let verification = bb_verify_init(
-        nonce_peer,
-        kes_public_key,
-        &public_init,
-        &verification_key,
-        &zero_knowledge_proof_init,
-    )?;
-    if !verification {
-        return Err(BBError::SelfVerify);
+            challenge_bytes,
+            witness_0,
+            response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+        })
     }
+    #[cfg(not(feature = "maketestvectors"))]
+    {
+        //Prove
+        let zero_knowledge_proof_init = bb_prove_init(
+            blinding,
+            blinding_dleq,
+            &challenge_bytes,
+            &enc_2,
+            nonce_peer,
+            r_2,
+            &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+            &left_pad_bytes_32_vec(&response_baby_jub_jub.to_bytes_be()),
+            &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
+            &witness_0,
+            &t_0,
+            &fi_2,
+            kes_public_key,
+        )?;
 
-    Ok(InitialProof {
-        t_0,
-        phi_2: fi_2,
-        enc_2,
-        s_0,
-        rho_bjj: response_baby_jub_jub,
-        rho_ed: response_ed25519,
-        r1,
-        r2,
+        //Verify
+        let public_init = PublicInit::new(
+            &t_0,
+            &challenge_bytes,
+        );
 
-        challenge_bytes,
-        witness_0,
-        response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
-        response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-        zero_knowledge_proof_init,
-    })
+        let verification_key = load_vk(get_target_path(), "vk_init")?;
+
+        let verification = bb_verify_init(
+            nonce_peer,
+            kes_public_key,
+            &public_init,
+            &verification_key,
+            &zero_knowledge_proof_init,
+        )?;
+        if !verification {
+            return Err(BBError::SelfVerify);
+        }
+
+        Ok(InitialProof {
+            t_0,
+            phi_2: fi_2,
+            enc_2,
+            s_0,
+            rho_bjj: response_baby_jub_jub,
+            rho_ed: response_ed25519,
+            r1,
+            r2,
+
+            challenge_bytes,
+            witness_0,
+            response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+            zero_knowledge_proof_init,
+        })
+    }
 }
 
 pub struct UpdateProof {
@@ -1489,6 +1465,7 @@ pub struct UpdateProof {
     pub witness_i: BigUint,
     pub response_div_baby_jub_jub: [u8; 32],
     pub response_div_ed25519: [u8; 32],
+    #[cfg(not(feature = "maketestvectors"))]
     pub zero_knowledge_proof_update: ZeroKnowledgeProofUpdate,
 }
 
@@ -1531,53 +1508,68 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
         }
     };
 
-    //Prove
-    let zero_knowledge_proof_update = bb_prove_update(
-        blinding_dleq,
-        &challenge_bytes,
-        &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
-        &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-        &response_baby_jub_jub,
-        &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-        &witness_i,
-        witness_im1,
-        &t_i,
-        t_im1,
-    )?;
+    #[cfg(feature = "maketestvectors")]
+    {
+        Ok(UpdateProof {
+            t_current: t_i,
+            s_current: s_i,
+            challenge: BigUint::from_bytes_be(&challenge_bytes),
+            rho_bjj: response_baby_jub_jub,
+            rho_ed: response_ed25519,
+            r_bjj: r1,
+            r_ed: r2,
 
-    //Verify
-    let public_update = PublicUpdate::new(
-        t_im1,
-        &t_i,
-        &s_i,
-        &challenge_bytes,
-        &response_div_baby_jub_jub,
-        &response_div_ed25519,
-        &r1,
-        &r2,
-    );
-
-    let verification_key = load_vk(get_target_path(), "vk_update")?;
-    let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &verification_key)?;
-    if !verification {
-        return Err(BBError::SelfVerify);
+            challenge_bytes,
+            witness_i,
+            response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+        })
     }
+    #[cfg(not(feature = "maketestvectors"))]
+    {
+        //Prove
+        let zero_knowledge_proof_update = bb_prove_update(
+            blinding_dleq,
+            &challenge_bytes,
+            &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+            &left_pad_bytes_32_vec(&response_baby_jub_jub.to_bytes_be()),
+            &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
+            &witness_i,
+            witness_im1,
+            &t_i,
+            t_im1,
+        )?;
 
-    Ok(UpdateProof {
-        t_current: t_i,
-        s_current: s_i,
-        challenge: BigUint::from_bytes_be(&challenge_bytes),
-        rho_bjj: response_baby_jub_jub,
-        rho_ed: response_ed25519,
-        r_bjj: r1,
-        r_ed: r2,
+        //Verify
+        let public_update = PublicUpdate::new(
+            t_im1,
+            &t_i,
+            &challenge_bytes,
+        );
 
-        challenge_bytes,
-        witness_i,
-        response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
-        response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-        zero_knowledge_proof_update,
-    })
+        let verification_key = load_vk(get_target_path(), "vk_update")?;
+        let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &verification_key)?;
+        if !verification {
+            return Err(BBError::SelfVerify);
+        }
+
+        Ok(UpdateProof {
+            t_current: t_i,
+            s_current: s_i,
+            challenge: BigUint::from_bytes_be(&challenge_bytes),
+            rho_bjj: response_baby_jub_jub,
+            rho_ed: response_ed25519,
+            r_bjj: r1,
+            r_ed: r2,
+
+            challenge_bytes,
+            witness_i,
+            response_div_baby_jub_jub: left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+            response_div_ed25519: left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+            zero_knowledge_proof_update,
+        })
+    }
 }
 
 //TESTS
@@ -1586,15 +1578,16 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
 mod test {
     use super::*;
     use num_bigint::BigUint;
+    use rand_core::OsRng;
     use serial_test::serial;
 
     #[test]
     fn test_generate_dleqproof_simple() {
-        let mut rng = &mut rand::rng();
+        let mut rng = &mut OsRng;
 
         for _i in 0..100 {
-            let nonce_peer = make_scalar_bjj(rng);
-            let blinding = make_scalar_bjj(rng);
+            let nonce_peer = make_scalar_bjj(&mut rng);
+            let blinding = make_scalar_bjj(&mut rng);
 
             let (witness_i, t_i, s_i) = make_witness0(&nonce_peer, &blinding).unwrap();
 
@@ -1625,7 +1618,7 @@ mod test {
 
     #[test]
     fn test_not_verify_dleq_simple() {
-        let mut rng = &mut rand::rng();
+        let mut rng = &mut OsRng;
 
         for _i in 0..100 {
             let nonce_peer_i = make_scalar_bjj(rng);
@@ -1751,71 +1744,65 @@ mod test {
     fn test_bb_prove_init() {
         env_logger::try_init().ok();
 
-        let rng = &mut rand::rng();
+        let mut rng = &mut OsRng;
 
-        let nonce_peer: BigUint = make_scalar_bjj(rng);
-        let blinding = make_scalar_bjj(rng);
+        for _i in 0..2 {
+            let nonce_peer: BigUint = make_scalar_bjj(&mut rng);
+            let blinding = make_scalar_bjj(&mut rng);
 
-        let (witness_0, t_0, s_0) = make_witness0(&nonce_peer, &blinding).unwrap();
+            let (witness_0, t_0, _s_0) = make_witness0(&nonce_peer, &blinding).unwrap();
 
-        let r_2 = make_scalar_bjj(rng);
-        let (_, kes_public_key) = make_keypair_bjj(rng);
-        let (fi_2, enc_2) = encrypt_message_ecdh(&witness_0, &r_2, &kes_public_key, None).unwrap();
+            let r_2 = make_scalar_bjj(&mut rng);
+            let (_, kes_public_key) = make_keypair_bjj(&mut rng);
+            let (fi_2, enc_2) = encrypt_message_ecdh(&witness_0, &r_2, &kes_public_key, None).unwrap();
 
-        let blinding_dleq = make_scalar_bjj(rng);
+            let blinding_dleq = make_scalar_bjj(&mut rng);
+            let (
+                challenge_bytes,
+                response_baby_jub_jub,
+                response_ed25519,
+                _r1,
+                _r2,
+                response_div_baby_jub_jub,
+                response_div_ed25519,
+            ) = generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
 
-        let (
-            challenge_bytes,
-            response_baby_jub_jub,
-            response_ed25519,
-            r1,
-            r2,
-            response_div_baby_jub_jub,
-            response_div_ed25519,
-        ) = generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
+            let zero_knowledge_proof_init = bb_prove_init(
+                &blinding,
+                &blinding_dleq,
+                &challenge_bytes,
+                &enc_2,
+                &nonce_peer,
+                &r_2,
+                &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+                &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+                &left_pad_bytes_32_vec(&response_baby_jub_jub.to_bytes_be()),
+                &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
+                &witness_0,
+                &t_0,
+                &fi_2,
+                &kes_public_key,
+            )
+            .unwrap();
 
-        let zero_knowledge_proof_init = bb_prove_init(
-            &blinding,
-            &blinding_dleq,
-            &challenge_bytes,
-            &enc_2,
-            &nonce_peer,
-            &r_2,
-            &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
-            &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-            &response_baby_jub_jub,
-            &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-            &witness_0,
-            &t_0,
-            &fi_2,
-            &kes_public_key,
-        )
-        .unwrap();
+            //Verify
+            let public_init = PublicInit::new(
+                &t_0,
+                &challenge_bytes,
+            );
 
-        //Verify
-        let public_init = PublicInit::new(
-            &t_0,
-            &fi_2,
-            &enc_2,
-            &s_0,
-            &challenge_bytes,
-            &response_baby_jub_jub,
-            &response_ed25519,
-            &r1,
-            &r2,
-        );
+            let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
 
-        let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
-
-        let verification = bb_verify_init(
-            &nonce_peer,
-            &kes_public_key,
-            &public_init,
-            &verification_key,
-            &zero_knowledge_proof_init,
-        )
-        .unwrap();
-        assert!(verification);
+            let verification = bb_verify_init(
+                &nonce_peer,
+                &kes_public_key,
+                &public_init,
+                &verification_key,
+                &zero_knowledge_proof_init,
+            )
+            .unwrap();
+            assert!(verification);
+        }
     }
 
     #[test]
@@ -1823,55 +1810,52 @@ mod test {
     fn test_bb_prove_update() {
         env_logger::try_init().ok();
 
-        let mut rng = &mut rand::rng();
+        let mut rng = &mut OsRng;
 
-        let nonce_peer = make_scalar_bjj(rng);
-        let blinding = make_scalar_bjj(rng);
+        for _i in 0..2 {
+            let nonce_peer: BigUint = make_scalar_bjj(rng);
+            let blinding = make_scalar_bjj(rng);
 
-        let (witness_im1, t_im1, _) = make_witness0(&nonce_peer, &blinding).unwrap();
-        let (witness_i, t_i, s_i) = make_vcof(&witness_im1).unwrap();
+            let (witness_im1, t_im1, _) = make_witness0(&nonce_peer, &blinding).unwrap();
+            let (witness_i, t_i, _s_i) = make_vcof(&witness_im1).unwrap();
 
-        let blinding_dleq: BigUint = make_scalar_bjj(&mut rng);
-        let (
-            challenge_bytes,
-            response_baby_jub_jub,
-            response_ed25519,
-            r1,
-            r2,
-            response_div_baby_jub_jub,
-            response_div_ed25519,
-        ) = generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
+            let blinding_dleq: BigUint = make_scalar_bjj(&mut rng);
+            let (
+                challenge_bytes,
+                response_baby_jub_jub,
+                response_ed25519,
+                _r1,
+                _r2,
+                response_div_baby_jub_jub,
+                response_div_ed25519,
+            ) = generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
 
-        //Prove
-        let zero_knowledge_proof_update = bb_prove_update(
-            &blinding_dleq,
-            &challenge_bytes,
-            &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
-            &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-            &response_baby_jub_jub,
-            &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
-            &witness_i,
-            &witness_im1,
-            &t_i,
-            &t_im1,
-        )
-        .unwrap();
+            //Prove
+            let zero_knowledge_proof_update = bb_prove_update(
+                &blinding_dleq,
+                &challenge_bytes,
+                &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
+                &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
+                &left_pad_bytes_32_vec(&response_baby_jub_jub.to_bytes_be()),
+                &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
+                &witness_i,
+                &witness_im1,
+                &t_i,
+                &t_im1,
+            )
+            .unwrap();
 
-        //Verify
-        let public_update = PublicUpdate::new(
-            &t_im1,
-            &t_i,
-            &s_i,
-            &challenge_bytes,
-            &response_div_baby_jub_jub,
-            &response_div_ed25519,
-            &r1,
-            &r2,
-        );
+            //Verify
+            let public_update = PublicUpdate::new(
+                &t_im1,
+                &t_i,
+                &challenge_bytes,
+            );
 
-        let vk = load_vk(get_target_path(), "vk_update").unwrap();
-        let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &vk).unwrap();
-        assert!(verification);
+            let vk = load_vk(get_target_path(), "vk_update").unwrap();
+            let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &vk).unwrap();
+            assert!(verification);
+        }
     }
 
     #[test]
@@ -1885,18 +1869,12 @@ mod test {
         let nargo_version = get_nargo_version().unwrap();
         info!("`nargo` version: {}", nargo_version);
 
-        // nonce_peer = "867303429418806279313526868407228138995734763278095857482747693606556032536"
-        // blinding = "1194608745245961475824979247056446722984763446987071492294235640987034156744"
-        // witness_0 = "2300713427460276953780870141649614997452366291219964647997231433928304383861"
-        // [T_0]
-        //   x="0x0ef59b243ee8819f82a6da86c875508d0e786c7453ef791beae4fcf0ae88c933"
-        //   y="0x2a8a23239d91f7c2ff94c2b094bb91ff6751c03b76fd69a8770186628753ad4f"
         let nonce_peer = BigUint::parse_bytes(
             b"867303429418806279313526868407228138995734763278095857482747693606556032536",
             10,
         )
         .unwrap();
-        assert!(nonce_peer <= *SUBORDER_BJJ);
+        assert!(&nonce_peer <= &SUBORDER_BJJ_BIGUINT);
 
         let blinding = BigUint::parse_bytes(
             b"1194608745245961475824979247056446722984763446987071492294235640987034156744",
@@ -1909,29 +1887,26 @@ mod test {
         assert_eq!(
             witness_0,
             BigUint::parse_bytes(
-                b"2300713427460276953780870141649614997452366291219964647997231433928304383861",
+                b"1641277564912917825708788362642108002877411766125138698584831295891232246967",
                 10
             )
             .unwrap()
         );
         assert_eq!(
             t_0.x.to_string(),
-            "Fr(0x0ef59b243ee8819f82a6da86c875508d0e786c7453ef791beae4fcf0ae88c933)"
+            "14450068113773940583388459911490979875432178389915574843494767940456544917139"
         );
         assert_eq!(
             t_0.y.to_string(),
-            "Fr(0x2a8a23239d91f7c2ff94c2b094bb91ff6751c03b76fd69a8770186628753ad4f)"
+            "19078973933737039771338378370858972023867471889410879949100288461488154252637"
         );
 
-        // r_2 = "2044680745167638013838014513951032949701446715960700123553928808460151041757"
         let r_2: BigUint = BigUint::parse_bytes(
             b"2044680745167638013838014513951032949701446715960700123553928808460151041757",
             10,
         )
         .unwrap();
-        // [pubkey_KES]
-        //   x="0x12f87860325f2ba2d84d9332a0bedc25edd93736776e818d8993a1da678958bf"
-        //   y="0x105900362a575a29943602c90d432768f271ffb8f06af513dcd81d05c3a2c4a3"
+
         let private_key_kes: BigUint = BigUint::parse_bytes(b"1", 10).unwrap();
         let kes_public_key = get_scalar_to_point_bjj(&private_key_kes);
 
@@ -1939,27 +1914,19 @@ mod test {
 
         assert_eq!(
             fi_2.x.to_string(),
-            "Fr(0x0ac31edd3af81f177137239a950c8f70662c4b6fbbeec57dae63bfcb61d931ee)"
+            "4867876680213250146765979036602092029037284450083278065984610819983409754606"
         );
         assert_eq!(
             fi_2.y.to_string(),
-            "Fr(0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0)"
+            "11516142927705346575827303874596179168187359360743815133283802867828848701424"
         );
 
         //NIZK DLEQ
-        //witness_0 = "2300713427460276953780870141649614997452366291219964647997231433928304383861"
-        //blinding_DLEQ = "2124419834422738134599198304606394937234744825834207315619962749021962198236"
         let blinding_dleq: BigUint = BigUint::parse_bytes(
             b"2124419834422738134599198304606394937234744825834207315619962749021962198236",
             10,
         )
         .unwrap();
-
-        // challenge_bytes = ["70", "175", "116", "95", "222", "182", "167", "46", "250", "55", "224", "163", "151", "38", "249", "118", "164", "60", "161", "13", "51", "180", "44", "130", "88", "112", "39", "95", "199", "211", "205", "170"]
-        // response_div_BabyJubJub = ["59", "112", "95", "49", "212", "50", "147", "95", "65", "212", "106", "163", "115", "202", "43", "9", "237", "146", "95", "42", "154", "192", "240", "97", "48", "16", "62", "89", "208", "218", "231", "122"]
-        // response_div_ed25519 = ["22", "120", "183", "234", "225", "42", "119", "48", "136", "156", "27", "246", "45", "74", "146", "179", "21", "185", "166", "143", "57", "60", "44", "4", "13", "124", "185", "146", "8", "243", "13", "71"]
-        // response_BabyJubJub = "1211850493455143960510207598095808109935776728332172864532400139827493102076"
-        // response_ed25519 = ["3", "121", "103", "121", "181", "67", "31", "235", "146", "100", "96", "34", "64", "223", "93", "249", "211", "176", "61", "162", "126", "47", "95", "136", "157", "106", "192", "62", "33", "72", "152", "27"]
 
         let (
             challenge_bytes_init,
@@ -1970,12 +1937,6 @@ mod test {
             response_div_baby_jub_jub,
             response_div_ed25519,
         ) = generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
-
-        // assert_eq!(challenge_bytes, BigUint::parse_bytes(b"", 10).unwrap());
-        // assert_eq!(response_div_BabyJubJub, BigUint::parse_bytes(b"", 10).unwrap());
-        // assert_eq!(response_div_ed25519, BigUint::parse_bytes(b"", 10).unwrap());
-        // assert_eq!(response_BabyJubJub, BigUint::parse_bytes(b"1211850493455143960510207598095808109935776728332172864532400139827493102076", 10).unwrap());
-        // assert_eq!(response_ed25519, BigUint::parse_bytes(b"", 10).unwrap());
 
         //Verify
         {
@@ -2014,7 +1975,7 @@ mod test {
             &r_2,
             &left_pad_bytes_32_vec(&response_div_baby_jub_jub.to_bytes_be()),
             &left_pad_bytes_32_vec(&response_div_ed25519.to_bytes_be()),
-            &response_baby_jub_jub,
+            &left_pad_bytes_32_vec(&response_baby_jub_jub.to_bytes_be()),
             &left_pad_bytes_32_vec(&response_ed25519.to_bytes_be()),
             &witness_0,
             &t_0,
@@ -2026,14 +1987,7 @@ mod test {
         //Verify
         let public_init = PublicInit::new(
             &t_0,
-            &fi_2,
-            &enc_2,
-            &s_0,
             &challenge_bytes_init,
-            &response_baby_jub_jub,
-            &response_ed25519,
-            &r1,
-            &r2,
         );
 
         let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
@@ -2048,43 +2002,31 @@ mod test {
         .unwrap();
         assert!(verification);
 
-        //witness_i = "1012694528770316483559205215366203370757356884565651608309268621249697619247"
-        // [T_i]
-        //   x="0x1801440d7cc296b99d80ddbf15bdb5ae311bb2f95bce3baa58a6fae05554d4d5"
-        //   y="0x030d84e498313c8dec9339118da693fff141cc5db8c3773daaf1980cb7b3d654"
         let (witness_1, t_1, s_1) = make_vcof(&witness_0).unwrap();
 
         assert_eq!(
             witness_1,
             BigUint::parse_bytes(
-                b"1012694528770316483559205215366203370757356884565651608309268621249697619247",
+                b"2542565359332739393386535773546851681128013840933173478493548509739475950871",
                 10
             )
             .unwrap()
         );
         assert_eq!(
             t_1.x.to_string(),
-            "Fr(0x1801440d7cc296b99d80ddbf15bdb5ae311bb2f95bce3baa58a6fae05554d4d5)"
+            "12947437405384725438522923763688779387282816624454234223533435140245598235432"
         );
         assert_eq!(
             t_1.y.to_string(),
-            "Fr(0x030d84e498313c8dec9339118da693fff141cc5db8c3773daaf1980cb7b3d654)"
+            "16962643985947481840836796020753542433832727977592060835396468049666700964585"
         );
 
         //NIZK DLEQ
-        //witness_i = "1012694528770316483559205215366203370757356884565651608309268621249697619247"
-        //blinding_DLEQ = "2725795056938475204625712545454751566443431544642757859965717362752762117487"
         let blinding_dleq_1: BigUint = BigUint::parse_bytes(
             b"2725795056938475204625712545454751566443431544642757859965717362752762117487",
             10,
         )
         .unwrap();
-
-        // challenge_bytes = ["173", "177", "148", "180", "137", "70", "241", "143", "132", "241", "114", "212", "56", "49", "45", "192", "249", "176", "190", "143", "43", "192", "90", "61", "171", "183", "234", "227", "149", "245", "14", "127"]
-        // response_div_BabyJubJub = ["64", "74", "43", "78", "21", "50", "143", "116", "56", "136", "47", "130", "159", "25", "232", "118", "110", "84", "144", "7", "93", "93", "99", "123", "21", "7", "21", "76", "4", "5", "135", "150"]
-        // response_div_ed25519 = ["24", "78", "49", "150", "2", "128", "248", "182", "216", "15", "56", "209", "152", "115", "125", "71", "219", "162", "159", "226", "115", "116", "208", "211", "176", "90", "239", "55", "108", "6", "182", "60"]
-        // response_BabyJubJub = "665215325844649228417070916130511037968741095567000659557494451588541621932"
-        // response_ed25519 = ["14", "254", "72", "212", "229", "12", "54", "141", "103", "181", "191", "236", "63", "129", "185", "181", "85", "56", "102", "106", "13", "21", "59", "225", "113", "165", "17", "187", "121", "239", "101", "86"]
 
         let (
             challenge_bytes_update,
@@ -2095,19 +2037,6 @@ mod test {
             response_div_baby_jub_jub_update,
             response_div_ed25519_update,
         ) = generate_dleqproof_simple(&witness_1, &blinding_dleq_1).unwrap();
-
-        // assert_eq!(challenge_bytes_1, BigUint::parse_bytes(b"", 10).unwrap());
-        // assert_eq!(response_div_BabyJubJub_1, BigUint::parse_bytes(b"", 10).unwrap());
-        // assert_eq!(response_div_ed25519_1, BigUint::parse_bytes(b"", 10).unwrap());
-        // assert_eq!(
-        //     response_baby_jub_jub_update,
-        //     BigUint::parse_bytes(
-        //         b"665215325844649228417070916130511037968741095567000659557494451588541621932",
-        //         10
-        //     )
-        //     .unwrap()
-        // );
-        // assert_eq!(response_ed25519_1, BigUint::parse_bytes(b"", 10).unwrap());
 
         //Verify
         {
@@ -2142,7 +2071,7 @@ mod test {
             &challenge_bytes_update,
             &left_pad_bytes_32_vec(&response_div_baby_jub_jub_update.to_bytes_be()),
             &left_pad_bytes_32_vec(&response_div_ed25519_update.to_bytes_be()),
-            &response_baby_jub_jub_update,
+            &left_pad_bytes_32_vec(&response_baby_jub_jub_update.to_bytes_be()),
             &left_pad_bytes_32_vec(&response_ed25519_update.to_bytes_be()),
             &witness_1,
             &witness_0,
@@ -2155,12 +2084,7 @@ mod test {
         let public_update = PublicUpdate::new(
             &t_0,
             &t_1,
-            &s_1,
             &challenge_bytes_update,
-            &response_div_baby_jub_jub_update,
-            &response_div_ed25519_update,
-            &r1_update,
-            &r2_update,
         );
 
         let vk = load_vk(get_target_path(), "vk_update").unwrap();

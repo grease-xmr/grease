@@ -43,7 +43,9 @@ pub trait Dleq<C: Curve>: Curve {
 
     /// Generate a new set of scalars (x, y) such that they are equivalent on both curves, in a sense that they stem
     /// from the same binary representation. Returns the proof and the scalars (x, y).
-    fn generate_dleq<R: RngCore + CryptoRng>(
+    fn generate_dleq<
+        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
+    >(
         rng: &mut R,
     ) -> Result<(Self::Proof, (XmrScalar, <C as Ciphersuite>::F)), DleqError>;
 
@@ -58,9 +60,13 @@ pub trait Dleq<C: Curve>: Curve {
 impl Dleq<Ed25519> for Ed25519 {
     type Proof = EdSchnorrSignature;
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Ed25519>, DleqError> {
+    fn generate_dleq<
+        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
+    >(
+        rng: &mut R,
+    ) -> Result<DleqResult<Ed25519>, DleqError> {
         let secret = XmrScalar::random(&mut *rng);
-        let nonce = <Ed25519 as Ciphersuite>::random_nonzero_F(rng);
+        let nonce = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut *rng);
         let nonce_pub = Ed25519::generator() * nonce;
         let public_point = Ed25519::generator() * secret;
         let challenge = ownership_challenge(&nonce_pub, &public_point);
@@ -107,7 +113,9 @@ impl Writable for DleqMoneroBjj {
 impl Dleq<BabyJubJub> for Ed25519 {
     type Proof = DleqMoneroBjj;
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<BabyJubJub>, DleqError> {
+    fn generate_dleq<R: k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng>(
+        rng: &mut R,
+    ) -> Result<DleqResult<BabyJubJub>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
         let mut nonce = Zeroizing::new([0u8; 64]);
         rng.fill_bytes(nonce.as_mut_slice());
@@ -157,7 +165,9 @@ impl Writable for DleqMoneroBitcoin {
 
 impl Dleq<Secp256k1> for Ed25519 {
     type Proof = DleqMoneroBitcoin;
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Secp256k1>, DleqError> {
+    fn generate_dleq<R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore>(
+        rng: &mut R,
+    ) -> Result<DleqResult<Secp256k1>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
         let mut nonce = Zeroizing::new([0u8; 64]);
         rng.fill_bytes(nonce.as_mut_slice());

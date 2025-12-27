@@ -22,7 +22,9 @@ pub trait AdapterSignatureHandler: HasRole {
     }
 
     /// Generate a new adapter signature using the current secret key and offset.
-    fn new_adapter_signature<R: RngCore + CryptoRng>(
+    fn new_adapter_signature<
+        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
+    >(
         &self,
         secret_key: &Curve25519Secret,
         update_count: u64,
