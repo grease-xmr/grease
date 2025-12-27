@@ -1,7 +1,6 @@
 //! Implements traits to make BabyJubJub compatible with Serai's `CipherSuite`
 
 use crate::{BjjConfig, Fr, constants::*};
-use num_bigint::BigUint;
 use ark_ec::CurveConfig;
 use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
 use ark_serialize::CanonicalSerialize;
@@ -9,6 +8,7 @@ use ark_std::UniformRand;
 use ark_std::rand::RngCore;
 use group::ff::helpers::sqrt_ratio_generic;
 use group::ff::{Field as SeraiField, FieldBits, PrimeField as SeraiPrimeField, PrimeFieldBits};
+use num_bigint::BigUint;
 use std::io::Cursor;
 use std::iter::{Product, Sum};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -38,7 +38,7 @@ impl From<&BigUint> for Scalar {
 
 impl From<Scalar> for BigUint {
     fn from(value: Scalar) -> Self {
-        value.into()
+        value.0.into()
     }
 }
 

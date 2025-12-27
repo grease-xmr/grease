@@ -7,16 +7,20 @@ use edwards::Curve;
 use edwards::CurveTrait;
 use edwards::ScalarField;
 use std::field::bn254::assert_lt;
-use std::hash::blake2s;
+use std::hash::poseidon2_permutation;
 use std::ops::Mul;
 
 // This is the constant for VerifyWitness0 hashing
-pub global HASH_HEADER_CONSTANT_INIT_0: Field = 1; //TODO: Create a domain-separation constant
-pub global HASH_HEADER_CONSTANT_INIT_1: Field = 1; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_INIT_0: Field = 0; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_INIT_1: Field = 0; //TODO: Create a domain-separation constant
 
 // This is the constant for VCOF hashing
-pub global HASH_HEADER_CONSTANT_UPDATE_0: Field = 1; //TODO: Create a domain-separation constant
-pub global HASH_HEADER_CONSTANT_UPDATE_1: Field = 1; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_UPDATE_0: Field = 0; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_UPDATE_1: Field = 0; //TODO: Create a domain-separation constant
+
+// This is the constant for ECDH hashing
+pub global HASH_HEADER_CONSTANT_ECDH_0: Field = 0; //TODO: Create a domain-separation constant
+pub global HASH_HEADER_CONSTANT_ECDH_1: Field = 0; //TODO: Create a domain-separation constant
 
 // Generator point of Baby Jubjub curve.
 // ref: https://github.com/noir-lang/noir-edwards/blob/main/src/test.nr#L6C8-L6C13
@@ -69,16 +73,11 @@ pub fn VerifyEncryptMessage_ECDH(
 
     // Shared secret = H(r * pubkey)
     let rP = pubkey.mul(r_scalar);
-    let rP_x: [u8; 32] = rP.x.to_be_bytes();
-    let rP_y: [u8; 32] = rP.y.to_be_bytes();
-    let pre_image_slice: [u8] = rP_x.as_slice().append(rP_y);
-    let pre_image_array: [u8; 64] = pre_image_slice.as_array();
-    let hash_bytes: [u8; 32] = blake2s(pre_image_array);
-    let hash_bytes_slice: [u8] = hash_bytes.as_slice();
-    // U256 from_be_bytes expects 32 bytes + 1 byte for potential overflow
-    // We add a leading 0u8 since our data won't use the full 256-bit range and is ignored in the modulo
-    let hash_bytes_33: [u8] = &[0].append(hash_bytes_slice);
-    let hash_bignum: U256 = U256::from_be_bytes(hash_bytes_33.as_array());
+
+    let input: [Field; 4] = [HASH_HEADER_CONSTANT_ECDH_0, rP.x, rP.y, HASH_HEADER_CONSTANT_ECDH_1];
+    let output: [Field; 4] = poseidon2_permutation(input, input.len());
+    let hash = output[0];
+    let hash_bignum: U256 = U256::from(hash);
 
     //Clamp to Baby Jubjub order
     let l_bignum: U256 = U256::from(BABY_JUBJUB_ORDER);
@@ -112,7 +111,7 @@ pub fn VerifyEquivalentModulo(
     blinding_DLEQ: Field,
     witness_i: Field,
     response_div_BabyJubJub: [u8; 32],
-    response_BabyJubJub: Field,
+    response_BabyJubJub: [u8; 32],
     response_div_ed25519: [u8; 32],
     response_ed25519: [u8; 32],
 ) {
@@ -137,7 +136,10 @@ pub fn VerifyEquivalentModulo(
     let response_div_BabyJubJub_bignum: U512 =
         U512::from_be_bytes(response_div_BabyJubJub_bytes_65.as_array());
 
-    let response_BabyJubJub_bignum: U512 = U512::from(response_BabyJubJub);
+    let response_BabyJubJub_bytes_65: [u8] = &[0; 33].append(response_BabyJubJub.as_slice());
+    let response_BabyJubJub_bignum: U512 =
+        U512::from_be_bytes(response_BabyJubJub_bytes_65.as_array());
+
     let response_calc_BabyJubJub =
         l_bignum.mul(response_div_BabyJubJub_bignum) + response_BabyJubJub_bignum;
     assert_eq(response_calc_BabyJubJub, response_calc);

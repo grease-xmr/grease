@@ -1,30 +1,29 @@
-use crate::{ED25519_ORDER};
-use grease_babyjubjub::{Point, Scalar};
+use ark_bn254::Fr;
 use curve25519_dalek::constants::X25519_BASEPOINT;
-use curve25519_dalek::{MontgomeryPoint,Scalar as MontgomeryScalar};
-// use ff_ce::Field;
-use libgrease::cryptography::zk_objects::GenericScalar;
-use num_bigint::{BigInt, BigUint};
-use num_traits::Euclid;
-use poseidon_rs::Fr;
-use rand::{CryptoRng };
-use serde::{Deserialize, Deserializer, Serialize};
-use std::path::Path;
-use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use grease_babyjubjub::SUBORDER_BJJ;
-use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
+use curve25519_dalek::{MontgomeryPoint, Scalar as MontgomeryScalar};
+use elliptic_curve::group::GroupEncoding;
+use elliptic_curve::rand_core::RngCore;
 use elliptic_curve::Field as ECField;
-use elliptic_curve::rand_core::RngCore as RngCore;
+use grease_babyjubjub::SUBORDER_BJJ;
+use grease_babyjubjub::{BjjPoint, Fq, Point, Scalar};
+use libgrease::cryptography::zk_objects::GenericScalar;
+use num_bigint::BigUint;
+use num_traits::{Euclid, Num};
+use rand::CryptoRng;
 use rand_core::CryptoRngCore;
+use serde::{Deserialize, Deserializer, Serialize};
+use std::ops::{Mul, Neg};
+use std::path::Path;
+use std::str::FromStr;
 
-pub fn init_public_to_hex<S>(bytes: &[u8; 1184], s: S) -> Result<S::Ok, S::Error>
+pub(crate) fn init_public_to_hex<S>(bytes: &[u8; 1184], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     hex::encode(*bytes).serialize(s)
 }
 
-pub fn init_public_from_hex<'de, D>(de: D) -> Result<[u8; 1184], D::Error>
+pub(crate) fn init_public_from_hex<'de, D>(de: D) -> Result<[u8; 1184], D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -46,14 +45,14 @@ where
     Ok(result)
 }
 
-pub fn update_public_to_hex<S>(bytes: &[u8; 1152], s: S) -> Result<S::Ok, S::Error>
+pub(crate) fn update_public_to_hex<S>(bytes: &[u8; 1152], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     hex::encode(*bytes).serialize(s)
 }
 
-pub fn update_public_from_hex<'de, D>(de: D) -> Result<[u8; 1152], D::Error>
+pub(crate) fn update_public_from_hex<'de, D>(de: D) -> Result<[u8; 1152], D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -75,14 +74,14 @@ where
     Ok(result)
 }
 
-pub fn proof_to_hex<S>(proof: &[u8; 16256], s: S) -> Result<S::Ok, S::Error>
+pub(crate) fn proof_to_hex<S>(proof: &[u8; 16256], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     hex::encode(*proof).serialize(s)
 }
 
-pub fn proof_from_hex<'de, D>(de: D) -> Result<Box<[u8; 16256]>, D::Error>
+pub(crate) fn proof_from_hex<'de, D>(de: D) -> Result<Box<[u8; 16256]>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -122,42 +121,64 @@ pub(crate) fn left_pad_bytes_32_vec(input: &[u8]) -> [u8; 32] {
     result[offset..].copy_from_slice(input);
     result
 }
-pub fn right_pad_bytes_32(input: &[u8]) -> [u8; 32] {
+pub(crate) fn right_pad_bytes_32(input: &[u8]) -> [u8; 32] {
     assert!(input.len() <= 32, "Input length exceeds target length");
 
     let mut result = [0u8; 32];
     result[..input.len()].copy_from_slice(input);
     result
 }
-pub fn point_negate(point: Point) -> Point {
-    // // The negative of a point (x, y) on Baby Jubjub is (-x, y)
-    // let mut negative_x: Fr = *BABY_JUBJUB_PRIME;
-    // negative_x.sub_assign(&point.x);
-
-    // Point { x: negative_x, y: point.y }
+pub(crate) fn point_negate(point: Point) -> Point {
     point.neg()
 }
-pub fn get_field_bytes(field: &Fr) -> [u8; 32] {
-    //Fr(0x1975e7e9cbe0f2ed7a06a09e320036ea1a73862ee2614d2a9a6452d8f7c9aff0)
 
+pub(crate) fn point_to_bytes(point: &Point) -> [u8; 32] {
+    (BjjPoint::from(point.clone())).to_bytes()
+}
+
+pub(crate) fn get_big_uint_from_fr(field: &ark_bn254::Fr) -> BigUint {
     let field_object: String = field.to_string();
     assert!(
-        field_object.len() == 70,
+        field_object.len() <= 77,
         "get_field_bytes: field is not correctly self-describing"
-    );
+    ); //TODO: Confirm this is correct for MAX(Fr) in BJJ
 
-    // Decode hex string to bytes
-    let substring = &field_object[5..69];
-    let bytes = hex::decode(substring).map_err(|_| "Invalid hex string").unwrap();
-
-    bytes.try_into().unwrap()
+    BigUint::from_str_radix(&field_object, 10).unwrap()
 }
-pub fn get_scalar_to_point_bjj(scalar: &BigUint) -> Point {
-    // assert!(*scalar < *BABY_JUBJUB_ORDER);
 
-    // let scalar_i: BigInt = scalar.clone().into();
+pub(crate) fn get_fr_from_big_uint(field: &BigUint) -> Fr {
+    Fr::from_str(&field.to_str_radix(10)).unwrap()
+}
 
-    // B8.mul_scalar(&scalar_i)
+// pub(crate) fn get_field_bytes_fr(field: &Fr) -> [u8; 32] {
+//     let field_object: String = field.to_string();
+//     assert!(
+//         field_object.len() <= 77,
+//         "get_field_bytes: field is not correctly self-describing"
+//     ); //TODO: Confirm this is correct for MAX(Fr) in BJJ
+
+//     BigUint::from_str_radix(&field_object, 10).unwrap().to_bytes_be().try_into().unwrap_or([0u8; 32])
+// }
+pub(crate) fn get_field_bytes(field: &Fq) -> [u8; 32] {
+    let field_object: String = field.to_string();
+    assert!(
+        field_object.len() <= 77,
+        "get_field_bytes: field is not correctly self-describing"
+    ); //TODO: Confirm this is correct for MAX(Fq) in BJJ
+
+    BigUint::from_str_radix(&field_object, 10).unwrap().to_bytes_be().try_into().unwrap_or([0u8; 32])
+}
+pub(crate) fn get_fr_from_fq(field: &Fq) -> Fr {
+    let field_object: String = field.to_string();
+    assert!(
+        field_object.len() <= 77,
+        "get_field_bytes: field is not correctly self-describing"
+    ); //TODO: Confirm this is correct for MAX(Fq) in BJJ
+
+    Fr::from_str(&field_object).unwrap()
+}
+
+pub(crate) fn get_scalar_to_point_bjj(scalar: &BigUint) -> Point {
     let bjj_gen = grease_babyjubjub::generators();
     bjj_gen[0].mul(Scalar::from(scalar)).into()
 }
@@ -172,7 +193,7 @@ pub(crate) fn get_scalar_to_point_ed25519(scalar_big_uint: &BigUint) -> Montgome
     let point: MontgomeryPoint = scalar * X25519_BASEPOINT;
     point
 }
-pub fn multiply_point_by_scalar_ed25519(point: &MontgomeryPoint, scalar_big_uint: &BigUint) -> MontgomeryPoint {
+pub(crate) fn multiply_point_by_scalar_ed25519(point: &MontgomeryPoint, scalar_big_uint: &BigUint) -> MontgomeryPoint {
     // Convert the 32-byte array to an Ed25519 Scalar
     let scalar_bytes_be = scalar_big_uint.to_bytes_be();
     let mut scalar_bytes_le = scalar_bytes_be.clone();
@@ -189,7 +210,7 @@ pub enum MontgomeryPointSigns {
     NP,
     NN,
 }
-pub fn subtract_montgomery_points(
+pub(crate) fn subtract_montgomery_points(
     point1: MontgomeryPoint,
     point2: MontgomeryPoint,
     sign: MontgomeryPointSigns,
@@ -218,70 +239,45 @@ pub fn byte_array_to_string_array(bytes: &[u8; 32]) -> [String; 32] {
     array
 }
 
-pub fn make_scalar_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> BigUint {
-    // let mut secret_bytes = [0u8; 32];
-    // rng.fill_bytes(&mut secret_bytes);
-    // let scalar: BigUint = BigUint::from_bytes_be(&secret_bytes);
-    // let scalar: BigUint = scalar.rem_euclid(&BABY_JUBJUB_ORDER);
-    // scalar
+pub(crate) fn make_scalar_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> BigUint {
     Scalar::random(rng).into()
 }
 
-pub fn make_keypair_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, Point) {
-    // let mut secret_bytes = [0u8; 32];
-    // rng.fill_bytes(&mut secret_bytes);
-    // let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
-    // let secret_key: BigUint = secret_key.rem_euclid(&BABY_JUBJUB_ORDER);
+pub(crate) fn make_keypair_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, Point) {
     let secret_key = Scalar::random(rng);
-    // let public_key: Point = get_scalar_to_point_bjj(&secret_key.into());
     let bjj_gen = grease_babyjubjub::generators();
 
     (secret_key.into(), bjj_gen[0].mul(secret_key).into())
 }
 
-pub fn make_scalar_ed25519<R: CryptoRngCore + ?Sized>(rng: &mut R) -> BigUint {
-    // let mut secret_bytes = [0u8; 32];
-    // rng.fill_bytes(&mut secret_bytes);
-    // let scalar: BigUint = BigUint::from_bytes_be(&secret_bytes);
-    // let scalar: BigUint = scalar.rem_euclid(&ED25519_ORDER);
-    // scalar
+pub(crate) fn make_scalar_ed25519<R: CryptoRngCore + ?Sized>(rng: &mut R) -> BigUint {
     let scalar = MontgomeryScalar::random(rng);
     BigUint::from_bytes_le(&scalar.to_bytes())
 }
 
-pub fn make_keypair_ed25519<R: CryptoRngCore + ?Sized>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
-    // let mut secret_bytes = [0u8; 32];
-    // rng.fill_bytes(&mut secret_bytes);
-    // let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
-    // let secret_key: BigUint = secret_key.rem_euclid(&ED25519_ORDER);
-    // let public_key = get_scalar_to_point_ed25519(&secret_key);
+pub(crate) fn make_keypair_ed25519<R: CryptoRngCore + ?Sized>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
     let secret_key: MontgomeryScalar = MontgomeryScalar::random(rng);
     let public_key: MontgomeryPoint = secret_key * X25519_BASEPOINT;
 
     (BigUint::from_bytes_le(&secret_key.to_bytes()), public_key)
 }
 
-pub fn make_keypair_ed25519_bjj_order<R: CryptoRngCore + ?Sized>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
-    // let mut secret_bytes = [0u8; 32];
-    // rng.fill_bytes(&mut secret_bytes);
-    // let secret_key: BigUint = BigUint::from_bytes_be(&secret_bytes);
-    // let secret_key: BigUint = secret_key.rem_euclid(&SUBORDER_BJJ);
-    // let public_key = get_scalar_to_point_ed25519(&secret_key);
-    // (secret_key, public_key)
+pub(crate) fn make_keypair_ed25519_bjj_order<R: CryptoRngCore + ?Sized>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
     let secret_key: MontgomeryScalar = MontgomeryScalar::random(rng);
     let secret_key = BigUint::from_bytes_le(&secret_key.to_bytes()).rem_euclid(&SUBORDER_BJJ.into());
-    let secret_key_scalar: MontgomeryScalar = MontgomeryScalar::from_bytes_mod_order(right_pad_bytes_32(&secret_key.to_bytes_le()));
+    let secret_key_scalar: MontgomeryScalar =
+        MontgomeryScalar::from_bytes_mod_order(right_pad_bytes_32(&secret_key.to_bytes_le()));
 
     let public_key: MontgomeryPoint = secret_key_scalar * X25519_BASEPOINT;
 
     (secret_key, public_key)
 }
 
-pub fn load_vk<P: AsRef<Path>>(working_dir: P, vk_path: &str) -> Result<Vec<u8>, std::io::Error> {
+pub(crate) fn load_vk<P: AsRef<Path>>(working_dir: P, vk_path: &str) -> Result<Vec<u8>, std::io::Error> {
     std::fs::read(working_dir.as_ref().join(vk_path).join("vk"))
 }
 
-pub fn big_int_to_generic(i: &BigUint) -> Result<GenericScalar, String> {
+pub(crate) fn big_int_to_generic(i: &BigUint) -> Result<GenericScalar, String> {
     let arr = i.to_bytes_le();
     if arr.len() > 32 {
         return Err("big_int_to_generic: input too large".to_string());

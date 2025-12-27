@@ -109,5 +109,5 @@ bb verify -v -k ./target/vk_update/vk -p ./target/proof_update/proof -i ./target
 
 | Stage      | Gates      | Proof size |
 | :--------- | :--------- | :--------- |
-| init       | 32 637     | 16 256 B    |
-| update     | 17 416     | 16 256 B    |
+| init       | 11 156     | 16 256 B    |
+| update     | 8 616      | 16 256 B    |

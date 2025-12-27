@@ -4,7 +4,7 @@ use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
 use modular_frost::sign::Writable;
 use paste::paste;
-use rand_core::{CryptoRng, CryptoRngCore, RngCore};
+use rand_core::{CryptoRng, RngCore};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -60,10 +60,17 @@ impl<C: Ciphersuite> SchnorrSignature<C> {
     /// The returned signature signs a challenge bound to $R$ and $P = k\cdot G$, such that if we knew $q, Q = q\cdot G$
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
     #[expect(non_snake_case)]
-    pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, msg: B, rng: &mut R) -> Self {
-        let mut nonce = C::F::random(rng.as_rngcore());
+    pub fn sign<
+        B: AsRef<[u8]>,
+        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
+    >(
+        secret: &C::F,
+        msg: B,
+        rng: &mut R,
+    ) -> Self {
+        let mut nonce = C::F::random(&mut *rng);
         while nonce == C::F::ZERO {
-            nonce = C::F::random(rng.as_rngcore());
+            nonce = C::F::random(&mut *rng);
         }
         let R = C::generator() * nonce;
         let pubkey = C::generator() * secret;
@@ -102,10 +109,18 @@ impl<C: Ciphersuite> AdaptedSignature<C> {
     /// The returned signature signs a challenge bound to $R$ and $P = k\cdot G$, such that if we knew $q, Q = q\cdot G$
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
     #[expect(non_snake_case)]
-    pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, payload: &C::F, msg: B, rng: &mut R) -> Self {
-        let mut nonce = C::F::random(rng.as_rngcore());
+    pub fn sign<
+        B: AsRef<[u8]>,
+        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
+    >(
+        secret: &C::F,
+        payload: &C::F,
+        msg: B,
+        rng: &mut R,
+    ) -> Self {
+        let mut nonce = C::F::random(&mut *rng);
         while nonce == C::F::ZERO {
-            nonce = C::F::random(rng.as_rngcore());
+            nonce = C::F::random(&mut *rng);
         }
         let pubkey = C::generator() * secret;
         let R = C::generator() * nonce;
