@@ -36,7 +36,9 @@ static PROOF_SIZE_INIT_HEX: usize = PROOF_SIZE_INIT * 2usize;
 static PROOF_SIZE_UPDATE: usize = 16256usize;
 static PROOF_SIZE_UPDATE_HEX: usize = PROOF_SIZE_UPDATE * 2usize;
 static PUBLIC_INPUT_SIZE_INIT: usize = 1184usize;
+static PUBLIC_INPUT_SIZE_INIT_HEX: usize = PUBLIC_INPUT_SIZE_INIT * 2usize;
 static PUBLIC_INPUT_SIZE_UPDATE: usize = 1152usize;
+static PUBLIC_INPUT_SIZE_UPDATE_HEX: usize = PUBLIC_INPUT_SIZE_UPDATE * 2usize;
 
 #[derive(Error, Debug)]
 pub enum BBError {
@@ -830,7 +832,7 @@ pub struct ZeroKnowledgeProofUpdate {
         serialize_with = "crate::helpers::update_proof_to_hex",
         deserialize_with = "crate::helpers::update_proof_from_hex"
     )]
-    pub proof: Box<[u8; PROOF_SIZE_INIT]>,
+    pub proof: Box<[u8; PROOF_SIZE_UPDATE]>,
 }
 
 pub(crate) fn bb_prove_init(
@@ -1180,7 +1182,7 @@ pub(crate) fn bb_prove_update(
         public_input: ZeroKnowledgeProofUpdatePublic::from_vec(public_input)?,
         proof: proof
             .try_into()
-            .map_err(|_| BBError::String("proof must be exactly {PROOF_SIZE_INIT} bytes".to_string()))?,
+            .map_err(|_| BBError::String("proof must be exactly {PROOF_SIZE_UPDATE} bytes".to_string()))?,
     })
 }
 

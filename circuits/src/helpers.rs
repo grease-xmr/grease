@@ -1,19 +1,22 @@
 use crate::{
     PROOF_SIZE_INIT, PROOF_SIZE_INIT_HEX, PROOF_SIZE_UPDATE, PROOF_SIZE_UPDATE_HEX, PUBLIC_INPUT_SIZE_INIT,
-    PUBLIC_INPUT_SIZE_UPDATE,
+    PUBLIC_INPUT_SIZE_INIT_HEX, PUBLIC_INPUT_SIZE_UPDATE, PUBLIC_INPUT_SIZE_UPDATE_HEX,
 };
 use ark_bn254::Fr;
 use curve25519_dalek::constants::X25519_BASEPOINT;
 use curve25519_dalek::{MontgomeryPoint, Scalar as MontgomeryScalar};
 use elliptic_curve::group::GroupEncoding;
+#[cfg(test)]
 use elliptic_curve::rand_core::RngCore;
+#[cfg(test)]
 use elliptic_curve::Field as ECField;
-use grease_babyjubjub::SUBORDER_BJJ;
 use grease_babyjubjub::{BjjPoint, Fq, Point, Scalar};
 use libgrease::cryptography::zk_objects::GenericScalar;
 use num_bigint::BigUint;
-use num_traits::{Euclid, Num};
+use num_traits::Num;
+#[cfg(test)]
 use rand::CryptoRng;
+#[cfg(test)]
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::ops::{Mul, Neg};
@@ -35,7 +38,7 @@ where
     if hex_str.is_empty() {
         return Err(serde::de::Error::custom("Hex string must not be empty"));
     }
-    if hex_str.len() != PROOF_SIZE_INIT_HEX {
+    if hex_str.len() != PUBLIC_INPUT_SIZE_INIT_HEX {
         return Err(serde::de::Error::custom("Invalid hex string length for public"));
     }
     // Ensure the hex string can be decoded into a PUBLIC_INPUT_SIZE_INIT-byte array
@@ -64,7 +67,7 @@ where
     if hex_str.is_empty() {
         return Err(serde::de::Error::custom("Hex string must not be empty"));
     }
-    if hex_str.len() != PROOF_SIZE_UPDATE {
+    if hex_str.len() != PUBLIC_INPUT_SIZE_UPDATE_HEX {
         return Err(serde::de::Error::custom("Invalid hex string length for public"));
     }
     // Ensure the hex string can be decoded into a PUBLIC_INPUT_SIZE_UPDATE-byte array
@@ -264,38 +267,17 @@ pub fn byte_array_to_string_array(bytes: &[u8; 32]) -> [String; 32] {
     array
 }
 
+#[cfg(test)]
 pub(crate) fn make_scalar_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> BigUint {
     Scalar::random(rng).into()
 }
 
+#[cfg(test)]
 pub(crate) fn make_keypair_bjj<R: CryptoRng + RngCore>(rng: &mut R) -> (BigUint, Point) {
     let secret_key = Scalar::random(rng);
     let bjj_gen = grease_babyjubjub::generators();
 
     (secret_key.into(), bjj_gen[0].mul(secret_key).into())
-}
-
-pub(crate) fn make_scalar_ed25519<R: CryptoRngCore + ?Sized>(rng: &mut R) -> BigUint {
-    let scalar = MontgomeryScalar::random(rng);
-    BigUint::from_bytes_le(&scalar.to_bytes())
-}
-
-pub(crate) fn make_keypair_ed25519<R: CryptoRngCore + ?Sized>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
-    let secret_key: MontgomeryScalar = MontgomeryScalar::random(rng);
-    let public_key: MontgomeryPoint = secret_key * X25519_BASEPOINT;
-
-    (BigUint::from_bytes_le(&secret_key.to_bytes()), public_key)
-}
-
-pub(crate) fn make_keypair_ed25519_bjj_order<R: CryptoRngCore + ?Sized>(rng: &mut R) -> (BigUint, MontgomeryPoint) {
-    let secret_key: MontgomeryScalar = MontgomeryScalar::random(rng);
-    let secret_key = BigUint::from_bytes_le(&secret_key.to_bytes()).rem_euclid(&SUBORDER_BJJ.into());
-    let secret_key_scalar: MontgomeryScalar =
-        MontgomeryScalar::from_bytes_mod_order(right_pad_bytes_32(&secret_key.to_bytes_le()));
-
-    let public_key: MontgomeryPoint = secret_key_scalar * X25519_BASEPOINT;
-
-    (secret_key, public_key)
 }
 
 pub(crate) fn load_vk<P: AsRef<Path>>(working_dir: P, vk_path: &str) -> Result<Vec<u8>, std::io::Error> {
