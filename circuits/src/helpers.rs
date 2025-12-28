@@ -23,6 +23,9 @@ use std::ops::{Mul, Neg};
 use std::path::Path;
 use std::str::FromStr;
 
+// Max decimal digits for Fr field element: ceil(log10(2^254)) + 1 ≈ 77
+const MAX_FR_DECIMAL_LEN: usize = 77;
+
 pub(crate) fn init_public_to_hex<S>(bytes: &[u8; PUBLIC_INPUT_SIZE_INIT], s: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -175,9 +178,9 @@ pub(crate) fn point_to_bytes(point: &Point) -> [u8; 32] {
 pub(crate) fn get_big_uint_from_fr(field: &ark_bn254::Fr) -> BigUint {
     let field_object: String = field.to_string();
     assert!(
-        field_object.len() <= 77,
-        "get_field_bytes: field is not correctly self-describing"
-    ); //TODO: Confirm this is correct for MAX(Fr) in BJJ
+        field_object.len() <= MAX_FR_DECIMAL_LEN,
+        "get_big_uint_from_fr: field is not correctly self-describing"
+    );
 
     BigUint::from_str_radix(&field_object, 10).unwrap()
 }
@@ -200,7 +203,7 @@ pub(crate) fn get_fr_from_fq(field: &Fq) -> Fr {
     let field_object: String = field.to_string();
     assert!(
         field_object.len() <= 77,
-        "get_field_bytes: field is not correctly self-describing"
+        "get_fr_from_fq: field is not correctly self-describing"
     ); //TODO: Confirm this is correct for MAX(Fq) in BJJ
 
     Fr::from_str(&field_object).unwrap()

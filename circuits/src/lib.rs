@@ -979,7 +979,7 @@ pub(crate) fn bb_prove_init(
         public_input: ZeroKnowledgeProofInitPublic::from_vec(public_input)?,
         proof: proof
             .try_into()
-            .map_err(|_| BBError::String("proof must be exactly {PROOF_SIZE_INIT} bytes".to_string()))?,
+            .map_err(|_| BBError::String(format!("proof must be exactly {} bytes", PROOF_SIZE_INIT)))?,
     })
 }
 
@@ -1182,7 +1182,7 @@ pub(crate) fn bb_prove_update(
         public_input: ZeroKnowledgeProofUpdatePublic::from_vec(public_input)?,
         proof: proof
             .try_into()
-            .map_err(|_| BBError::String("proof must be exactly {PROOF_SIZE_UPDATE} bytes".to_string()))?,
+            .map_err(|_| BBError::String(format!("proof must be exactly {} bytes", PROOF_SIZE_UPDATE)))?,
     })
 }
 
@@ -1192,49 +1192,21 @@ pub(crate) fn bb_prove_update(
 pub struct PublicInit {
     /// **Τ₀** - The public key/curve point on Baby Jubjub for ω₀.
     pub T_0: Point,
-    /// **Φ₂** - The ephemeral public key/curve point on Baby Jubjub for message transportation to the KES.
-    pub phi_2: Point,
-    /// **χ₂** - The encrypted value of σ₂ (enc₂).
-    pub enc_2: BigUint,
-    /// **S₀** - The public key/curve point on Ed25519 for ω₀.
-    pub S_0: MontgomeryPoint,
     /// **c** - The Fiat–Shamir heuristic challenge (challenge_bytes).
     pub c: BigUint,
-    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (response_BabyJubJub).
-    pub rho_bjj: BigUint,
-    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (response_div_ed25519).
-    pub rho_ed: BigUint,
-    /// **R_BabyJubjub** - The ... on the Baby Jubjub curve (R1).
-    pub R1: Point,
-    /// **R_Ed25519** - The ... on the Ed25519 curve (R2).
-    pub R2: MontgomeryPoint,
 }
 
 #[expect(non_snake_case)]
 impl PublicInit {
     pub fn new(
         T_0: &Point,
-        phi_2: &Point,
-        enc_2: &BigUint,
-        S_0: &MontgomeryPoint,
         challenge_bytes: &[u8; 32],
-        rho_bjj: &BigUint,
-        rho_ed: &BigUint,
-        R1: &Point,
-        R2: &MontgomeryPoint,
     ) -> Self {
         let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
 
         PublicInit {
             T_0: T_0.clone(),
-            phi_2: phi_2.clone(),
-            enc_2: enc_2.clone(),
-            S_0: *S_0,
             c: challenge,
-            rho_bjj: rho_bjj.clone(),
-            rho_ed: rho_ed.clone(),
-            R1: R1.clone(),
-            R2: *R2,
         }
     }
 }
@@ -1247,18 +1219,8 @@ pub struct PublicUpdate {
     pub T_prev: Point,
     /// **Τ_i** - The public key/curve point on Baby Jubjub for ω_i.
     pub T_current: Point,
-    /// **S_i** - The public key/curve point on Ed25519 for ω_i.
-    pub S_current: MontgomeryPoint,
     /// **C** - The Fiat–Shamir heuristic challenge (`challenge_bytes`).
     pub challenge: BigUint,
-    /// **ρ_BabyJubjub** - The Fiat–Shamir heuristic challenge response on the Baby Jubjub curve (`response_BabyJubJub`).
-    pub rho_bjj: BigUint,
-    /// **ρ_Ed25519** - The Fiat–Shamir heuristic challenge response on the Ed25519 curve (`response_div_ed25519`).
-    pub rho_ed: BigUint,
-    /// **R_BabyJubjub** - DLEQ commitment 1, which is a public key/curve point on Baby Jubjub (`R_1`).
-    pub R_bjj: Point,
-    /// **R_Ed25519** - DLEQ commitment 2, which is a public key/curve point on Ed25519 (`R_2`).
-    pub R_ed: MontgomeryPoint,
 }
 
 #[expect(non_snake_case)]
@@ -1266,24 +1228,14 @@ impl PublicUpdate {
     pub fn new(
         T_prev: &Point,
         T_current: &Point,
-        S_current: &MontgomeryPoint,
         challenge_bytes: &[u8; 32],
-        rho_bjj: &BigUint,
-        rho_ed: &BigUint,
-        R_bjj: &Point,
-        R_ed: &MontgomeryPoint,
     ) -> Self {
         let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
 
         PublicUpdate {
             T_prev: T_prev.clone(),
             T_current: T_current.clone(),
-            S_current: *S_current,
             challenge,
-            rho_bjj: rho_bjj.clone(),
-            rho_ed: rho_ed.clone(),
-            R_bjj: R_bjj.clone(),
-            R_ed: *R_ed,
         }
     }
 }
@@ -1464,14 +1416,7 @@ pub fn generate_initial_proofs(
         //Verify
         let public_init = PublicInit::new(
             &t_0,
-            &fi_2,
-            &enc_2,
-            &s_0,
             &challenge_bytes,
-            &response_baby_jub_jub,
-            &response_ed25519,
-            &r1,
-            &r2,
         );
 
         let verification_key = load_vk(get_target_path(), "vk_init")?;
@@ -1606,12 +1551,7 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
         let public_update = PublicUpdate::new(
             t_im1,
             &t_i,
-            &s_i,
             &challenge_bytes,
-            &response_div_baby_jub_jub,
-            &response_div_ed25519,
-            &r1,
-            &r2,
         );
 
         let verification_key = load_vk(get_target_path(), "vk_update")?;
@@ -1816,7 +1756,7 @@ mod test {
             let nonce_peer: BigUint = make_scalar_bjj(&mut rng);
             let blinding = make_scalar_bjj(&mut rng);
 
-            let (witness_0, t_0, s_0) = make_witness0(&nonce_peer, &blinding).unwrap();
+            let (witness_0, t_0, _s_0) = make_witness0(&nonce_peer, &blinding).unwrap();
 
             let r_2 = make_scalar_bjj(&mut rng);
             let (_, kes_public_key) = make_keypair_bjj(&mut rng);
@@ -1827,8 +1767,8 @@ mod test {
                 challenge_bytes,
                 response_baby_jub_jub,
                 response_ed25519,
-                r1,
-                r2,
+                _r1,
+                _r2,
                 response_div_baby_jub_jub,
                 response_div_ed25519,
             ) = generate_dleqproof_simple(&witness_0, &blinding_dleq).unwrap();
@@ -1854,14 +1794,7 @@ mod test {
             //Verify
             let public_init = PublicInit::new(
                 &t_0,
-                &fi_2,
-                &enc_2,
-                &s_0,
                 &challenge_bytes,
-                &response_baby_jub_jub,
-                &response_ed25519,
-                &r1,
-                &r2,
             );
 
             let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
@@ -1890,15 +1823,15 @@ mod test {
             let blinding = make_scalar_bjj(rng);
 
             let (witness_im1, t_im1, _) = make_witness0(&nonce_peer, &blinding).unwrap();
-            let (witness_i, t_i, s_i) = make_vcof(&witness_im1).unwrap();
+            let (witness_i, t_i, _s_i) = make_vcof(&witness_im1).unwrap();
 
             let blinding_dleq: BigUint = make_scalar_bjj(&mut rng);
             let (
                 challenge_bytes,
                 response_baby_jub_jub,
                 response_ed25519,
-                r1,
-                r2,
+                _r1,
+                _r2,
                 response_div_baby_jub_jub,
                 response_div_ed25519,
             ) = generate_dleqproof_simple(&witness_i, &blinding_dleq).unwrap();
@@ -1922,12 +1855,7 @@ mod test {
             let public_update = PublicUpdate::new(
                 &t_im1,
                 &t_i,
-                &s_i,
                 &challenge_bytes,
-                &response_div_baby_jub_jub,
-                &response_div_ed25519,
-                &r1,
-                &r2,
             );
 
             let vk = load_vk(get_target_path(), "vk_update").unwrap();
@@ -2065,14 +1993,7 @@ mod test {
         //Verify
         let public_init = PublicInit::new(
             &t_0,
-            &fi_2,
-            &enc_2,
-            &s_0,
             &challenge_bytes_init,
-            &response_baby_jub_jub,
-            &response_ed25519,
-            &r1,
-            &r2,
         );
 
         let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
@@ -2169,12 +2090,7 @@ mod test {
         let public_update = PublicUpdate::new(
             &t_0,
             &t_1,
-            &s_1,
             &challenge_bytes_update,
-            &response_div_baby_jub_jub_update,
-            &response_div_ed25519_update,
-            &r1_update,
-            &r2_update,
         );
 
         let vk = load_vk(get_target_path(), "vk_update").unwrap();
