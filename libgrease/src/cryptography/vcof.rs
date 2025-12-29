@@ -1,12 +1,12 @@
+use crate::grease_protocol::utils::Readable;
 use ciphersuite::Ciphersuite;
 use modular_frost::sign::Writable;
 use thiserror::Error;
 use zeroize::Zeroizing;
-use crate::grease_protocol::utils::Readable;
 
 pub trait VerifiableConsecutiveOnewayFunction<C>
 where
-    C: Ciphersuite
+    C: Ciphersuite,
 {
     type Proof: Writable + Readable + VcofProof<C>;
 
@@ -25,7 +25,7 @@ where
     /// If the proof and next value are computed atomically, you can override the default implementation, and make
     /// [`compute_next`] and [`create_proof`] no-ops.
     /// Otherwise, you need to implement [`compute_next`] and [`create_proof`] accordingly.
-    fn next(&self, input: &VcofOutput<C, Self::Proof>) -> Result<VcofOutput<C, Self::Proof>,VcofError> {
+    fn next(&self, input: &VcofOutput<C, Self::Proof>) -> Result<VcofOutput<C, Self::Proof>, VcofError> {
         let next = Zeroizing::new(self.compute_next(input)?);
         let next_pub = C::generator() * *next;
         let proof = self.create_proof(input)?;
@@ -42,7 +42,7 @@ where
 
 pub trait VcofProof<C>
 where
-    C: Ciphersuite
+    C: Ciphersuite,
 {
     /// Verify that `next` is the valid consecutive output of applying the VCOF to `input` using this proof.
     fn verify(&self, input: &C::G, next: &C::G) -> Result<(), VcofError>;

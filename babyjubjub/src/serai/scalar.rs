@@ -8,6 +8,7 @@ use ark_std::UniformRand;
 use ark_std::rand::RngCore;
 use group::ff::helpers::sqrt_ratio_generic;
 use group::ff::{Field as SeraiField, FieldBits, PrimeField as SeraiPrimeField, PrimeFieldBits};
+use num_bigint::BigUint;
 use std::io::Cursor;
 use std::iter::{Product, Sum};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -20,6 +21,24 @@ pub struct Scalar(pub <BjjConfig as CurveConfig>::ScalarField);
 impl From<u64> for Scalar {
     fn from(value: u64) -> Self {
         Self(Fr::from(value))
+    }
+}
+
+impl From<BigUint> for Scalar {
+    fn from(value: BigUint) -> Self {
+        Self(Fr::from(value))
+    }
+}
+
+impl From<&BigUint> for Scalar {
+    fn from(value: &BigUint) -> Self {
+        Self(Fr::from(value.clone()))
+    }
+}
+
+impl From<Scalar> for BigUint {
+    fn from(value: Scalar) -> Self {
+        value.0.into()
     }
 }
 
