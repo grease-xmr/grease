@@ -30,7 +30,9 @@ lazy_static! {
         10
     )
     .unwrap();
+    static ref SUBORDER_BJJ_BIGUINT: BigUint = SUBORDER_BJJ.into();
 }
+ 
 static PROOF_SIZE_INIT: usize = 16256usize;
 static PROOF_SIZE_INIT_HEX: usize = PROOF_SIZE_INIT * 2usize;
 static PROOF_SIZE_UPDATE: usize = 16256usize;
@@ -70,8 +72,8 @@ pub(crate) fn make_witness0(
     nonce_peer: &BigUint,
     blinding: &BigUint,
 ) -> Result<(BigUint, Point, MontgomeryPoint), BBError> {
-    assert!(*nonce_peer <= SUBORDER_BJJ.into());
-    assert!(*blinding <= SUBORDER_BJJ.into());
+    assert!(nonce_peer <= &SUBORDER_BJJ_BIGUINT);
+    assert!(blinding <= &SUBORDER_BJJ_BIGUINT);
 
     // Input byte array
     let big_arr: [ark_ff::Fp<ark_ff::MontBackend<ark_bn254::FrConfig, 4>, 4>; 4] =
@@ -85,7 +87,7 @@ pub(crate) fn make_witness0(
     let hash_verify_witness0: BigUint = get_big_uint_from_fr(&hash_verify_witness0);
 
     // Modulo BABY_JUBJUB_ORDER
-    let witness_0 = hash_verify_witness0.rem_euclid(&SUBORDER_BJJ.into());
+    let witness_0 = hash_verify_witness0.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     // BJJ key point
     let t_0: Point = get_scalar_to_point_bjj(&witness_0);
@@ -119,10 +121,10 @@ pub(crate) fn encrypt_message_ecdh(
 
     // Modulo BABY_JUBJUB_ORDER
     let shared_secret: BigUint = get_big_uint_from_fr(&hash_shared_secret_point);
-    let shared_secret = shared_secret.rem_euclid(&SUBORDER_BJJ.into());
+    let shared_secret = shared_secret.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     let cipher: BigUint = message + &shared_secret;
-    let cipher: BigUint = cipher.rem_euclid(&SUBORDER_BJJ.into());
+    let cipher: BigUint = cipher.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     let fi = r_g;
     let enc = cipher;
@@ -171,13 +173,12 @@ pub(crate) fn verify_encrypt_message_ecdh(
     let hash_shared_secret_calc: BigUint = get_big_uint_from_fr(&hash_shared_secret_calc);
 
     // Modulo BABY_JUBJUB_ORDER
-    let suborder_bjj_big_uint: BigUint = SUBORDER_BJJ.into();
-    let shared_secret_calc: BigUint = hash_shared_secret_calc.rem_euclid(&suborder_bjj_big_uint);
+    let shared_secret_calc: BigUint = hash_shared_secret_calc.rem_euclid(&SUBORDER_BJJ_BIGUINT);
     assert_eq!(shared_secret_calc, *shared_secret);
 
-    let share_calc: BigUint = enc + &suborder_bjj_big_uint;
+    let share_calc: BigUint = enc.clone() + SUBORDER_BJJ_BIGUINT.clone();
     let share_calc = share_calc - &shared_secret_calc;
-    let share_calc: BigUint = share_calc.rem_euclid(&suborder_bjj_big_uint);
+    let share_calc: BigUint = share_calc.rem_euclid(&SUBORDER_BJJ_BIGUINT);
     assert_eq!(share_calc, *message);
 
     Ok(())
@@ -185,8 +186,7 @@ pub(crate) fn verify_encrypt_message_ecdh(
 
 //Update/VerifyCOF
 pub(crate) fn make_vcof(witness_im1: &BigUint) -> Result<(BigUint, Point, MontgomeryPoint), BBError> {
-    let suborder_bjj_big_uint: BigUint = SUBORDER_BJJ.into();
-    assert!(*witness_im1 < suborder_bjj_big_uint);
+    assert!(witness_im1 < &SUBORDER_BJJ_BIGUINT);
 
     // Input byte array
     let big_arr: [ark_ff::Fp<ark_ff::MontBackend<ark_bn254::FrConfig, 4>, 4>; 4] =
@@ -200,7 +200,7 @@ pub(crate) fn make_vcof(witness_im1: &BigUint) -> Result<(BigUint, Point, Montgo
     let hash_verify_witnessi: BigUint = get_big_uint_from_fr(&hash_verify_witnessi);
 
     // Modulo BABY_JUBJUB_ORDER
-    let witness_i: BigUint = hash_verify_witnessi.rem_euclid(&suborder_bjj_big_uint);
+    let witness_i: BigUint = hash_verify_witnessi.rem_euclid(&SUBORDER_BJJ_BIGUINT);
 
     // BJJ key point
     let t_i = get_scalar_to_point_bjj(&witness_i);
@@ -214,11 +214,10 @@ pub(crate) fn generate_dleqproof_simple(
     secret: &BigUint,
     blinding_dleq: &BigUint,
 ) -> Result<([u8; 32], BigUint, BigUint, Point, MontgomeryPoint, BigUint, BigUint), BBError> {
-    let suborder_bjj_big_uint: BigUint = SUBORDER_BJJ.into();
     assert!(secret > &BigUint::from(0u8));
-    assert!(*secret <= suborder_bjj_big_uint);
+    assert!(secret <= &SUBORDER_BJJ_BIGUINT);
     assert!(blinding_dleq > &BigUint::from(0u8));
-    assert!(*blinding_dleq <= suborder_bjj_big_uint);
+    assert!(blinding_dleq <= &SUBORDER_BJJ_BIGUINT);
 
     // Compute T = secret * G1 (Baby Jubjub)
     let t: Point = get_scalar_to_point_bjj(secret);
@@ -233,7 +232,6 @@ pub(crate) fn generate_dleqproof_simple(
 
     // Input byte array
     let header: [u8; 32] = [0; 32]; // NIZK_DLEQ HASH_HEADER_CONSTANT
-                                    // let t_bytes = t.compress();
     let t_bytes = point_to_bytes(&t);
     let s_bytes = s.to_bytes();
     let r1_bytes = point_to_bytes(&r1);
@@ -259,14 +257,14 @@ pub(crate) fn generate_dleqproof_simple(
     challenge_bytes.copy_from_slice(&challenge_hash);
 
     // Compute response s = c * secret - blinding_DLEQ
-    let response = challenge_bigint.clone() * secret;
-    if &response <= blinding_dleq {
-        return Err(format!("s must be positive: {},{}", response, blinding_dleq).into());
+    let response_left = challenge_bigint.clone() * secret;
+    if &response_left <= blinding_dleq {
+        return Err(format!("response must be positive: {} - {} !<= 0", response_left, blinding_dleq).into());
     }
-    let response: BigUint = response - blinding_dleq;
+    let response: BigUint = response_left - blinding_dleq;
 
     // Compute response s = (c * secret - blinding_DLEQ) mod BABY_JUBJUB_ORDER
-    let (response_div_baby_jub_jub, response_baby_jub_jub) = response.div_rem_euclid(&suborder_bjj_big_uint);
+    let (response_div_baby_jub_jub, response_baby_jub_jub) = response.div_rem_euclid(&SUBORDER_BJJ_BIGUINT);
     if response_div_baby_jub_jub.bits() > 256u64 {
         return Err(format!("response div BABY_JUBJUB_ORDER too large: {}", response_div_baby_jub_jub).into());
     }
@@ -280,9 +278,9 @@ pub(crate) fn generate_dleqproof_simple(
         //Verify
         let response_baby_jub_jub_g1: Point = get_scalar_to_point_bjj(&response_baby_jub_jub.clone().into());
 
-        let challenge_baby_jub_jub = challenge_bigint.rem_euclid(&suborder_bjj_big_uint);
+        let challenge_baby_jub_jub = challenge_bigint.rem_euclid(&SUBORDER_BJJ_BIGUINT);
         let response_baby_jub_jub_g1_calc = get_scalar_to_point_bjj(
-            &((challenge_baby_jub_jub.clone() * secret) - blinding_dleq).rem_euclid(&suborder_bjj_big_uint).into(),
+            &((challenge_baby_jub_jub.clone() * secret) - blinding_dleq).rem_euclid(&SUBORDER_BJJ_BIGUINT).into(),
         );
         assert_eq!(response_baby_jub_jub_g1_calc.x, response_baby_jub_jub_g1.x);
         assert_eq!(response_baby_jub_jub_g1_calc.y, response_baby_jub_jub_g1.y);
@@ -291,7 +289,7 @@ pub(crate) fn generate_dleqproof_simple(
         let c_t: Point = t_bjj_point.mul(&challenge_baby_jub_jub.clone().into()).into();
 
         let c_t_calc =
-            get_scalar_to_point_bjj(&(challenge_baby_jub_jub * secret).rem_euclid(&suborder_bjj_big_uint).into());
+            get_scalar_to_point_bjj(&(challenge_baby_jub_jub * secret).rem_euclid(&SUBORDER_BJJ_BIGUINT).into());
         assert_eq!(c_t_calc.x, c_t.x);
         assert_eq!(c_t_calc.y, c_t.y);
 
@@ -345,8 +343,6 @@ pub fn verify_dleq_simple(
     r1: &Point,
     r2: &MontgomeryPoint,
 ) -> Result<bool, BBError> {
-    let suborder_bjj_big_uint: BigUint = SUBORDER_BJJ.into();
-
     // Input byte array
     let header: [u8; 32] = [0; 32]; // NIZK_DLEQ HASH_HEADER_CONSTANT
     let t_bytes = point_to_bytes(t);
@@ -380,7 +376,7 @@ pub fn verify_dleq_simple(
     //Verify: r.G == c.x.G - (c*x-r).G => R == c.T - z.G
     //        R1 == challenge_BabyJubJub.T - response_BabyJubJub_g1.G
     let response_baby_jub_jub_g1: Point = get_scalar_to_point_bjj(&response_baby_jub_jub.clone().into());
-    let challenge_baby_jub_jub: BigUint = challenge_bigint.rem_euclid(&suborder_bjj_big_uint);
+    let challenge_baby_jub_jub: BigUint = challenge_bigint.rem_euclid(&SUBORDER_BJJ_BIGUINT);
     let t_bjj_point: BjjPoint = (*t).into();
     let challenge_baby_jub_jub_t: Point = t_bjj_point.mul(Scalar::from(&challenge_baby_jub_jub)).into();
 
@@ -1880,7 +1876,7 @@ mod test {
             10,
         )
         .unwrap();
-        assert!(nonce_peer <= SUBORDER_BJJ.into());
+        assert!(&nonce_peer <= &SUBORDER_BJJ_BIGUINT);
 
         let blinding = BigUint::parse_bytes(
             b"1194608745245961475824979247056446722984763446987071492294235640987034156744",
