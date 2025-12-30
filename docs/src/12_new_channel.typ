@@ -1,3 +1,5 @@
+#import "metadata/nomenclature.typ":*
+
 == New Channel
 
 A new channel is established when a Merchant shares some initialization data with a Customer
@@ -11,7 +13,7 @@ There are *three* half-rounds of communication in this phase#footnote([See `serv
     - Contact information for the merchant
     - Channel seed metadata. This includes metadata so that both merchant and customer can uniquely identify the
       channel throughout the channel's lifetime. This includes:
-        - an id for the channel
+        - a local name for the channel
         - The merchant's closing address
         - The requested initial balances
         - The merchant's id
@@ -21,3 +23,17 @@ There are *three* half-rounds of communication in this phase#footnote([See `serv
 3. Accepting the proposal from Merchant to Customer
 
 #include "../diagrams/new_channel_sequence.md"
+
+=== Channel Id <channelId>
+
+The channel id is a 64 character hexadecimal string that uniquely identifies the channel.
+
+It is derived from as the first *32 bytes* of the *Blake2b-512* hash of the following transcript represented in hexadecimal format:
+- The merchant public key, #Pm, 32 bytes in little-endian byte order,
+- The customer public key, #Pc, 32 bytes in little-endian byte order,
+- The merchant initial balance in piconero, as a 64-bit unsigned integer in little-endian byte order,
+- The customer initial balance in piconero, as a 64-bit unsigned integer in little-endian byte order,
+- A channel nonce, a 64-bit little-endian unsigned integer as the sum of 
+  - a 32-bit unsigned integer in little-endian byte order, randomly chosen by the customer, and
+  - a 32-bit unsigned integer in little-endian byte order, randomly chosen by the merchant.
+
