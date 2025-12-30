@@ -20,7 +20,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 thiserror = { workspace = true }
 rand = { workspace = true }
 log = { workspace = true }
-zkuh-rs = { git = "https://github.com/grease-xmr/aztec-packages.git", rev = "588cb26402913c1b592d64fa75201e6b2b3ba49f" }
+zkuh-rs = { version = "1.7.0", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "9c6ccfb5720ceebd75fd497c8ea05c404c55d99f" }
 
 [dev-dependencies]
 env_logger = "0.11.8"
