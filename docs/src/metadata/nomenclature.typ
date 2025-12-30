@@ -51,3 +51,30 @@ table(columns: 2, align: (left, left),
 
   )
 }
+
+// Defined in KES.typ
+// master private keys
+#let kk = $k_K$
+#let kc = $k_C$
+#let km = $k_M$
+// master public keys
+#let Pk = $P_K$
+#let Pm = $P_B$
+#let Pc = $P_A$
+
+// shared channel secret
+#let chs = $kappa$
+// kes grease channel secret key
+#let kg = $k_g$
+// kes grease channel public key
+#let Pg = $P_g$
+#let hash(alg, input) = { $H_(#alg)(#input)$ }
+#let H2F(input) = { $H_F (#input)$ }
+#let H2P(input) = { $H_P (#input)$ }
+
+#let w0 = $omega_0$
+#let wn = $omega$
+#let PubWEd(sub) = { $Q_#sub$ }
+#let PubWBjj(sub) = { $T_#sub$ }
+#let DleqP = $Pi$
+#let PokP = $Gamma$

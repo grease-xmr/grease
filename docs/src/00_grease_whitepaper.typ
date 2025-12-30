@@ -17,7 +17,8 @@
   table-index: (enabled: true),
   listing-index: (enabled: true)
 )
-#show link: underline
+//#show link: underline
+#show link: it => { underline(stroke: (paint: blue, dash: "dashed", thickness: 1pt), it.body) + super[#sym.dagger] }
 
 #show raw.where(lang: "mermaid"): it => pintorita.render(it.text)
 
@@ -25,10 +26,13 @@
 #include "10_channel_design.typ"
 #include "12_new_channel.typ"
 #include "14_establishing_channel.typ"
+#include "15_cooperative_close.typ"
 #include "16_channel_dispute.typ"
 #include "20_circuits.typ"
 #include "30_limitations.typ"
+#include "40_kes.typ"
 
+#outline(title: "Table of Algorithms", target: figure.where(kind: "algorithm"))
 
 = Nomenclature
 

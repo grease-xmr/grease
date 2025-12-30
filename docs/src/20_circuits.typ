@@ -117,7 +117,7 @@ During the interactive setup, the peers send each other a nonce, $nu_"peer"$, th
 
 The ZKP protocols prove that the real private keys are used correctly and that if a dispute is necessary, it will succeed.
 
-==== Initialization protocol
+==== Initialization protocol <initProtocol>
 
 The Grease protocol requires the generation and sharing of the ZKPs. The public data and the small proofs are shared
 between peers, then are validated as a means to ensure protocol conformity before *Monet* protocol stage 3 begins.
@@ -216,7 +216,7 @@ For the update stage to begin, the peers must agree upon a small amount of infor
   number since the *Locked Amount* must stay the same.],
 )
 
-==== Update protocol
+==== Update protocol <vcof>
 
 Grease replaces the Monet update protocol completely with the generation and sharing of update ZKPs. The public data
 and the small proofs are shared between peers, then are validated as a means to ensure protocol conformity.

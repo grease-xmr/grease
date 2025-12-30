@@ -77,3 +77,11 @@ jeffro25:
     - jeffro256
   title: "Personal communication: Signature changes post-FCMP"
   date: 2025-06-22
+
+curve25519:
+  type: web
+  title: "Curve25519: new Diffie-Hellman speed records"
+  author:
+    - Daniel J. Bernstein
+  date: 2006-02-09
+  url: https://cr.yp.to/ecdh/curve25519-20060209.pdf
