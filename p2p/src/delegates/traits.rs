@@ -2,7 +2,6 @@
 
 use crate::delegates::error::DelegateError;
 use crate::message_types::NewChannelProposal;
-use crate::Client;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
@@ -13,7 +12,6 @@ use libgrease::cryptography::zk_objects::{
 use libgrease::monero::data_objects::MultisigSplitSecrets;
 use libgrease::state_machine::error::InvalidProposal;
 use std::future::Future;
-use std::time::Duration;
 
 pub trait ProposalVerifier {
     fn verify_proposal(&self, data: &NewChannelProposal) -> impl Future<Output = Result<(), InvalidProposal>> + Send;
@@ -38,21 +36,6 @@ pub trait VerifiableSecretShare {
 }
 
 //--------------------------------------  Funding Transaction handling   -----------------------------------------------
-
-pub trait FundChannel {
-    /// Register a callback to be called when the funding transaction is mined on the blockchain. When a funding
-    /// transaction is detected, call `client.notify_tx_mined(tx_id)` to notify the client.
-    /// TODO: pass just the method (or equivalent) instead of the whole client
-    fn register_watcher(
-        &self,
-        name: String,
-        client: Client,
-        private_view_key: Curve25519Secret,
-        public_spend_key: Curve25519PublicKey,
-        birthday: Option<u64>,
-        poll_interval: Duration,
-    ) -> impl Future<Output = Result<(), DelegateError>> + Send;
-}
 
 //------------------------------   Witness0 generation and verification  -----------------------------------------------
 
@@ -131,7 +114,6 @@ pub trait GreaseChannelDelegate:
     + ChannelClosure
     + ProposalVerifier
     + VerifiableSecretShare
-    + FundChannel
     + KesProver
 {
 }

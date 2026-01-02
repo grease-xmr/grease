@@ -1,14 +1,14 @@
 use crate::behaviour::ConnectionBehavior;
-use crate::errors::{PeerConnectionError, RemoteServerError};
+use crate::errors::RemoteServerError;
+use crate::event_loop::{ClientCommand, PeerConnectionError, RemoteRequest};
 use crate::message_types::{ChannelProposalResult, NewChannelProposal, PrepareUpdate, UpdateCommitted, UpdatePrepared};
-use crate::{ClientCommand, EventLoop, GreaseResponse, PeerConnectionEvent};
+use crate::{GreaseChannelEvents, GreaseRequest, GreaseResponse};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
 use libgrease::cryptography::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
-    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
-    TransactionId, TransactionRecord,
+    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionId,
 };
 use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::identity::Keypair;
@@ -22,7 +22,8 @@ use libp2p::{
 use log::*;
 use std::time::Duration;
 
-pub type PeerConnection = libp2p::Swarm<ConnectionBehavior>;
+pub type GreaseRemoteEvent = RemoteRequest<GreaseRequest, GreaseResponse>;
+
 /// Creates the network components, namely:
 ///
 /// - The network [`Client`] to interact with the event loop from anywhere within your application.
@@ -30,7 +31,7 @@ pub type PeerConnection = libp2p::Swarm<ConnectionBehavior>;
 /// - The main [`EventLoop`] driving the network itself.
 pub fn new_network(
     key: Keypair,
-) -> Result<(Client, impl Stream<Item = PeerConnectionEvent>, EventLoop), PeerConnectionError> {
+) -> Result<(Client, impl Stream<Item = GreaseRemoteEvent>, GreaseChannelEvents), PeerConnectionError> {
     let swarm = libp2p::SwarmBuilder::with_existing_identity(key)
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
@@ -54,7 +55,7 @@ pub fn new_network(
     Ok((
         Client { sender: command_sender },
         event_receiver,
-        EventLoop::new(swarm, command_receiver, event_sender),
+        GreaseChannelEvents::new(swarm, command_receiver, event_sender),
     ))
 }
 
@@ -62,22 +63,33 @@ pub fn new_network(
 /// of peer-to-peer connections.
 #[derive(Clone)]
 pub struct Client {
-    sender: mpsc::Sender<ClientCommand>,
+    sender: mpsc::Sender<ClientCommand<GreaseRequest, GreaseResponse>>,
 }
 
-macro_rules! grease_request {
-    ($name:ident, $command:ident, $request: ty, $response:ty) => {
-        pub async fn $name(
+/// Generates a method for taking a command-type interface, converting it to the appropriate GreaseRequest variant,
+/// dispatching it, and then unwrapping the GreaseResponse variant into the appropriate response type.
+macro_rules! enveloped_command {
+    ($method_name:ident, $req_variant:path, $resp_variant:path, $request_payload: ty, $response_type:ty) => {
+        pub async fn $method_name(
             &mut self,
             peer_id: PeerId,
             channel: &str,
-            req: $request,
-        ) -> Result<Result<MessageEnvelope<$response>, RemoteServerError>, PeerConnectionError> {
-            let (sender, receiver) = oneshot::channel();
+            req: $request_payload,
+        ) -> Result<$response_type, PeerConnectionError> {
             let envelope = MessageEnvelope::new(channel.into(), req);
-            self.sender.send(ClientCommand::$command { peer_id, envelope, sender }).await?;
-            let res = receiver.await?;
-            Ok(res)
+            let request = $req_variant(envelope);
+            let response = self.send_request(peer_id, request).await??;
+            let envelope = match response {
+                $resp_variant(envelope) => envelope,
+                t => {
+                    return Err(PeerConnectionError::unexpected_response(stringify!($resp_variant), t));
+                }
+            };
+            let (return_channel, result) = envelope.open();
+            if return_channel != channel {
+                return Err(PeerConnectionError::unexpected_channel(channel, return_channel));
+            }
+            Ok(result)
         }
     };
 }
@@ -86,11 +98,11 @@ macro_rules! grease_request {
 ///
 /// The majority of the (async) methods in this struct follow the following pattern:
 /// - A one-shot channel is created.
-/// - An [`ClientCommand`] is sent to the [`EventLoop`] via the `sender` channel, containing the one-shot sender half.
+/// - An [`GreaseChannelCommand`] is sent to the [`EventLoop`] via the `sender` channel, containing the one-shot sender half.
 /// - The method waits for the receiver half to receive its value, before returning it.
 ///
 /// **Importantly**, this struct does not do any work.
-/// It simply forwards the [`ClientCommand`]s to the [`EventLoop`] and waits for the results.
+/// It simply forwards the [`GreaseChannelCommand`]s to the [`EventLoop`] and waits for the results.
 impl Client {
     /// Listen for incoming connections on the given address.
     pub async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
@@ -126,47 +138,92 @@ impl Client {
         &mut self,
         data: NewChannelProposal,
     ) -> Result<ChannelProposalResult, PeerConnectionError> {
-        let (sender, receiver) = oneshot::channel();
         let peer_id = data.contact_info_proposee.peer_id;
         trace!("NetworkClient: Sending new channel proposal to peer {peer_id}");
-        self.sender.send(ClientCommand::ProposeChannelRequest { peer_id, data, sender }).await?;
-        let open_result = receiver.await??;
-        Ok(open_result)
+        let req = GreaseRequest::ProposeChannelRequest(data);
+        let open_result = self.send_request(peer_id, req).await??;
+        match open_result {
+            GreaseResponse::ProposeChannelResponse(result) => Ok(result),
+            t => Err(PeerConnectionError::unexpected_response("ProposeChannelResponse", t)),
+        }
     }
 
-    grease_request!(send_multisig_key, MultiSigKeyExchange, MultisigKeyInfo, MultisigKeyInfo);
-    grease_request!(
+    async fn send_request(
+        &mut self,
+        peer_id: PeerId,
+        req: GreaseRequest,
+    ) -> Result<Result<GreaseResponse, RemoteServerError>, PeerConnectionError> {
+        let (sender, receiver) = oneshot::channel();
+        let request = Box::new(req);
+        self.sender.send(ClientCommand::NewRequest { peer_id, request, sender }).await?;
+        let response = receiver.await?;
+        Ok(response)
+    }
+
+    enveloped_command!(
+        send_multisig_key,
+        GreaseRequest::MsKeyExchange,
+        GreaseResponse::MsKeyExchange,
+        MultisigKeyInfo,
+        MultisigKeyInfo
+    );
+    enveloped_command!(
         send_split_secrets,
-        MultiSigSplitSecretsRequest,
+        GreaseRequest::MsSplitSecretExchange,
+        GreaseResponse::MsSplitSecretExchange,
         MultisigSplitSecrets,
         MultisigSplitSecretsResponse
     );
-    grease_request!(send_wallet_confirmation, ConfirmMultiSigAddressRequest, String, bool);
-    grease_request!(send_proof0, ExchangeProof0, PublicProof0, PublicProof0);
-    grease_request!(send_update_preparation, PrepareUpdate, PrepareUpdate, UpdatePrepared);
-    grease_request!(send_update_commitment, CommitUpdate, UpdateCommitted, FinalizedUpdate);
-    grease_request!(send_close_request, ChannelClose, ChannelCloseRecord, ChannelCloseRecord);
-    grease_request!(notify_closing_tx, ClosingTxSent, TransactionId, bool);
-
-    pub async fn wait_for_funding_tx(&mut self, name: &str) -> Result<TransactionRecord, PeerConnectionError> {
-        trace!("⚡️ Waiting for funding transaction for channel {name}");
-        let (sender, receiver) = oneshot::channel();
-        self.sender.send(ClientCommand::WaitForFundingTx { channel: name.to_string(), sender }).await?;
-        let record = receiver.await?;
-        record
-    }
-
-    pub async fn notify_tx_mined(&mut self, tx: TransactionRecord) -> Result<(), PeerConnectionError> {
-        self.sender.send(ClientCommand::NotifyTxMined(tx)).await?;
-        Ok(())
-    }
+    enveloped_command!(
+        send_wallet_confirmation,
+        GreaseRequest::ConfirmMsAddress,
+        GreaseResponse::ConfirmMsAddress,
+        String,
+        bool
+    );
+    enveloped_command!(
+        send_proof0,
+        GreaseRequest::ExchangeProof0,
+        GreaseResponse::ExchangeProof0,
+        PublicProof0,
+        PublicProof0
+    );
+    enveloped_command!(
+        send_update_preparation,
+        GreaseRequest::PrepareUpdate,
+        GreaseResponse::UpdatePrepared,
+        PrepareUpdate,
+        UpdatePrepared
+    );
+    enveloped_command!(
+        send_update_commitment,
+        GreaseRequest::CommitUpdate,
+        GreaseResponse::UpdateCommitted,
+        UpdateCommitted,
+        FinalizedUpdate
+    );
+    enveloped_command!(
+        send_close_request,
+        GreaseRequest::ChannelClose,
+        GreaseResponse::ChannelClose,
+        ChannelCloseRecord,
+        ChannelCloseRecord
+    );
+    enveloped_command!(
+        notify_closing_tx,
+        GreaseRequest::ChannelClosed,
+        GreaseResponse::ChannelClosed,
+        TransactionId,
+        bool
+    );
 
     pub async fn send_response_to_peer(
         &mut self,
         res: GreaseResponse,
-        return_chute: ResponseChannel<GreaseResponse>,
+        return_channel: ResponseChannel<GreaseResponse>,
     ) -> Result<(), PeerConnectionError> {
-        self.sender.send(ClientCommand::ResponseToRequest { res, return_chute }).await?;
+        let res = Box::new(res);
+        self.sender.send(ClientCommand::ResponseToRequest { res, return_channel }).await?;
         Ok(())
     }
 

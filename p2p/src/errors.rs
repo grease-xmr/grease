@@ -1,11 +1,9 @@
 use crate::delegates::error::DelegateError;
+use crate::event_loop::PeerConnectionError;
 use crate::message_types::RejectChannelProposal;
-use futures::channel::{mpsc, oneshot};
 use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::StateStorageError;
-use libp2p::request_response::OutboundFailure;
-use libp2p::{noise, TransportError};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use thiserror::Error;
@@ -13,31 +11,19 @@ use wallet::errors::WalletError;
 use wallet::RpcError;
 
 #[derive(Error, Debug)]
-pub enum PeerConnectionError {
-    #[error("Failed to create P2P connection, due to an error in the Noise handshake. {0}")]
-    NoiseError(#[from] noise::Error),
-    #[error("Failed to dial peer: {0}")]
-    DialError(#[from] libp2p::swarm::DialError),
-    #[error("Failed to create P2P connection, due to an error in the transport layer. {0}")]
-    TransportError(#[from] TransportError<std::io::Error>),
+pub enum OldPeerConnectionError {
     #[error("Cannot dial server peer, because the peer id is missing in the multiaddr")]
     MissingPeerId,
-    #[error("Error in an internal mpsc channel. {0}")]
-    SendError(#[from] mpsc::SendError),
-    #[error("Could not give network client the result of a command because the return channel is canceled. {0}")]
-    OneshotError(#[from] oneshot::Canceled),
-    #[error("The event loop is shutting down, so the command cannot be executed.")]
-    EventLoopShuttingDown,
     #[error("The channel {0} does not exist.")]
     ChannelNotFound(String),
-    #[error("The remote peer server returned an operational error. {0}")]
-    RemoteServerError(#[from] RemoteServerError),
     #[error("We expected a response from Channel {expected} but got one from {actual} instead.")]
     ChannelMismatch { expected: String, actual: String },
+    #[error("Failed to connect to peer: {0}")]
+    P2PError(#[from] libp2p::noise::Error),
+    #[error("Failed to send message to client: {0}")]
+    SendError(#[from] futures::channel::mpsc::SendError),
     #[error("Will never happen, but required for the error trait")]
     Infallible(#[from] Infallible),
-    #[error("An error occurred while processing an outbound request. {0}")]
-    OutboundFailure(#[from] OutboundFailure),
 }
 
 #[derive(Error, Debug)]
@@ -64,8 +50,6 @@ pub enum ChannelServerError {
     ChannelNotFound,
     #[error("Error Setting up wallet. {0}")]
     WalletSetup(#[from] WalletError),
-    #[error("Error communicating with peer. {0}")]
-    PeerConnectionError(#[from] PeerConnectionError),
     #[error("Lifecycle state machine error. {0}")]
     LifeCycleError(#[from] LifeCycleError),
     #[error("An error occurred while generated payment channel update proofs. {0}")]
@@ -78,6 +62,8 @@ pub enum ChannelServerError {
     ProposalRejected(RejectChannelProposal),
     #[error("An error occurred while delegating work. {0}")]
     DelegateError(#[from] DelegateError),
+    #[error("A peer connection error occurred. {0}")]
+    PeerConnectionError(#[from] PeerConnectionError),
 }
 
 #[derive(Error, Debug)]
@@ -109,11 +95,11 @@ impl RemoteServerError {
     }
 }
 
-impl From<RemoteServerError> for ChannelServerError {
-    fn from(error: RemoteServerError) -> Self {
-        PeerConnectionError::from(error).into()
-    }
-}
+// impl From<RemoteServerError> for ChannelServerError {
+//     fn from(error: RemoteServerError) -> Self {
+//         PeerConnectionError::from(error).into()
+//     }
+// }
 
 /// Generally, we don´t want to reveal too much info about the remote server error to the client, but some errors do
 /// map cleanly that we can pass back to the peer.
@@ -126,13 +112,13 @@ impl From<ChannelServerError> for RemoteServerError {
             ChannelServerError::InvalidState(_) => RemoteServerError::internal("Invalid channel state"),
             ChannelServerError::ChannelNotFound => RemoteServerError::ChannelDoesNotExist,
             ChannelServerError::WalletSetup(_) => RemoteServerError::internal("Wallet setup error"),
-            ChannelServerError::PeerConnectionError(_) => RemoteServerError::NetworkError,
             ChannelServerError::LifeCycleError(_) => RemoteServerError::internal("State machine error"),
             ChannelServerError::UpdateError(_) => RemoteServerError::internal("Update error"),
             ChannelServerError::ProtocolError(_) => RemoteServerError::internal("Protocol error"),
             ChannelServerError::RpcError(_) => RemoteServerError::internal("Error with Monero RPC"),
             ChannelServerError::ProposalRejected(_) => RemoteServerError::internal("Proposal was rejected"),
             ChannelServerError::DelegateError(_) => RemoteServerError::internal("Delegate work error"),
+            ChannelServerError::PeerConnectionError(_) => RemoteServerError::internal("Peer connection error"),
         }
     }
 }

@@ -1,18 +1,15 @@
-use crate::errors::{PeerConnectionError, RemoteServerError};
+use crate::errors::RemoteServerError;
 use crate::ContactInfo;
-use futures::channel::oneshot;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::zk_objects::{PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
     ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
-    MultisigSplitSecretsResponse, TransactionId, TransactionRecord,
+    MultisigSplitSecretsResponse, TransactionId,
 };
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, ProposedChannelInfo};
-use libp2p::request_response::ResponseChannel;
-use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Address;
 use serde::{Deserialize, Serialize};
@@ -47,58 +44,51 @@ pub enum GreaseRequest {
 /// The response to a [`GreaseRequest`] that the peer can return to the requester.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum GreaseResponse {
-    ProposeChannelResponse(Result<ChannelProposalResult, RemoteServerError>),
+    ProposeChannelResponse(ChannelProposalResult),
     /// The merchant's response to the MS key exchange request. The customer's key info and split secrets are
     /// included in the response.
-    MsKeyExchange(Result<MessageEnvelope<MultisigKeyInfo>, RemoteServerError>),
-    MsSplitSecretExchange(Result<MessageEnvelope<MultisigSplitSecretsResponse>, RemoteServerError>),
+    MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
+    MsSplitSecretExchange(MessageEnvelope<MultisigSplitSecretsResponse>),
     /// The customer's response to the MS address confirmation request. The response is a boolean indicating
     /// whether the address was confirmed or not. If false, the channel establishment will be aborted.
-    ConfirmMsAddress(Result<MessageEnvelope<bool>, RemoteServerError>),
-    ExchangeProof0(Result<MessageEnvelope<PublicProof0>, RemoteServerError>),
-    UpdatePrepared(Result<MessageEnvelope<UpdatePrepared>, RemoteServerError>),
-    UpdateCommitted(Result<MessageEnvelope<FinalizedUpdate>, RemoteServerError>),
-    ChannelClose(Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>),
-    ChannelClosed(Result<MessageEnvelope<bool>, RemoteServerError>),
-    Error(String),
+    ConfirmMsAddress(MessageEnvelope<bool>),
+    ExchangeProof0(MessageEnvelope<PublicProof0>),
+    UpdatePrepared(MessageEnvelope<UpdatePrepared>),
+    UpdateCommitted(MessageEnvelope<FinalizedUpdate>),
+    ChannelClose(MessageEnvelope<ChannelCloseRecord>),
+    ChannelClosed(MessageEnvelope<bool>),
+    Error(RemoteServerError),
     /// Do not return a response to the peer at all.
     NoResponse,
 }
 
 impl From<ChannelProposalResult> for GreaseResponse {
     fn from(res: ChannelProposalResult) -> Self {
-        GreaseResponse::ProposeChannelResponse(Ok(res))
+        GreaseResponse::ProposeChannelResponse(res)
+    }
+}
+
+impl From<RemoteServerError> for GreaseResponse {
+    fn from(err: RemoteServerError) -> Self {
+        GreaseResponse::Error(err)
     }
 }
 
 impl Display for GreaseResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GreaseResponse::ProposeChannelResponse(Ok(ChannelProposalResult::Accepted(_))) => {
+            GreaseResponse::ProposeChannelResponse(ChannelProposalResult::Accepted(_)) => {
                 write!(f, "Channel Proposal accepted")
             }
-            GreaseResponse::ProposeChannelResponse(Ok(ChannelProposalResult::Rejected(ref _rej))) => {
+            GreaseResponse::ProposeChannelResponse(ChannelProposalResult::Rejected(ref _rej)) => {
                 write!(f, "Channel Proposal REJECTED.")
             }
-            GreaseResponse::ProposeChannelResponse(Err(err)) => {
-                write!(f, "Remote server error: {err} while proposing a new channel")
-            }
             GreaseResponse::Error(err) => write!(f, "Error: {}", err),
-            GreaseResponse::MsKeyExchange(Ok(_)) => write!(f, "MultisigKeyExchange(***)"),
-            GreaseResponse::MsKeyExchange(Err(e)) => write!(
-                f,
-                "Remote server error during MultisigKeyExchangeError\
-            ({e})"
-            ),
-            GreaseResponse::ConfirmMsAddress(Ok(env)) => {
+            GreaseResponse::MsKeyExchange(_) => write!(f, "MultisigKeyExchange(***)"),
+            GreaseResponse::ConfirmMsAddress(env) => {
                 let status = if env.payload { "OK" } else { "NOT OK" };
                 write!(f, "Multisig address confirmation: {status}")
             }
-            GreaseResponse::ConfirmMsAddress(Err(e)) => write!(
-                f,
-                "Remote server error ({e}) at MsConfirmMsAddress \
-            stage"
-            ),
             GreaseResponse::NoResponse => write!(f, "No response to send"),
             GreaseResponse::MsSplitSecretExchange(_) => write!(f, "MsSplitSecretExchange"),
             GreaseResponse::ExchangeProof0(_) => write!(f, "ExchangeProof0"),
@@ -126,87 +116,6 @@ impl GreaseRequest {
     }
 }
 
-/// The set of commands that can be initiated by the user (via the `Client`) to the network event loop.
-///
-/// There is typically one method in the `Client` for each of these commands.
-#[derive(Debug)]
-pub enum ClientCommand {
-    /// Start listening on a given address. Executed via [`crate::Client::start_listening`].
-    StartListening {
-        addr: Multiaddr,
-        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
-    },
-    /// Dial a peer at a given address. Executed via [`crate::Client::dial`].
-    Dial {
-        peer_id: PeerId,
-        peer_addr: Multiaddr,
-        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
-    },
-    /// Generalised response message to peers for all requests.
-    ResponseToRequest {
-        res: GreaseResponse,
-        return_chute: ResponseChannel<GreaseResponse>,
-    },
-    /// An internal message to confirm that the funding transaction has been confirmed.
-    WaitForFundingTx {
-        channel: String,
-        sender: oneshot::Sender<Result<TransactionRecord, PeerConnectionError>>,
-    },
-    NotifyTxMined(TransactionRecord),
-    /// Request with a proposal to open a payment channel with a peer. Executed via [`crate::Client::new_channel_proposal`].
-    ProposeChannelRequest {
-        peer_id: PeerId,
-        data: NewChannelProposal,
-        sender: oneshot::Sender<Result<ChannelProposalResult, RemoteServerError>>,
-    },
-    MultiSigKeyExchange {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<MultisigKeyInfo>,
-        sender: oneshot::Sender<Result<MessageEnvelope<MultisigKeyInfo>, RemoteServerError>>,
-    },
-    MultiSigSplitSecretsRequest {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<MultisigSplitSecrets>,
-        sender: oneshot::Sender<Result<MessageEnvelope<MultisigSplitSecretsResponse>, RemoteServerError>>,
-    },
-    ConfirmMultiSigAddressRequest {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<String>,
-        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
-    },
-    ExchangeProof0 {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<PublicProof0>,
-        sender: oneshot::Sender<Result<MessageEnvelope<PublicProof0>, RemoteServerError>>,
-    },
-    PrepareUpdate {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<PrepareUpdate>,
-        sender: oneshot::Sender<Result<MessageEnvelope<UpdatePrepared>, RemoteServerError>>,
-    },
-    CommitUpdate {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<UpdateCommitted>,
-        sender: oneshot::Sender<Result<MessageEnvelope<FinalizedUpdate>, RemoteServerError>>,
-    },
-    ChannelClose {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<ChannelCloseRecord>,
-        sender: oneshot::Sender<Result<MessageEnvelope<ChannelCloseRecord>, RemoteServerError>>,
-    },
-    ClosingTxSent {
-        peer_id: PeerId,
-        envelope: MessageEnvelope<TransactionId>,
-        sender: oneshot::Sender<Result<MessageEnvelope<bool>, RemoteServerError>>,
-    },
-    /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
-    ConnectedPeers {
-        sender: oneshot::Sender<Vec<PeerId>>,
-    },
-    /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
-    Shutdown(oneshot::Sender<bool>),
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FundingTxStartResponse;
 
@@ -215,11 +124,6 @@ pub struct FundingTxFinalizeResponse;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AckFundingTxBroadcast;
-
-#[derive(Debug)]
-pub enum PeerConnectionEvent {
-    InboundRequest { request: GreaseRequest, response: ResponseChannel<GreaseResponse> },
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NewChannelProposal {

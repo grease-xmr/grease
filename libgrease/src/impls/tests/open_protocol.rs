@@ -1,5 +1,5 @@
 use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::dleq::{Dleq, DleqProof};
+use crate::cryptography::dleq::DleqProof;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKeyCommitment};
 use crate::cryptography::pok::KesPoK;
 use crate::cryptography::secret_encryption::EncryptedSecret;

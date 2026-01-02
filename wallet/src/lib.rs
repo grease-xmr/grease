@@ -2,6 +2,7 @@ mod common;
 pub mod errors;
 pub mod multisig_wallet;
 pub mod payments;
+pub mod transaction_monitor;
 pub mod utils;
 pub mod wallet;
 pub mod watch_only;
