@@ -1,5 +1,5 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::{ConversationIdentity, EventHandlerOptions, NetworkServer, OutOfBandMerchantInfo, PaymentChannels};
+use grease_p2p::ConversationIdentity;
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -13,7 +13,9 @@ use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use grease_p2p::delegates::DummyDelegate;
-use grease_p2p::message_types::NewChannelProposal;
+use grease_p2p::grease::{
+    GreaseClient, GreaseClientOptions, NewChannelProposal, OutOfBandMerchantInfo, PaymentChannels,
+};
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
 use libgrease::state_machine::lifecycle::LifecycleStage;
@@ -23,7 +25,7 @@ use menus::*;
 use monero::Address;
 use rand::{Rng, RngCore};
 
-pub type MoneroNetworkServer = NetworkServer<DummyDelegate>;
+pub type MoneroNetworkServer = GreaseClient<DummyDelegate>;
 pub const RPC_ADDRESS: &str = "http://localhost:25070";
 
 pub struct InteractiveApp {
@@ -47,7 +49,7 @@ impl InteractiveApp {
         let identity = assign_identity(&id_path, config.preferred_identity.as_ref())?;
         let delegate = DummyDelegate::default();
         let channels = PaymentChannels::load(config.channel_directory())?;
-        let options = EventHandlerOptions::default();
+        let options = GreaseClientOptions::default();
         let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate, options)?;
         let app =
             Self { identity, current_menu, breadcrumbs, config, current_channel: None, channel_status: None, server };

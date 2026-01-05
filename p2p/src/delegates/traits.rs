@@ -1,7 +1,7 @@
 //---------------------------------   Verify Channel Proposals    ------------------------------------------------------
 
 use crate::delegates::error::DelegateError;
-use crate::message_types::NewChannelProposal;
+use crate::grease::NewChannelProposal;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};

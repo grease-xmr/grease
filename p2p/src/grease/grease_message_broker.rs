@@ -1,6 +1,6 @@
+use super::{GreaseRequest, GreaseResponse};
 use crate::behaviour::ConnectionBehavior;
-use crate::event_loop::{ClientCommand, RemoteRequest};
-use crate::{EventLoop, GreaseRequest, GreaseResponse};
+use crate::event_loop::{ClientCommand, EventLoop, RemoteRequest};
 use futures::channel::mpsc;
 use libp2p::Swarm;
 

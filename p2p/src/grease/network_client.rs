@@ -1,8 +1,8 @@
+use super::message_types::{ChannelProposalResult, NewChannelProposal, PrepareUpdate, UpdateCommitted, UpdatePrepared};
 use crate::behaviour::ConnectionBehavior;
 use crate::errors::RemoteServerError;
 use crate::event_loop::{ClientCommand, PeerConnectionError, RemoteRequest};
-use crate::message_types::{ChannelProposalResult, NewChannelProposal, PrepareUpdate, UpdateCommitted, UpdatePrepared};
-use crate::{GreaseChannelEvents, GreaseRequest, GreaseResponse};
+use crate::grease::{GreaseChannelEvents, GreaseRequest, GreaseResponse};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
@@ -27,12 +27,12 @@ pub type GreaseRemoteEvent = RemoteRequest<GreaseRequest, GreaseResponse>;
 
 /// Creates the network components, namely:
 ///
-/// - The network [`Client`] to interact with the event loop from anywhere within your application.
+/// - The network interface [`GreaseAPI`] to interact with the event loop from anywhere within your application.
 /// - The network event stream, e.g. for incoming requests.
-/// - The main [`EventLoop`] driving the network itself.
+/// - The main business logic sits in the [`GreaseClient`], which responds to commands and messages delivered via the API and event stream.
 pub fn new_network(
     key: Keypair,
-) -> Result<(Client, impl Stream<Item = GreaseRemoteEvent>, GreaseChannelEvents), PeerConnectionError> {
+) -> Result<(GreaseAPI, impl Stream<Item = GreaseRemoteEvent>, GreaseChannelEvents), PeerConnectionError> {
     let swarm = libp2p::SwarmBuilder::with_existing_identity(key)
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
@@ -54,7 +54,7 @@ pub fn new_network(
     let (event_sender, event_receiver) = mpsc::channel(0);
 
     Ok((
-        Client { sender: command_sender },
+        GreaseAPI { sender: command_sender },
         event_receiver,
         GreaseChannelEvents::new(swarm, command_receiver, event_sender),
     ))
@@ -63,7 +63,7 @@ pub fn new_network(
 /// A sender interface to the network event loop. It can be cheaply cloned and shared among threads and multiple sets
 /// of peer-to-peer connections.
 #[derive(Clone)]
-pub struct Client {
+pub struct GreaseAPI {
     sender: mpsc::Sender<ClientCommand<GreaseRequest, GreaseResponse>>,
 }
 
@@ -104,7 +104,7 @@ macro_rules! enveloped_command {
 ///
 /// **Importantly**, this struct does not do any work.
 /// It simply forwards the [`GreaseChannelCommand`]s to the [`EventLoop`] and waits for the results.
-impl Client {
+impl GreaseAPI {
     /// Listen for incoming connections on the given address.
     pub async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
