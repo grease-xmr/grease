@@ -2,38 +2,30 @@
 //!
 //! See [`EventLoop`] for more information.
 
-use crate::behaviour::ConnectionBehaviorEvent as Event;
-use crate::errors::{PeerConnectionError, RemoteServerError};
-use crate::message_types::{ChannelProposalResult, UpdatePrepared};
-use crate::{ClientCommand, GreaseRequest, GreaseResponse, PeerConnection, PeerConnectionEvent};
-use futures::channel::{
-    mpsc::{Receiver, Sender},
-    oneshot,
-};
+use crate::behaviour::{ConnectionBehavior, ConnectionBehaviorEvent};
+use crate::errors::RemoteServerError;
+use futures::channel::{mpsc, oneshot};
 use futures::{SinkExt, StreamExt};
-use libgrease::cryptography::zk_objects::PublicProof0;
-use libgrease::monero::data_objects::{
-    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecretsResponse, TransactionRecord,
-};
-use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::core::transport::ListenerId;
 use libp2p::core::ConnectedPoint;
 use libp2p::identify::Event as IdentifyEvent;
 use libp2p::multiaddr::Protocol;
-use libp2p::request_response::Event as BehaviourEvent;
+use libp2p::request_response::{self, ResponseChannel};
 use libp2p::request_response::{InboundFailure, InboundRequestId, Message, OutboundFailure, OutboundRequestId};
 use libp2p::swarm::{ConnectionError, ConnectionId, DialError, ListenError, SwarmEvent};
-use libp2p::{Multiaddr, PeerId, TransportError};
+use libp2p::{noise, Multiaddr, PeerId, Swarm, TransportError};
 use log::*;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::any::Any;
 use std::collections::{hash_map, HashMap, HashSet};
+use std::convert::Infallible;
+use std::fmt::{Debug, Display};
 use std::io;
 use std::num::NonZeroU32;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
-
-pub type ReqResEvent = BehaviourEvent<GreaseRequest, GreaseResponse>;
-pub type EventMessage = Message<GreaseRequest, GreaseResponse>;
+use thiserror::Error;
 
 const RUNNING: usize = 0;
 
@@ -69,160 +61,54 @@ const SHUTTING_DOWN: usize = 1;
 /// network `ResponseChannel` instance to the application layer. `ResponseChannel` is a channel that libp2p uses to
 /// track the response to a request.
 ///
-/// The application layer carries out all the business logic and once it is done, it calls a suitable method on the
+/// The application layer carries out all the business logic. Once it is done, it calls a suitable method on the
 /// [`Client`] instance, which will handle the creation of the correct [`ClientCommand`], packaging the result
 /// data and the `ResponseChannel` instance, and sending it to the event loop.
-macro_rules! event_loop {
-    ($(Command($command:ident): $req_type:ident => $res_type:ident[$res_payload:ty]),*) => {
-        paste::paste!{pub struct EventLoop {
-            swarm: PeerConnection,
-            command_receiver: Receiver<ClientCommand>,
-            event_sender: Sender<PeerConnectionEvent>,
-            pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
-            pending_new_channel_proposals: HashMap<OutboundRequestId, oneshot::Sender<Result<ChannelProposalResult,RemoteServerError>>>,
-            pending_shutdown: Option<oneshot::Sender<bool>>,
-            pending_funding_tx: HashMap<String, oneshot::Sender<Result<TransactionRecord, PeerConnectionError>>>,
-            status: AtomicUsize,
-            connections: HashSet<ConnectionId>,
-            $([<pending_ $command:snake>]: HashMap<OutboundRequestId,oneshot::Sender<Result<MessageEnvelope<$res_payload>,RemoteServerError>>>),*
-        }}
-
-        impl EventLoop {
-            pub fn new(
-                swarm: PeerConnection,
-                command_receiver: Receiver<ClientCommand>,
-                event_sender: Sender<PeerConnectionEvent>,
-            ) -> Self {
-                paste::paste! {Self {
-                    swarm,
-                    command_receiver,
-                    event_sender,
-                    pending_dial: Default::default(),
-                    pending_funding_tx: Default::default(),
-                    pending_shutdown: None,
-                    status: AtomicUsize::new(RUNNING),
-                    connections: Default::default(),
-                    pending_new_channel_proposals: Default::default(),
-                    $([<pending_ $command:snake>]: Default::default()),*
-                }}
-            }
-
-            async fn handle_std_command(&mut self, command: ClientCommand) -> Result<(), ()> {
-                paste::paste! {match command {
-                    $(ClientCommand::$command { peer_id, envelope, sender } => {
-                        let sender = self.abort_if_shutting_down(sender, RemoteServerError::ServerShuttingDown)?;
-                        let id = self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::$req_type(envelope));
-                        self.[<pending_ $command:snake>].insert(id, sender);
-                        Ok(())
-                    }
-                    )*
-                    c => {
-                        error!("Unknown command: {:?}", c);
-                        Err(())
-                    }
-                }}
-            }
-
-            /// Handle a [`GreaseResponse`] response message received from a peer. Usually this entails fetching a `Sender`
-            /// channel from the map of pending requests and passing the response through it.
-            async fn handle_message_response(&mut self, request_id: OutboundRequestId, response: GreaseResponse) {
-                match response {
-                    $(GreaseResponse::$res_type(response) => {
-                        paste::paste!{
-                            let pending = self.[< pending_ $command:snake>].remove(&request_id);
-                        }
-                        let Some(sender) = pending else {
-                            error!("Received response for unknown {} request. Request id: {request_id}", stringify! ($command));
-                            return;
-                        };
-                        let _ = sender.send(response);
-                    }
-                    )*
-                    GreaseResponse::ProposeChannelResponse(result) => {
-                        let pending = self.pending_new_channel_proposals.remove(&request_id);
-                        let Some(sender) = pending else {
-                            error!("Received response for unknown open channel request. Request id: {request_id}");
-                            return;
-                        };
-                        let _ = sender.send(result);
-                    }
-                    GreaseResponse::Error(_) => {}
-                    GreaseResponse::NoResponse => {
-                        trace!("No response will be sent for request id: {request_id}");
-                    }
-                }
-            }
-
-            /// Handle a failed outbound request
-            ///
-            /// ## Parameters
-            /// * `peer` - The peer to whom the request was sent.
-            /// * `connection_id` - Identifier of the connection that the request was sent on.
-            /// * `request_id` - The (local) ID of the failed request.
-            /// * `error` - The error that happened.
-            fn on_outbound_failure(
-                &mut self,
-                peer: PeerId,
-                connection_id: ConnectionId,
-                request_id: OutboundRequestId,
-                error: OutboundFailure,
-            ) {
-                warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
-                paste::paste!{
-                    let send_result = $(if let Some(sender) = self.[<pending_ $command:snake>].remove(&request_id) {
-                        sender.send(Err(RemoteServerError::NetworkError))
-                        .map_err(|_value| {
-                            warn!("Failed to send error response for outbound request failure.");
-                        })
-                    })else*
-                    else if let Some(sender) = self.pending_new_channel_proposals.remove(&request_id) {
-                        sender.send(Err(RemoteServerError::NetworkError))
-                        .map_err(|_value| {
-                            warn!("Failed to send error response for channel request failure.");
-                        })
-                    }
-                    else if let Some(sender) = self.pending_dial.remove(&peer) {
-                        sender.send(Err(PeerConnectionError::OutboundFailure(error)))
-                        .map_err(|_value| {
-                            warn!("Failed to send error response for dial failure.");
-                        })
-                    }
-                    else {
-                        debug!("No pending request found for outbound failure. Request id: {request_id}");
-                        Ok(())
-                    };
-                }
-                if send_result.is_err() {
-                    warn!("Failed to send error response for outbound request failure. Request id: {request_id}");
-                }
-            }
-        }
-    };
+pub struct EventLoop<Req, Resp>
+where
+    Req: DeserializeOwned + Serialize + Send + 'static,
+    Resp: DeserializeOwned + Serialize + Send + 'static,
+{
+    swarm: Swarm<ConnectionBehavior<Req, Resp>>,
+    command_receiver: mpsc::Receiver<ClientCommand<Req, Resp>>,
+    request_forwarder: mpsc::Sender<RemoteRequest<Req, Resp>>,
+    pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
+    pending_shutdown: Option<oneshot::Sender<bool>>,
+    status: AtomicUsize,
+    connections: HashSet<ConnectionId>,
+    pending_requests: HashMap<OutboundRequestId, oneshot::Sender<Result<Resp, RemoteServerError>>>,
 }
 
-// Links ClientCommand variants to their corresponding request and response types.
-// e.g. MultiSigKeyExchange generates a request of type `MsKeyExchange` which will result in a response of type `MsKeyExchange`
-// carrying a payload of type `MultisigKeyInfo`.
-event_loop!(
-    Command(MultiSigKeyExchange): MsKeyExchange => MsKeyExchange[MultisigKeyInfo],
-    Command(MultiSigSplitSecretsRequest): MsSplitSecretExchange => MsSplitSecretExchange[MultisigSplitSecretsResponse],
-    Command(ConfirmMultiSigAddressRequest): ConfirmMsAddress => ConfirmMsAddress[bool],
-    Command(ExchangeProof0): ExchangeProof0 => ExchangeProof0[PublicProof0],
-    Command(PrepareUpdate): PrepareUpdate => UpdatePrepared[UpdatePrepared],
-    Command(CommitUpdate): CommitUpdate => UpdateCommitted[FinalizedUpdate],
-    Command(ChannelClose): ChannelClose => ChannelClose[ChannelCloseRecord],
-    Command(ClosingTxSent): ChannelClosed => ChannelClosed[bool]
-);
+impl<Req, Resp> EventLoop<Req, Resp>
+where
+    Req: DeserializeOwned + Serialize + Send + 'static,
+    Resp: Display + DeserializeOwned + Serialize + Send + 'static,
+{
+    pub fn new(
+        swarm: Swarm<ConnectionBehavior<Req, Resp>>,
+        command_receiver: mpsc::Receiver<ClientCommand<Req, Resp>>,
+        request_forwarder: mpsc::Sender<RemoteRequest<Req, Resp>>,
+    ) -> Self {
+        Self {
+            swarm,
+            command_receiver,
+            request_forwarder,
+            pending_dial: HashMap::default(),
+            pending_shutdown: None,
+            status: AtomicUsize::new(RUNNING),
+            connections: Default::default(),
+            pending_requests: HashMap::new(),
+        }
+    }
 
-impl EventLoop {
     pub async fn run(mut self) {
         loop {
             tokio::select! {
-                event = self.swarm.select_next_some() => self.handle_event(event).await,
+                event = self.swarm.select_next_some() => self.handle_network_event(event).await,
                 command = self.command_receiver.next() => match command {
                     Some(c) => self.handle_command(c).await,
                     // Command channel closed, thus shutting down the network event loop.
-                    None=>  return,
+                    None =>  return,
                 },
             }
             if self.status.load(std::sync::atomic::Ordering::SeqCst) == SHUTDOWN {
@@ -239,20 +125,16 @@ impl EventLoop {
         self.status.load(std::sync::atomic::Ordering::SeqCst) == RUNNING
     }
 
-    /// Main event handler.
+    /// Network event handler.
     ///
     /// This function is called whenever a new event is received from the network.
     /// Both general network events ([SwarmEvent]) and specific events triggered by the payment channel state machine
     /// ([ReqResEvent]) are handled here.
-    async fn handle_event(&mut self, event: SwarmEvent<Event>) {
+    async fn handle_network_event(&mut self, event: SwarmEvent<ConnectionBehaviorEvent<Req, Resp>>) {
         match event {
-            SwarmEvent::Behaviour(Event::Json(event)) => {
-                self.handle_request_response_event(event).await;
+            SwarmEvent::Behaviour(event) => {
+                self.behaviour_event(event).await;
             }
-            SwarmEvent::Behaviour(Event::Identify(event)) => {
-                self.handle_identify_event(event).await;
-            }
-
             SwarmEvent::NewListenAddr { listener_id, address } => {
                 self.on_new_listen_addr(listener_id, address);
             }
@@ -315,19 +197,45 @@ impl EventLoop {
         }
     }
 
-    async fn handle_request_response_event(&mut self, event: ReqResEvent) {
+    async fn behaviour_event(&mut self, event: ConnectionBehaviorEvent<Req, Resp>) {
         match event {
-            ReqResEvent::Message { peer, connection_id, message } => {
-                self.on_channel_message(peer, connection_id, message).await;
+            ConnectionBehaviorEvent::Identify(ev) => self.handle_identify_event(ev).await,
+            ConnectionBehaviorEvent::Json(ev) => self.handle_json_event(ev).await,
+        }
+    }
+
+    async fn handle_json_event(&mut self, event: request_response::Event<Req, Resp>) {
+        match event {
+            request_response::Event::Message { peer, connection_id, message } => {
+                self.on_network_message(peer, connection_id, message).await;
             }
-            ReqResEvent::OutboundFailure { peer, connection_id, request_id, error } => {
-                self.on_outbound_failure(peer, connection_id, request_id, error);
-            }
-            ReqResEvent::InboundFailure { peer, connection_id, request_id, error } => {
+            request_response::Event::InboundFailure { peer, connection_id, request_id, error } => {
                 self.on_inbound_failure(peer, connection_id, request_id, error);
             }
-            ReqResEvent::ResponseSent { peer, connection_id, request_id } => {
+            request_response::Event::ResponseSent { peer, connection_id, request_id } => {
                 self.on_response_sent(peer, connection_id, request_id);
+            }
+            request_response::Event::OutboundFailure { peer, connection_id, request_id, error } => {
+                self.on_outbound_failure(peer, connection_id, request_id, error);
+            }
+        }
+    }
+    /// Respond to a new request or response message from a network peer.
+    async fn on_network_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: Message<Req, Resp>) {
+        trace!("EVENT: Network message received from {peer}. Connection id: {connection_id}.");
+        match message {
+            Message::Request { request_id, request, channel } => {
+                debug!("Request received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}");
+                let request = RemoteRequest::new(request, channel);
+                if let Err(err) = self.request_forwarder.send(request).await {
+                    error!("Failed to forward request to {peer}: {err:?}");
+                }
+            }
+            Message::Response { request_id, response } => {
+                trace!("EVENT: Response received. Peer: {peer}. Conn_id: {connection_id}. Req_id: {request_id}");
+                // Generally, the response implies that there is a pending request that we need to match to it.
+                // So we fetch the pending request and send the response back to the requester.
+                self.handle_message_response(request_id, response).await;
             }
         }
     }
@@ -350,20 +258,18 @@ impl EventLoop {
         }
     }
 
-    /// Respond to a new Request-Response Grease Channel message from the peer.
-    async fn on_channel_message(&mut self, peer: PeerId, connection_id: ConnectionId, message: EventMessage) {
-        trace!("EVENT: Payment channel message received from {peer}. Connection id: {connection_id}.");
-        match message {
-            EventMessage::Request { request_id, request, channel } => {
-                debug!("Request received. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}");
-                self.event_sender
-                    .send(PeerConnectionEvent::InboundRequest { request, response: channel })
-                    .await
-                    .expect("Event receiver not to be dropped.");
+    /// Handle a [`GreaseResponse`] response message received from a peer. Usually this entails fetching a `Sender`
+    /// channel from the map of pending requests and passing the response through it.
+    async fn handle_message_response(&mut self, request_id: OutboundRequestId, response: Resp) {
+        match self.pending_requests.remove(&request_id) {
+            None => {
+                error!("Received response for unknown request. Request id: {request_id}");
+                return;
             }
-            EventMessage::Response { request_id, response } => {
-                trace!("EVENT: Response received. Peer: {peer}. Conn_id: {connection_id}. Req_id: {request_id}");
-                self.handle_message_response(request_id, response).await;
+            Some(sender) => {
+                if let Err(_res) = sender.send(Ok(response)) {
+                    warn!("Failed to send response back to requester. Request id: {request_id}.");
+                }
             }
         }
     }
@@ -606,52 +512,77 @@ impl EventLoop {
         debug!("EVENT: Non-fatal listener error: {listener_id} Error: {error}");
     }
 
-    async fn handle_command(&mut self, command: ClientCommand) {
-        if let Err(()) = self.command_handler(command).await {
-            // Preserve the knowledge that the command was rejected.
-            warn!("💡️  A client command was not handled successfully – see logs above for details");
+    /// Handle a failed outbound request
+    ///
+    /// ## Parameters
+    /// * `peer` - The peer to whom the request was sent.
+    /// * `connection_id` - Identifier of the connection that the request was sent on.
+    /// * `request_id` - The (local) ID of the failed request.
+    /// * `error` - The error that happened.
+    fn on_outbound_failure(
+        &mut self,
+        peer: PeerId,
+        connection_id: ConnectionId,
+        request_id: OutboundRequestId,
+        error: OutboundFailure,
+    ) {
+        warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
+        let send_result = if let Some(sender) = self.pending_requests.remove(&request_id) {
+            sender.send(Err(RemoteServerError::NetworkError))
+                // It's always `RemoteServerError::NetworkError` at this point. No need to capture it
+                .map_err(|_err| {
+                    warn!("An outbound request failed AND we failed to send the initiator of the request notification of the failure. \
+                    The network is probably down.");
+                })
+        } else if let Some(sender) = self.pending_dial.remove(&peer) {
+            sender.send(Err(PeerConnectionError::OutboundFailure(error))).map_err(|_value| {
+                warn!("Failed to send error response for dial failure.");
+            })
+        } else {
+            debug!("No pending request found for outbound failure. Request id: {request_id}");
+            Ok(())
+        };
+        if send_result.is_err() {
+            warn!("Failed to send error response for outbound request failure. Request id: {request_id}");
         }
     }
 
-    async fn command_handler(&mut self, command: ClientCommand) -> Result<(), ()> {
-        // Handle non-std commands here. Standard commands are handled in the macro-generated method.
+    async fn handle_command(&mut self, command: ClientCommand<Req, Resp>) {
+        let abort_if_shutting_down = |sender: oneshot::Sender<_>| {
+            if !self.is_running() {
+                info!("Event loop is shutting down. Aborting command.");
+                let _ = sender.send(Err(PeerConnectionError::EventLoopShuttingDown));
+                return None;
+            }
+            Some(sender)
+        };
         match command {
             ClientCommand::StartListening { addr, sender } => {
-                let sender = self.abort_if_shutting_down(sender, PeerConnectionError::EventLoopShuttingDown)?;
-                let _ = match self.swarm.listen_on(addr) {
-                    Ok(_) => sender.send(Ok(())),
-                    Err(e) => sender.send(Err(PeerConnectionError::TransportError(e))),
-                };
-                Ok(())
+                if let Some(sender) = abort_if_shutting_down(sender) {
+                    let _result = match self.swarm.listen_on(addr) {
+                        Ok(_) => sender.send(Ok(())),
+                        Err(e) => sender.send(Err(PeerConnectionError::TransportError(e))),
+                    };
+                }
             }
             ClientCommand::Dial { peer_id, peer_addr, sender } => {
-                let sender = self.abort_if_shutting_down(sender, PeerConnectionError::EventLoopShuttingDown)?;
-                if let hash_map::Entry::Vacant(e) = self.pending_dial.entry(peer_id) {
-                    match self.swarm.dial(peer_addr.with(Protocol::P2p(peer_id))) {
-                        Ok(()) => {
-                            e.insert(sender);
-                        }
-                        Err(e) => {
-                            let _ = sender.send(Err(PeerConnectionError::DialError(e)));
-                        }
-                    }
-                } else {
-                    debug!("Dialing already in progress for peer {peer_id}. Ignoring additional dial attempt.");
+                if let Some(sender) = abort_if_shutting_down(sender) {
+                    self.handle_dial(peer_id, peer_addr, sender);
                 }
-                Ok(())
             }
-            ClientCommand::ResponseToRequest { res, return_chute } => {
-                if let Err(response) = self.swarm.behaviour_mut().json.send_response(return_chute, res) {
+            ClientCommand::NewRequest { peer_id, request, sender } => {
+                self.handle_new_request_command(peer_id, *request, sender).await;
+            }
+            ClientCommand::ResponseToRequest { res, return_channel } => {
+                if let Err(response) = self.swarm.behaviour_mut().json.send_response(return_channel, *res) {
                     error!("Failed to send response to request. {response}");
                     // todo: retry logic
                 }
-                Ok(())
             }
             ClientCommand::ConnectedPeers { sender } => {
                 debug!("Connected peers requested.");
                 let peers = self.swarm.connected_peers().cloned().collect();
                 let _ = sender.send(peers);
-                Ok(())
             }
             ClientCommand::Shutdown(sender) => {
                 info!("Shutting down event loop.");
@@ -661,48 +592,127 @@ impl EventLoop {
                 for id in connections {
                     self.swarm.close_connection(id);
                 }
-                Ok(())
             }
-            ClientCommand::ProposeChannelRequest { peer_id, data, sender } => {
-                if !self.is_running() {
-                    info!("Event loop is shutting down. I'm not going to start opening channels.");
-                    let _ = sender.send(Err(RemoteServerError::ServerShuttingDown));
-                    return Err(());
-                }
-                let id =
-                    self.swarm.behaviour_mut().json.send_request(&peer_id, GreaseRequest::ProposeChannelRequest(data));
-                self.pending_new_channel_proposals.insert(id, sender);
-                info!("New channel proposal sent to {peer_id}");
-                Ok(())
-            }
-            ClientCommand::WaitForFundingTx { channel, sender } => {
-                debug!("Waiting for funding transaction for channel {channel}");
-                self.pending_funding_tx.insert(channel, sender);
-                Ok(())
-            }
-            ClientCommand::NotifyTxMined(record) => {
-                let name = &record.channel_name;
-                if let Some(sender) = self.pending_funding_tx.remove(name) {
-                    debug!("Notifying receiver that tx for {name} has been mined.");
-                    let _ = sender.send(Ok(record));
-                }
-                Ok(())
-            }
-            cmd => self.handle_std_command(cmd).await,
         }
     }
 
-    fn abort_if_shutting_down<T, E>(
-        &self,
-        sender: oneshot::Sender<Result<T, E>>,
-        err: E,
-    ) -> Result<oneshot::Sender<Result<T, E>>, ()> {
-        if !self.is_running() {
-            info!("Event loop is shutting down. I'm not accepting any more instructions right now.");
-            let _ = sender.send(Err(err));
-            Err(())
+    fn handle_dial(
+        &mut self,
+        peer_id: PeerId,
+        peer_addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), PeerConnectionError>>,
+    ) {
+        if let hash_map::Entry::Vacant(e) = self.pending_dial.entry(peer_id) {
+            match self.swarm.dial(peer_addr.with(Protocol::P2p(peer_id))) {
+                Ok(()) => {
+                    e.insert(sender);
+                }
+                Err(e) => {
+                    let _ = sender.send(Err(PeerConnectionError::DialError(e)));
+                }
+            }
         } else {
-            Ok(sender)
+            debug!("Dialing already in progress for peer {peer_id}. Ignoring additional dial attempt.");
         }
     }
+
+    async fn handle_new_request_command(
+        &mut self,
+        peer: PeerId,
+        req: Req,
+        sender: oneshot::Sender<Result<Resp, RemoteServerError>>,
+    ) {
+        if !self.is_running() {
+            info!("Event loop is shutting down. I'm not going to send new requests.");
+            let _ = sender.send(Err(RemoteServerError::ServerShuttingDown));
+            return;
+        }
+        let request_id = self.swarm.behaviour_mut().json.send_request(&peer, req);
+        self.pending_requests.insert(request_id, sender);
+    }
+}
+
+/// A remote request.
+///
+/// This is identical to [`Message::Request`], with the request_id removed.
+pub struct RemoteRequest<Req, Resp> {
+    /// The request message.
+    pub request: Req,
+    /// The remote channel waiting for the response.
+    pub channel: ResponseChannel<Resp>,
+}
+
+impl<Req, Resp> RemoteRequest<Req, Resp> {
+    /// Create a new `RemoteRequest` from a libp2p `Message::Request`.
+    pub fn new(request: Req, channel: ResponseChannel<Resp>) -> Self {
+        Self { request, channel }
+    }
+
+    /// Get the request message.
+    pub fn request(&self) -> &Req {
+        &self.request
+    }
+
+    /// Get the response channel.
+    pub fn channel(&self) -> &ResponseChannel<Resp> {
+        &self.channel
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum PeerConnectionError {
+    #[error("Failed to create P2P connection, due to an error in the Noise handshake. {0}")]
+    NoiseError(#[from] noise::Error),
+    #[error("Failed to dial peer: {0}")]
+    DialError(#[from] DialError),
+    #[error("Failed to create P2P connection, due to an error in the transport layer. {0}")]
+    TransportError(#[from] TransportError<io::Error>),
+    #[error("Cannot dial server peer, because the peer id is missing in the multiaddr")]
+    MissingPeerId,
+    #[error("Error in an internal mpsc channel. {0}")]
+    SendError(#[from] mpsc::SendError),
+    #[error("Could not give network client the result of a command because the return channel is canceled. {0}")]
+    OneshotError(#[from] oneshot::Canceled),
+    #[error("The event loop is shutting down, so the command cannot be executed.")]
+    EventLoopShuttingDown,
+    #[error("The remote peer server returned an operational error. {0}")]
+    RemoteServerError(#[from] RemoteServerError),
+    #[error("Will never happen, but required for the error trait")]
+    Infallible(#[from] Infallible),
+    #[error("An error occurred while processing an outbound request. {0}")]
+    OutboundFailure(#[from] OutboundFailure),
+    #[error("Received an unexpected response type from the peer. Expected {expected}, but got {got}.")]
+    UnexpectedResponseType { expected: &'static str, got: String },
+    #[error("Received a response for an unexpected channel. Expected {expected}, but got {got}.")]
+    UnexpectedChannel { expected: String, got: String },
+}
+
+impl PeerConnectionError {
+    pub fn unexpected_response(expected: &'static str, got: impl Display) -> Self {
+        PeerConnectionError::UnexpectedResponseType { expected, got: got.to_string() }
+    }
+
+    pub fn unexpected_channel(expected: impl Display, got: impl Display) -> Self {
+        PeerConnectionError::UnexpectedChannel { expected: expected.to_string(), got: got.to_string() }
+    }
+}
+
+/// The set of commands that can be initiated by the user (via the `Client`) to the network event loop.
+///
+/// There is typically one method in the `Client` for each of these commands.
+#[derive(Debug)]
+pub enum ClientCommand<Req, Resp> {
+    /// Start listening on a given address. Executed via [`crate::Client::start_listening`].
+    StartListening { addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
+    /// Dial a peer at a given address. Executed via [`crate::Client::dial`].
+    Dial { peer_id: PeerId, peer_addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
+    /// A new remote request for `peer_id` initiated from the client. The request will be forwarded to the peer and
+    /// wait for the response, which is sent back via `sender`.
+    NewRequest { peer_id: PeerId, request: Box<Req>, sender: oneshot::Sender<Result<Resp, RemoteServerError>> },
+    /// Send a response back over the network to the peer that made a request.
+    ResponseToRequest { res: Box<Resp>, return_channel: ResponseChannel<Resp> },
+    /// Request the list of connected peers. Executed via [`crate::Client::connected_peers`].
+    ConnectedPeers { sender: oneshot::Sender<Vec<PeerId>> },
+    /// Shutdown the network event loop. Executed via [`crate::Client::shutdown`].
+    Shutdown(oneshot::Sender<bool>),
 }

@@ -11,8 +11,7 @@ use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::zk_objects::{
-    GenericPoint, GenericScalar, KesProof, PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs,
-    PublicUpdateProof, ShardInfo, UpdateProofs,
+    GenericPoint, GenericScalar, KesProof, Proofs0, PublicProof0, PublicUpdateProof, ShardInfo, UpdateProofs,
 };
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};

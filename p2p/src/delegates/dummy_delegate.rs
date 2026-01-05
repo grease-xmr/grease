@@ -2,24 +2,20 @@
 
 use crate::delegates::error::DelegateError;
 use crate::delegates::traits::{
-    ChannelClosure, FundChannel, GreaseChannelDelegate, GreaseInitializer, KesProver, ProposalVerifier, Updater,
+    ChannelClosure, GreaseChannelDelegate, GreaseInitializer, KesProver, ProposalVerifier, Updater,
     VerifiableSecretShare,
 };
 use crate::message_types::NewChannelProposal;
-use crate::Client;
-use libgrease::amount::{MoneroAmount, MoneroDelta};
+use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::cryptography::zk_objects::{
     Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0,
     PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
 };
-use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
+use libgrease::monero::data_objects::MultisigSplitSecrets;
 use libgrease::state_machine::error::InvalidProposal;
-use log::{debug, info, warn};
-use std::time::Duration;
-use wallet::watch_only::WatchOnlyWallet;
-use wallet::{connect_to_rpc, Rpc};
+use log::*;
 
 #[derive(Debug, Clone)]
 pub struct DummyDelegate {
@@ -110,55 +106,6 @@ impl VerifiableSecretShare for DummyDelegate {
 
     fn verify_my_shards(&self, _share: &Curve25519Secret, _shards: &MultisigSplitSecrets) -> Result<(), DelegateError> {
         info!("DummyDelegate: Verifying secret share");
-        Ok(())
-    }
-}
-
-impl FundChannel for DummyDelegate {
-    async fn register_watcher(
-        &self,
-        name: String,
-        client: Client,
-        private_view_key: Curve25519Secret,
-        public_spend_key: Curve25519PublicKey,
-        birthday: Option<u64>,
-        poll_interval: Duration,
-    ) -> Result<(), DelegateError> {
-        info!(
-            "Registering transaction watcher for channel {name} at address: {}",
-            self.rpc_address
-        );
-        let rpc = connect_to_rpc(&self.rpc_address).await.map_err(|e| DelegateError(e.to_string()))?;
-        let height = rpc.get_height().await.map_err(|e| DelegateError(e.to_string()))? as u64;
-        let mut wallet = WatchOnlyWallet::new(rpc, private_view_key, public_spend_key, birthday)
-            .map_err(|e| DelegateError(e.to_string()))?;
-        info!("Watch-only wallet created with birthday {birthday:?}. Current height is {height}");
-        let mut interval = tokio::time::interval(poll_interval);
-        let mut client = client.clone();
-        let _handle = tokio::spawn(async move {
-            let mut start_height = birthday.map(|b| height.min(b)).unwrap_or(height);
-            loop {
-                interval.tick().await;
-                let current_height = wallet.get_height().await.expect("Failed to get blockchain height");
-                debug!("Scanning for funding transaction in block range {start_height}..<{current_height}");
-                if let Ok(c) = wallet.scan(Some(start_height - 5), Some(current_height)).await {
-                    if c > 0 {
-                        break;
-                    }
-                    start_height = current_height;
-                }
-            }
-            let output = wallet.outputs().first().expect("No outputs").clone();
-            let amount = MoneroAmount::from(output.commitment().amount);
-            let id = hex::encode(output.transaction());
-            let serialized = output.serialize();
-            let record =
-                TransactionRecord { channel_name: name, amount, transaction_id: TransactionId { id }, serialized };
-            info!("Funding transaction found: {:?}", record);
-            let _ = client.notify_tx_mined(record).await.map_err(|e| {
-                warn!("Failed to notify tx mined block: {:?}", e);
-            });
-        });
         Ok(())
     }
 }

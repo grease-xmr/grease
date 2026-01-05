@@ -487,7 +487,6 @@ mod test {
     use libgrease::state_machine::{
         ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, NewChannelState, UpdateRecord,
     };
-    use libgrease::XmrScalar;
     use libp2p::{Multiaddr, PeerId};
     use monero::Address;
     use std::str::FromStr;
