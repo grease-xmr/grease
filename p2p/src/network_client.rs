@@ -8,7 +8,8 @@ use futures::SinkExt;
 use futures::Stream;
 use libgrease::cryptography::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
-    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionId,
+    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
+    TransactionId,
 };
 use libgrease::state_machine::ChannelCloseRecord;
 use libp2p::identity::Keypair;

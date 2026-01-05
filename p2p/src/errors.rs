@@ -5,26 +5,9 @@ use libgrease::payment_channel::UpdateError;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::StateStorageError;
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
 use thiserror::Error;
 use wallet::errors::WalletError;
 use wallet::RpcError;
-
-#[derive(Error, Debug)]
-pub enum OldPeerConnectionError {
-    #[error("Cannot dial server peer, because the peer id is missing in the multiaddr")]
-    MissingPeerId,
-    #[error("The channel {0} does not exist.")]
-    ChannelNotFound(String),
-    #[error("We expected a response from Channel {expected} but got one from {actual} instead.")]
-    ChannelMismatch { expected: String, actual: String },
-    #[error("Failed to connect to peer: {0}")]
-    P2PError(#[from] libp2p::noise::Error),
-    #[error("Failed to send message to client: {0}")]
-    SendError(#[from] futures::channel::mpsc::SendError),
-    #[error("Will never happen, but required for the error trait")]
-    Infallible(#[from] Infallible),
-}
 
 #[derive(Error, Debug)]
 pub enum PaymentChannelError {
@@ -94,12 +77,6 @@ impl RemoteServerError {
         RemoteServerError::InternalError(msg.into())
     }
 }
-
-// impl From<RemoteServerError> for ChannelServerError {
-//     fn from(error: RemoteServerError) -> Self {
-//         PeerConnectionError::from(error).into()
-//     }
-// }
 
 /// Generally, we don´t want to reveal too much info about the remote server error to the client, but some errors do
 /// map cleanly that we can pass back to the peer.
