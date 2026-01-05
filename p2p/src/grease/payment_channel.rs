@@ -473,7 +473,8 @@ impl PaymentChannels {
 
 #[cfg(test)]
 mod test {
-    use crate::{ContactInfo, PaymentChannel};
+    use crate::grease::PaymentChannel;
+    use crate::ContactInfo;
     use blake2::Blake2b512;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
