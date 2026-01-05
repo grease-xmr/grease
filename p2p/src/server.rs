@@ -258,6 +258,11 @@ where
         Self { network_client: client, channels, delegate, updates_in_progress, options, tx_monitor }
     }
 
+    /// Returns the RPC address used by the transaction monitor, which can also be used to connect to the Monero wallet RPC.
+    fn rpc_address(&self) -> &str {
+        self.tx_monitor.rpc_address()
+    }
+
     async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
         self.network_client.start_listening(addr).await?;
         Ok(())
@@ -547,7 +552,7 @@ where
         peer_key: SharedPublicKey,
     ) -> Result<MultisigWallet, ChannelServerError> {
         // Create a new multisig wallet with the peer's key info.
-        let rpc = connect_to_rpc(self.tx_monitor.rpc_address()).await?;
+        let rpc = connect_to_rpc(self.rpc_address()).await?;
         let mut wallet = MultisigWallet::new(rpc, my_spend_key, &my_pubkey, &peer_key.public_key, None, peer_key.role)?;
         let height = wallet.reset_birthday().await?;
         debug!("👛️  New Multisig wallet created with birthday at height {height}.");
@@ -753,7 +758,7 @@ where
         trace!("👛️  Loading wallet for channel {name}.");
         let wallet =
             state.wallet().ok_or(ChannelServerError::InvalidState("Multisig wallet not available".to_string()))?;
-        let rpc = connect_to_rpc(self.tx_monitor.rpc_address()).await?;
+        let rpc = connect_to_rpc(self.rpc_address()).await?;
         let wallet = MultisigWallet::from_serializable(rpc, wallet.clone())?;
         if wallet.address().to_string() == address {
             debug!("👛️  Address {address} matches for channel {name}.");
@@ -1004,7 +1009,7 @@ where
         let fee = MoneroAmount::from_piconero(4_000_000_000);
         let payments = translate_payments(unadjusted, fee)
             .map_err(|_| ChannelServerError::UpdateError(UpdateError::InsufficientFunds))?;
-        let rpc = connect_to_rpc(self.tx_monitor.rpc_address()).await?;
+        let rpc = connect_to_rpc(self.rpc_address()).await?;
         let mut wallet = MultisigWallet::from_serializable(rpc, wallet_data.clone())
             .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to instantiate multisig wallet: {e}")))?;
         // Import funding transactions into the wallet.
@@ -1398,7 +1403,7 @@ where
         })?;
         drop(channel);
         trace!("{role}: Reconstructing wallet for closing tx.");
-        let rpc = connect_to_rpc(self.tx_monitor.rpc_address()).await?;
+        let rpc = connect_to_rpc(self.rpc_address()).await?;
         let mut wallet = MultisigWallet::from_serializable(rpc.clone(), wallet_data.clone())
             .map_err(|e| ChannelServerError::ProtocolError(format!("Failed to instantiate multisig wallet: {e}")))?;
         trace!("{role}: Reconstructed wallet for closing tx.");
