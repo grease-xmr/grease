@@ -116,6 +116,8 @@ pub fn VerifyEquivalentModulo(
     response_div_ed25519: [u8; 32],
     response_ed25519: [u8; 32],
 ) {
+    assert_lt(blinding_DLEQ, BABY_JUBJUB_ORDER_PLUS_ONE);
+
     let challenge_bytes_slice: [u8] = challenge_bytes.as_slice();
 
     // U512 from_be_bytes expects 64 bytes + 1 byte for potential overflow

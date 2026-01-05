@@ -746,12 +746,10 @@ impl ZeroKnowledgeProofUpdatePublic {
             ));
         }
         let leading_zeroes = 32 - challenge_bytes.len();
-        for _ in 0..leading_zeroes {
-            public_input.extend_from_slice(&BigUint::zero().to_bytes_be());
-        }
-        for i in leading_zeroes..32 {
-            let byte = BigUint::from(challenge_bytes[i - leading_zeroes]);
-            public_input.extend_from_slice(&byte.to_bytes_be());
+        for i in 0..32 {
+            // Pad each byte to a 32-byte field element, left-aligned zeros when challenge is shorter
+            let byte = if i < leading_zeroes { 0u8 } else { challenge_bytes[i - leading_zeroes] };
+            public_input.extend_from_slice(&left_pad_bytes_32(&[byte])?);
         }
 
         Ok(Self {
