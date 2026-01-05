@@ -50,24 +50,32 @@ impl MonitorTransactions for TransactionMonitor {
             self.rpc_address
         );
         let rpc = connect_to_rpc(&self.rpc_address).await?;
-        let height = rpc.get_height().await? as u64;
         let mut wallet = WatchOnlyWallet::new(rpc, private_view_key, public_spend_key, birthday)?;
-        info!("Watch-only wallet created with birthday {birthday:?}. Current height is {height}");
+        debug!("Watch-only wallet created with birthday {birthday:?}");
         let mut interval = tokio::time::interval(poll_interval);
         let _handle = tokio::spawn(async move {
-            let mut start_height = birthday.map(|b| height.min(b)).unwrap_or(height);
+            let mut start_height = birthday.unwrap_or(0);
             loop {
                 interval.tick().await;
-                let current_height = wallet.get_height().await.expect("Failed to get blockchain height");
+                let Ok(current_height) = wallet.get_height().await else {
+                    error!("Failed to get current height from RPC. Skipping this update.");
+                    continue;
+                };
                 debug!("Scanning for funding transaction in block range {start_height}..<{current_height}");
-                if let Ok(c) = wallet.scan(Some(start_height - 5), Some(current_height)).await {
+                if let Ok(c) = wallet.scan(Some(start_height.saturating_sub(5)), Some(current_height)).await {
                     if c > 0 {
                         break;
                     }
                     start_height = current_height;
                 }
             }
-            let output = wallet.outputs().first().expect("No outputs").clone();
+            let output = match wallet.outputs().first() {
+                Some(o) => o.clone(),
+                None => {
+                    error!("No outputs found after scan for channel {channel_name} found an output. Investigate possible race condition.");
+                    return;
+                }
+            };
             let amount = MoneroAmount::from(output.commitment().amount);
             let id = hex::encode(output.transaction());
             let serialized = output.serialize();
