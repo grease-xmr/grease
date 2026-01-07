@@ -500,8 +500,11 @@ mod test {
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state() -> NewChannelState {
+        use libgrease::cryptography::keys::PublicKey;
         // All this info is known, or can be scanned in from a QR code etc
         let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
+        let (_, merchant_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
+        let (_, customer_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         let initial_state = initial_state
             .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
             .with_customer_initial_balance(MoneroAmount::from(1000))
@@ -510,7 +513,11 @@ mod test {
             .with_peer_label("you")
             .with_customer_closing_address(Address::from_str(ALICE_ADDRESS).unwrap())
             .with_merchant_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
-            .build::<Blake2b512>()
+            .with_merchant_key(merchant_key)
+            .with_customer_key(customer_key)
+            .with_merchant_nonce(12345)
+            .with_customer_nonce(67890)
+            .build()
             .expect("Failed to build initial state");
         initial_state
     }

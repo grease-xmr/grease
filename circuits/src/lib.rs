@@ -978,7 +978,9 @@ pub(crate) fn bb_prove_init(
 }
 
 fn create_dir_if_not_exists(path: impl AsRef<Path>) -> Result<(), BBError> {
-    match std::fs::create_dir(path) {
+    let p = path.as_ref();
+    debug!("Creating directory: {}", p.display());
+    match std::fs::create_dir(p) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(BBError::IoError(e)),

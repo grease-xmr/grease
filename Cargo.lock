@@ -1838,6 +1838,7 @@ dependencies = [
  "monero-address",
  "monero-rpc",
  "monero-simple-request-rpc",
+ "rand_core 0.6.4",
  "tokio",
  "wallet",
 ]

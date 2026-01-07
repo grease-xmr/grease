@@ -516,7 +516,7 @@ where
             .with_kes_public_key(prop.seed.kes_public_key)
             .with_customer_closing_address(prop.closing_address)
             .with_merchant_closing_address(prop.seed.closing_address)
-            .build::<blake2::Blake2b512>()
+            .build()
             .expect("Missing new channel state data");
         new_state.to_channel_state()
     }
@@ -532,7 +532,7 @@ where
             .with_kes_public_key(prop.seed.kes_public_key)
             .with_customer_closing_address(prop.closing_address)
             .with_merchant_closing_address(prop.seed.closing_address)
-            .build::<blake2::Blake2b512>()
+            .build()
             .expect("Missing new channel state data");
         new_state.to_channel_state()
     }

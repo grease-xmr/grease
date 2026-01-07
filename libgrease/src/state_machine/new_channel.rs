@@ -2,6 +2,7 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
+use crate::cryptography::keys::Curve25519PublicKey;
 use crate::lifecycle_impl;
 use crate::monero::data_objects::ClosingAddresses;
 use crate::payment_channel::ChannelRole;
@@ -10,7 +11,6 @@ use crate::state_machine::establishing_channel::EstablishingState;
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use crate::state_machine::timeouts::TimeoutReason;
 use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
-use digest::Digest;
 use log::*;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,12 @@ pub struct NewChannelBuilder {
     my_label: Option<String>,
     merchant_closing: Option<Address>,
     customer_closing: Option<Address>,
+    // Public keys for channel ID derivation
+    merchant_key: Option<Curve25519PublicKey>,
+    customer_key: Option<Curve25519PublicKey>,
+    // Nonces for channel ID derivation
+    merchant_nonce: Option<u64>,
+    customer_nonce: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,16 +68,25 @@ impl NewChannelBuilder {
             customer_amount: None,
             merchant_closing: None,
             customer_closing: None,
+            merchant_key: None,
+            customer_key: None,
+            merchant_nonce: None,
+            customer_nonce: None,
         }
     }
 
-    pub fn build<D: Digest>(&self) -> Option<NewChannelState> {
+    /// Build the new channel state. The digest type `D` must have an output size of at least 32 bytes.
+    pub fn build(&self) -> Option<NewChannelState> {
         if self.my_label.is_none()
             || self.peer_label.is_none()
             || (self.merchant_amount.is_none() && self.customer_amount.is_none())
             || self.kes_public_key.is_none()
             || self.merchant_closing.is_none()
             || self.customer_closing.is_none()
+            || self.merchant_key.is_none()
+            || self.customer_key.is_none()
+            || self.merchant_nonce.is_none()
+            || self.customer_nonce.is_none()
         {
             return None;
         }
@@ -93,7 +108,14 @@ impl NewChannelBuilder {
         let closing =
             ClosingAddresses { customer: self.customer_closing.unwrap(), merchant: self.merchant_closing.unwrap() };
 
-        let channel_id = ChannelId::new::<D>(merchant_label.clone(), customer_label.clone(), initial_balances, closing);
+        let channel_id = ChannelId::new(
+            self.merchant_key.unwrap(),
+            self.customer_key.unwrap(),
+            initial_balances,
+            closing,
+            self.merchant_nonce.unwrap(),
+            self.customer_nonce.unwrap(),
+        );
         let channel_info = ChannelMetadata::new(
             self.network.unwrap_or(Network::Mainnet),
             self.channel_role,
@@ -135,6 +157,26 @@ impl NewChannelBuilder {
 
     pub fn with_merchant_closing_address(mut self, address: Address) -> Self {
         self.merchant_closing = Some(address);
+        self
+    }
+
+    pub fn with_merchant_key(mut self, key: Curve25519PublicKey) -> Self {
+        self.merchant_key = Some(key);
+        self
+    }
+
+    pub fn with_customer_key(mut self, key: Curve25519PublicKey) -> Self {
+        self.customer_key = Some(key);
+        self
+    }
+
+    pub fn with_merchant_nonce(mut self, nonce: u64) -> Self {
+        self.merchant_nonce = Some(nonce);
+        self
+    }
+
+    pub fn with_customer_nonce(mut self, nonce: u64) -> Self {
+        self.customer_nonce = Some(nonce);
         self
     }
 }
@@ -263,6 +305,10 @@ pub struct ChannelSeedInfo {
     pub user_label: String,
     /// The address that the closing transaction must pay into
     pub closing_address: Address,
+    /// The public key for channel ID derivation (from the seed provider, usually merchant)
+    pub channel_key: Curve25519PublicKey,
+    /// The nonce for channel ID derivation (from the seed provider, usually merchant)
+    pub channel_nonce: u64,
 }
 
 /// The builder struct for the [`ChannelSeedInfo`].
@@ -274,6 +320,8 @@ pub struct ChannelSeedBuilder {
     initial_balances: Option<Balances>,
     user_label: Option<String>,
     closing_address: Option<Address>,
+    channel_key: Option<Curve25519PublicKey>,
+    channel_nonce: Option<u64>,
 }
 
 impl ChannelSeedBuilder {
@@ -285,6 +333,8 @@ impl ChannelSeedBuilder {
             initial_balances: None,
             user_label: None,
             closing_address: None,
+            channel_key: None,
+            channel_nonce: None,
         }
     }
 
@@ -313,14 +363,35 @@ impl ChannelSeedBuilder {
         self
     }
 
+    pub fn with_channel_key(mut self, key: Curve25519PublicKey) -> Self {
+        self.channel_key = Some(key);
+        self
+    }
+
+    pub fn with_channel_nonce(mut self, nonce: u64) -> Self {
+        self.channel_nonce = Some(nonce);
+        self
+    }
+
     pub fn build(self) -> Result<ChannelSeedInfo, MissingSeedInfo> {
         let key_id = self.key_id.ok_or(MissingSeedInfo::Missing)?;
         let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::KesPublicKey)?;
         let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
         let user_label = self.user_label.ok_or(MissingSeedInfo::PartialChannelId)?;
         let closing_address = self.closing_address.ok_or(MissingSeedInfo::ClosingAddress)?;
+        let channel_key = self.channel_key.ok_or(MissingSeedInfo::ChannelKey)?;
+        let channel_nonce = self.channel_nonce.ok_or(MissingSeedInfo::ChannelNonce)?;
 
-        Ok(ChannelSeedInfo { role: self.role, key_id, kes_public_key, initial_balances, user_label, closing_address })
+        Ok(ChannelSeedInfo {
+            role: self.role,
+            key_id,
+            kes_public_key,
+            initial_balances,
+            user_label,
+            closing_address,
+            channel_key,
+            channel_nonce,
+        })
     }
 }
 
@@ -344,4 +415,8 @@ pub enum MissingSeedInfo {
     PartialChannelId,
     #[error("Missing closing address")]
     ClosingAddress,
+    #[error("Missing channel key")]
+    ChannelKey,
+    #[error("Missing channel nonce")]
+    ChannelNonce,
 }

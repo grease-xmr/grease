@@ -266,14 +266,27 @@ impl InteractiveApp {
         oob_info: OutOfBandMerchantInfo,
         my_closing_address: Address,
     ) -> Result<NewChannelProposal, anyhow::Error> {
+        use libgrease::cryptography::keys::{Curve25519PublicKey, PublicKey};
+        use rand_core::{OsRng, RngCore};
+
         let my_contact_info = self.identity.contact_info();
         let peer_info = oob_info.contact;
         let seed_info = oob_info.seed;
         let key_index = rand::rng().next_u64();
         let user_label = self.identity.id();
         let my_user_label = format!("{user_label}-{key_index}");
-        let proposal =
-            NewChannelProposal::new(seed_info, my_user_label, my_contact_info, my_closing_address, peer_info);
+        // Generate channel key and nonce for the customer
+        let (_, my_channel_key) = Curve25519PublicKey::keypair(&mut OsRng);
+        let my_channel_nonce = OsRng.next_u64();
+        let proposal = NewChannelProposal::new(
+            seed_info,
+            my_user_label,
+            my_contact_info,
+            my_closing_address,
+            peer_info,
+            my_channel_key,
+            my_channel_nonce,
+        );
         Ok(proposal)
     }
 

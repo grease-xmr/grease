@@ -137,6 +137,10 @@ pub struct NewChannelProposal {
     pub proposer_label: String,
     /// The address that the proposer will use to close the channel.
     pub closing_address: Address,
+    /// The public key for channel ID derivation (from the proposer, usually customer)
+    pub proposer_channel_key: libgrease::cryptography::keys::Curve25519PublicKey,
+    /// The nonce for channel ID derivation (from the proposer, usually customer)
+    pub proposer_channel_nonce: u64,
 }
 
 impl NewChannelProposal {
@@ -146,6 +150,8 @@ impl NewChannelProposal {
         my_contact_info: ContactInfo,
         my_closing_address: Address,
         their_contact_info: ContactInfo,
+        my_channel_key: libgrease::cryptography::keys::Curve25519PublicKey,
+        my_channel_nonce: u64,
     ) -> Self {
         Self {
             seed,
@@ -153,6 +159,8 @@ impl NewChannelProposal {
             contact_info_proposee: their_contact_info,
             proposer_label: my_label.into(),
             closing_address: my_closing_address,
+            proposer_channel_key: my_channel_key,
+            proposer_channel_nonce: my_channel_nonce,
         }
     }
 
@@ -171,12 +179,29 @@ impl NewChannelProposal {
             ChannelRole::Merchant => (self.closing_address, self.seed.closing_address),
             ChannelRole::Customer => (self.seed.closing_address, self.closing_address),
         };
+        // Assign keys and nonces based on role
+        let (merchant_key, customer_key, merchant_nonce, customer_nonce) = match self.seed.role {
+            ChannelRole::Merchant => (
+                self.proposer_channel_key,
+                self.seed.channel_key,
+                self.proposer_channel_nonce,
+                self.seed.channel_nonce,
+            ),
+            ChannelRole::Customer => (
+                self.seed.channel_key,
+                self.proposer_channel_key,
+                self.seed.channel_nonce,
+                self.proposer_channel_nonce,
+            ),
+        };
         let closing_addresses = ClosingAddresses { merchant: merchant_address, customer: customer_address };
-        let channel_id = ChannelId::new::<blake2::Blake2b512>(
-            &merchant_label,
-            &customer_label,
+        let channel_id: ChannelId = ChannelId::new(
+            merchant_key,
+            customer_key,
             self.seed.initial_balances,
             closing_addresses,
+            merchant_nonce,
+            customer_nonce,
         );
         ProposedChannelInfo {
             role: self.seed.role,
