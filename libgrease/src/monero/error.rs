@@ -1,5 +1,16 @@
+use monero::Network;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum ClosingAddressError {
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
+    #[error("Customer and merchant addresses must be different")]
+    IdenticalAddresses,
+    #[error("Network mismatch: customer address is on {customer:?}, merchant address is on {merchant:?}")]
+    NetworkMismatch { customer: Network, merchant: Network },
+}
 
 #[derive(Debug, Clone, Error, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MoneroWalletError {
