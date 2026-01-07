@@ -8,7 +8,7 @@ use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
     ChannelCloseRecord, ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState,
-    LifeCycleEvent, NewChannelState, ProposedChannelInfo, RejectNewChannelReason, TimeoutReason, UpdateRecord,
+    LifeCycleEvent, NewChannelProposal, NewChannelState, RejectNewChannelReason, TimeoutReason, UpdateRecord,
 };
 use libp2p::PeerId;
 use log::*;
@@ -194,7 +194,7 @@ impl PaymentChannel {
         }
     }
 
-    fn on_verified_proposal(&mut self, proposal: ProposedChannelInfo) -> Result<(), LifeCycleError> {
+    fn on_verified_proposal(&mut self, proposal: NewChannelProposal) -> Result<(), LifeCycleError> {
         debug!("⚡️  Received a verified channel proposal");
         self.update_new(|new| {
             new.next(proposal)
@@ -475,21 +475,22 @@ impl PaymentChannels {
 mod test {
     use crate::grease::PaymentChannel;
     use crate::ContactInfo;
-    use blake2::Blake2b512;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
+    use libgrease::balance::Balances;
+    use libgrease::channel_id::ChannelId;
     use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
     use libgrease::cryptography::zk_objects::{
         GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
     };
-    use libgrease::monero::data_objects::{MultisigSplitSecrets, TransactionId, TransactionRecord};
+    use libgrease::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
     use libgrease::multisig::MultisigWalletData;
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
     use libgrease::state_machine::{
-        ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, NewChannelState, UpdateRecord,
+        ChannelCloseRecord, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord,
     };
     use libp2p::{Multiaddr, PeerId};
-    use monero::Address;
+    use monero::{Address, Network};
     use std::str::FromStr;
     use wallet::multisig_wallet::AdaptSig;
 
@@ -500,18 +501,23 @@ mod test {
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state() -> NewChannelState {
+        use libgrease::cryptography::keys::PublicKey;
         // All this info is known, or can be scanned in from a QR code etc
-        let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
-        let initial_state = initial_state
+        let (_, merchant_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
+        let (_, customer_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
+        let balances = Balances::new(MoneroAmount::default(), MoneroAmount::from(1000));
+        let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("valid addresses");
+        let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Mainnet)
             .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
-            .with_customer_initial_balance(MoneroAmount::from(1000))
-            .with_merchant_initial_balance(MoneroAmount::default())
-            .with_my_user_label("me")
-            .with_peer_label("you")
-            .with_customer_closing_address(Address::from_str(ALICE_ADDRESS).unwrap())
-            .with_merchant_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
-            .build::<Blake2b512>()
+            .with_initial_balances(balances)
+            .with_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
+            .with_channel_key(merchant_key.clone())
+            .with_channel_nonce(1234)
+            .build()
             .expect("Failed to build initial state");
+        let channel_id = ChannelId::new(merchant_key, customer_key, balances, closing, 1234, 4567);
+        let accepted_proposal = NewChannelProposal { network: Network::Mainnet, channel_id, seed };
+        let initial_state = NewChannelState::new(ChannelRole::Customer, accepted_proposal);
         initial_state
     }
     #[test]

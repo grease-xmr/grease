@@ -15,7 +15,7 @@ mod pending_updates;
 pub use client::{GreaseClient, GreaseClientError, GreaseClientOptions};
 pub use grease_message_broker::GreaseChannelEvents;
 pub use message_types::{
-    AckFundingTxBroadcast, ChannelProposalResult, GreaseRequest, GreaseResponse, NewChannelProposal, PrepareUpdate,
+    AckFundingTxBroadcast, ChannelProposalResult, GreaseRequest, GreaseResponse, NewChannelMessage, PrepareUpdate,
     RejectChannelProposal, UpdateCommitted, UpdatePrepared,
 };
 pub use payment_channel::{OutOfBandMerchantInfo, PaymentChannel, PaymentChannels};

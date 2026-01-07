@@ -1,5 +1,5 @@
 use super::message_types::{
-    ChannelProposalResult, GreaseRequest, GreaseResponse, NewChannelProposal, PrepareUpdate, RejectChannelProposal,
+    ChannelProposalResult, GreaseRequest, GreaseResponse, NewChannelMessage, PrepareUpdate, RejectChannelProposal,
     RejectReason, RetryOptions, UpdateCommitted, UpdatePrepared,
 };
 use super::pending_updates::{PendingUpdate, PendingUpdates, ResponderInfo};
@@ -28,9 +28,7 @@ use libgrease::monero::watcher::MonitorTransactions;
 use libgrease::payment_channel::{ChannelRole, UpdateError};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
-use libgrease::state_machine::{
-    ChannelCloseRecord, LifeCycleEvent, NewChannelBuilder, ProposedChannelInfo, UpdateRecord,
-};
+use libgrease::state_machine::{ChannelCloseRecord, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord};
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;
@@ -203,7 +201,7 @@ where
     ///      3. Create a new multisig wallet with the public keys.
     ///   2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
     ///   3. Verify the wallet address with the peer.
-    pub async fn establish_new_channel(&self, proposal: NewChannelProposal) -> Result<String, GreaseClientError> {
+    pub async fn establish_new_channel(&self, proposal: NewChannelMessage) -> Result<String, GreaseClientError> {
         self.inner.customer_establish_new_channel(proposal).await
     }
 
@@ -353,7 +351,7 @@ where
     ///    6. Exchange proofs with the merchant.
     pub async fn customer_establish_new_channel(
         &self,
-        proposal: NewChannelProposal,
+        proposal: NewChannelMessage,
     ) -> Result<String, GreaseClientError> {
         // 1. Proposal phase
         info!("💍️ Sending new channel proposal to merchant");
@@ -455,10 +453,10 @@ where
     /// reject the final proposal, we return the reason to the client.
     async fn customer_send_proposal(
         &self,
-        proposal: NewChannelProposal,
+        proposal: NewChannelMessage,
     ) -> Result<Result<String, RejectChannelProposal>, PeerConnectionError> {
         let mut client = self.network_client.clone();
-        let address = proposal.contact_info_proposee.dial_address();
+        let address = proposal.contact_info_merchant.dial_address();
         // todo: check what happens if there's already a connection?
         client.dial(address).await?;
         trace!("Sending channel proposal to merchant.");
@@ -475,8 +473,8 @@ where
                     return Ok(Err(rej));
                 }
                 // Proposal has been verified. Create the new channel.
-                let peer_info = final_proposal.contact_info_proposee.clone();
-                let info = final_proposal.proposed_channel_info();
+                let peer_info = final_proposal.contact_info_merchant.clone();
+                let info = final_proposal.as_proposal();
                 self.common_create_channel(state, peer_info, info)
                     .await
                     .map_err(|_| RejectChannelProposal::internal("Error creating new channel"))
@@ -495,7 +493,7 @@ where
         &self,
         state: ChannelState,
         peer_info: ContactInfo,
-        info: ProposedChannelInfo,
+        info: NewChannelProposal,
     ) -> Result<String, LifeCycleError> {
         let mut channel = PaymentChannel::new(peer_info, state);
         let event = LifeCycleEvent::VerifiedProposal(Box::new(info));
@@ -507,51 +505,33 @@ where
     }
 
     /// Helper function. Creates a [`NewChannelState`] from the given proposal and secret.
-    fn customer_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
-        let new_state = NewChannelBuilder::new(prop.seed.role)
-            .with_my_user_label(&prop.proposer_label)
-            .with_peer_label(&prop.seed.user_label)
-            .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
-            .with_customer_initial_balance(prop.seed.initial_balances.customer)
-            .with_kes_public_key(prop.seed.kes_public_key)
-            .with_customer_closing_address(prop.closing_address)
-            .with_merchant_closing_address(prop.seed.closing_address)
-            .build::<blake2::Blake2b512>()
-            .expect("Missing new channel state data");
+    fn customer_create_new_state(&self, prop: NewChannelMessage) -> ChannelState {
+        let role = prop.seed.role;
+        let new_state = NewChannelState::new(role, prop.as_proposal());
         new_state.to_channel_state()
     }
 
-    // TODO - the merchant label should be used to extract data that was generated ourselves, rather than trusting
-    // the proposal.
-    fn merchant_create_new_state(&self, prop: NewChannelProposal) -> ChannelState {
-        let new_state = NewChannelBuilder::new(prop.seed.role.other())
-            .with_my_user_label(&prop.seed.user_label)
-            .with_peer_label(&prop.proposer_label)
-            .with_merchant_initial_balance(prop.seed.initial_balances.merchant)
-            .with_customer_initial_balance(prop.seed.initial_balances.customer)
-            .with_kes_public_key(prop.seed.kes_public_key)
-            .with_customer_closing_address(prop.closing_address)
-            .with_merchant_closing_address(prop.seed.closing_address)
-            .build::<blake2::Blake2b512>()
-            .expect("Missing new channel state data");
+    fn merchant_create_new_state(&self, prop: NewChannelMessage) -> ChannelState {
+        let role = prop.seed.role.other();
+        let new_state = NewChannelState::new(role, prop.as_proposal());
         new_state.to_channel_state()
     }
 
     /// Handle an incoming request to open a payment channel.
-    async fn merchant_handle_proposal(&self, data: &NewChannelProposal) -> GreaseResponse {
-        info!("💍️ New proposal received from customer: {}", data.contact_info_proposer.name);
+    async fn merchant_handle_proposal(&self, data: &NewChannelMessage) -> GreaseResponse {
+        info!("💍️ New proposal received from customer: {}", data.contact_info_customer.name);
         self.verify_proposal_and_create_channel(data.clone())
             .await
             .map(|name| {
                 info!(
                     "💍️ Proposal for channel {name} accepted from customer: {}",
-                    data.contact_info_proposer.name
+                    data.contact_info_customer.name
                 );
                 let result = ChannelProposalResult::Accepted(data.clone());
                 GreaseResponse::ProposeChannelResponse(result)
             })
             .unwrap_or_else(|rej| {
-                info!("💍️ New proposal rejected for customer: {}", data.contact_info_proposer.name);
+                info!("💍️ New proposal rejected for customer: {}", data.contact_info_customer.name);
                 let result = ChannelProposalResult::Rejected(rej);
                 GreaseResponse::ProposeChannelResponse(result)
             })
@@ -559,7 +539,7 @@ where
 
     async fn verify_proposal_and_create_channel(
         &self,
-        data: NewChannelProposal,
+        data: NewChannelMessage,
     ) -> Result<String, RejectChannelProposal> {
         // Let the delegate do their checks
         self.delegate.verify_proposal(&data).await.map_err(|err| {
@@ -567,11 +547,11 @@ where
             let reason = RejectReason::InvalidProposal(err);
             RejectChannelProposal::new(reason, RetryOptions::close_only())
         })?;
+        let proposal = data.as_proposal();
         // Construct the new channel
-        let peer_info = data.contact_info_proposer.clone();
-        let info = data.proposed_channel_info();
+        let peer_info = data.contact_info_customer.clone();
         let new_state = self.merchant_create_new_state(data);
-        let name = self.common_create_channel(new_state, peer_info, info).await.map_err(|e| {
+        let name = self.common_create_channel(new_state, peer_info, proposal).await.map_err(|e| {
             warn!("Error creating new channel {e}");
             RejectChannelProposal::internal("Error creating new channel")
         })?;

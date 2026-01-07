@@ -1,7 +1,7 @@
 //---------------------------------   Verify Channel Proposals    ------------------------------------------------------
 
 use crate::delegates::error::DelegateError;
-use crate::grease::NewChannelProposal;
+use crate::grease::NewChannelMessage;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
@@ -14,7 +14,7 @@ use libgrease::state_machine::error::InvalidProposal;
 use std::future::Future;
 
 pub trait ProposalVerifier {
-    fn verify_proposal(&self, data: &NewChannelProposal) -> impl Future<Output = Result<(), InvalidProposal>> + Send;
+    fn verify_proposal(&self, data: &NewChannelMessage) -> impl Future<Output = Result<(), InvalidProposal>> + Send;
 }
 
 //--------------------------------------   KES Shared Secret handling    -----------------------------------------------

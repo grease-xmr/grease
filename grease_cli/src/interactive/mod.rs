@@ -1,5 +1,5 @@
 use crate::interactive::menus::{top_menu, Menu};
-use grease_p2p::ConversationIdentity;
+use grease_p2p::{ConversationIdentity, KeyManager};
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -7,22 +7,25 @@ pub mod formatting;
 pub mod menus;
 use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
-    assign_identity, create_identity, delete_identity, list_identities, load_or_create_identities,
+    assign_identity, create_identity, delete_identity, list_identities, load_or_create_identities, MoneroKeyManager,
 };
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
 use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
 use grease_p2p::delegates::DummyDelegate;
 use grease_p2p::grease::{
-    GreaseClient, GreaseClientOptions, NewChannelProposal, OutOfBandMerchantInfo, PaymentChannels,
+    GreaseClient, GreaseClientOptions, NewChannelMessage, OutOfBandMerchantInfo, PaymentChannels,
 };
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
+use libgrease::channel_id::ChannelId;
+use libgrease::cryptography::keys::Curve25519Secret;
+use libgrease::monero::data_objects::ClosingAddresses;
 use libgrease::state_machine::lifecycle::LifecycleStage;
 use libgrease::state_machine::ChannelSeedBuilder;
 use log::*;
 use menus::*;
-use monero::Address;
+use monero::{Address, Network};
 use rand::{Rng, RngCore};
 
 pub type MoneroNetworkServer = GreaseClient<DummyDelegate>;
@@ -30,6 +33,7 @@ pub const RPC_ADDRESS: &str = "http://localhost:25070";
 
 pub struct InteractiveApp {
     identity: ConversationIdentity,
+    key_manager: MoneroKeyManager,
     config: GlobalOptions,
     current_menu: &'static Menu,
     breadcrumbs: Vec<&'static Menu>,
@@ -42,7 +46,7 @@ impl InteractiveApp {
     /// Creates a new `InteractiveApp` instance with the provided configuration.
     ///
     /// Initializes the key manager with a secret from the configuration or generates a random one if absent. Loads identities from the configured file if available, sets up the initial menu state, and attempts to auto-login using a preferred identity if specified.
-    pub fn new(config: GlobalOptions) -> Result<Self, anyhow::Error> {
+    pub fn new(mut config: GlobalOptions) -> Result<Self, anyhow::Error> {
         let current_menu = top_menu();
         let breadcrumbs = vec![top_menu()];
         let id_path = config.identities_file.clone().unwrap_or_else(|| config.base_path().join("identities.yml"));
@@ -51,8 +55,23 @@ impl InteractiveApp {
         let channels = PaymentChannels::load(config.channel_directory())?;
         let options = GreaseClientOptions::default();
         let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate, options)?;
-        let app =
-            Self { identity, current_menu, breadcrumbs, config, current_channel: None, channel_status: None, server };
+        let key_manager = if let Some(secret) = &config.initial_secret {
+            MoneroKeyManager::new(secret.clone())
+        } else {
+            let initial = Curve25519Secret::random(&mut rand_core::OsRng);
+            config.initial_secret = Some(initial.clone());
+            MoneroKeyManager::new(initial)
+        };
+        let app = Self {
+            identity,
+            current_menu,
+            breadcrumbs,
+            config,
+            current_channel: None,
+            channel_status: None,
+            server,
+            key_manager,
+        };
         Ok(app)
     }
 
@@ -265,15 +284,26 @@ impl InteractiveApp {
         &self,
         oob_info: OutOfBandMerchantInfo,
         my_closing_address: Address,
-    ) -> Result<NewChannelProposal, anyhow::Error> {
+    ) -> Result<NewChannelMessage, anyhow::Error> {
+        use libgrease::cryptography::keys::{Curve25519PublicKey, PublicKey};
+        use rand_core::{OsRng, RngCore};
+
         let my_contact_info = self.identity.contact_info();
         let peer_info = oob_info.contact;
         let seed_info = oob_info.seed;
-        let key_index = rand::rng().next_u64();
-        let user_label = self.identity.id();
-        let my_user_label = format!("{user_label}-{key_index}");
-        let proposal =
-            NewChannelProposal::new(seed_info, my_user_label, my_contact_info, my_closing_address, peer_info);
+        let my_channel_nonce = OsRng.next_u64();
+        let closing = ClosingAddresses { customer: my_closing_address, merchant: seed_info.merchant_closing_address };
+        let (_, pubkey) = self.key_manager.new_keypair(my_channel_nonce);
+        let channel_id = ChannelId::new(
+            seed_info.merchant_channel_key.clone(),
+            pubkey,
+            seed_info.initial_balances,
+            closing,
+            seed_info.merchant_nonce,
+            my_channel_nonce,
+        );
+        // Generate channel key and nonce for the customer
+        let proposal = NewChannelMessage::new(Network::Mainnet, channel_id, seed_info, my_contact_info, peer_info);
         Ok(proposal)
     }
 
@@ -326,21 +356,13 @@ impl InteractiveApp {
             .config
             .kes_public_key()
             .ok_or_else(|| anyhow!("No KES public key found. Is `kes_public_key` configured in the config file?"))?;
-        let label = self
-            .config
-            .user_label()
-            .ok_or_else(|| anyhow!("No user label found. Is `user_label` configured in the config file?"))?;
-        let index = rand::rng().random();
-        let channel_id = format!("{label}-{index}");
         let address = self
             .config
             .refund_address()
             .ok_or_else(|| anyhow!("No refund address found. Is `refund_address` configured in the config file?"))?;
         let seed_info = ChannelSeedBuilder::default()
-            .with_key_id(index)
             .with_kes_public_key(kes)
             .with_initial_balances(balances)
-            .with_user_label(channel_id)
             .with_closing_address(address)
             .build()?;
         let info = OutOfBandMerchantInfo::new(contact_info, seed_info);

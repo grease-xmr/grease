@@ -32,7 +32,7 @@ lazy_static! {
     .unwrap();
     static ref SUBORDER_BJJ_BIGUINT: BigUint = SUBORDER_BJJ.into();
 }
- 
+
 static PROOF_SIZE_INIT: usize = 16256usize;
 static PROOF_SIZE_INIT_HEX: usize = PROOF_SIZE_INIT * 2usize;
 static PROOF_SIZE_UPDATE: usize = 16256usize;
@@ -978,7 +978,9 @@ pub(crate) fn bb_prove_init(
 }
 
 fn create_dir_if_not_exists(path: impl AsRef<Path>) -> Result<(), BBError> {
-    match std::fs::create_dir(path) {
+    let p = path.as_ref();
+    debug!("Creating directory: {}", p.display());
+    match std::fs::create_dir(p) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(BBError::IoError(e)),
@@ -1192,16 +1194,10 @@ pub struct PublicInit {
 
 #[expect(non_snake_case)]
 impl PublicInit {
-    pub fn new(
-        T_0: &Point,
-        challenge_bytes: &[u8; 32],
-    ) -> Self {
+    pub fn new(T_0: &Point, challenge_bytes: &[u8; 32]) -> Self {
         let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
 
-        PublicInit {
-            T_0: T_0.clone(),
-            c: challenge,
-        }
+        PublicInit { T_0: T_0.clone(), c: challenge }
     }
 }
 
@@ -1219,18 +1215,10 @@ pub struct PublicUpdate {
 
 #[expect(non_snake_case)]
 impl PublicUpdate {
-    pub fn new(
-        T_prev: &Point,
-        T_current: &Point,
-        challenge_bytes: &[u8; 32],
-    ) -> Self {
+    pub fn new(T_prev: &Point, T_current: &Point, challenge_bytes: &[u8; 32]) -> Self {
         let challenge: BigUint = BigUint::from_bytes_be(challenge_bytes);
 
-        PublicUpdate {
-            T_prev: T_prev.clone(),
-            T_current: T_current.clone(),
-            challenge,
-        }
+        PublicUpdate { T_prev: T_prev.clone(), T_current: T_current.clone(), challenge }
     }
 }
 
@@ -1408,10 +1396,7 @@ pub fn generate_initial_proofs(
         )?;
 
         //Verify
-        let public_init = PublicInit::new(
-            &t_0,
-            &challenge_bytes,
-        );
+        let public_init = PublicInit::new(&t_0, &challenge_bytes);
 
         let verification_key = load_vk(get_target_path(), "vk_init")?;
 
@@ -1542,11 +1527,7 @@ pub fn generate_update(witness_im1: &BigUint, blinding_dleq: &BigUint, t_im1: &P
         )?;
 
         //Verify
-        let public_update = PublicUpdate::new(
-            t_im1,
-            &t_i,
-            &challenge_bytes,
-        );
+        let public_update = PublicUpdate::new(t_im1, &t_i, &challenge_bytes);
 
         let verification_key = load_vk(get_target_path(), "vk_update")?;
         let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &verification_key)?;
@@ -1786,10 +1767,7 @@ mod test {
             .unwrap();
 
             //Verify
-            let public_init = PublicInit::new(
-                &t_0,
-                &challenge_bytes,
-            );
+            let public_init = PublicInit::new(&t_0, &challenge_bytes);
 
             let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
 
@@ -1846,11 +1824,7 @@ mod test {
             .unwrap();
 
             //Verify
-            let public_update = PublicUpdate::new(
-                &t_im1,
-                &t_i,
-                &challenge_bytes,
-            );
+            let public_update = PublicUpdate::new(&t_im1, &t_i, &challenge_bytes);
 
             let vk = load_vk(get_target_path(), "vk_update").unwrap();
             let verification = bb_verify_update(&public_update, &zero_knowledge_proof_update, &vk).unwrap();
@@ -1985,10 +1959,7 @@ mod test {
         .unwrap();
 
         //Verify
-        let public_init = PublicInit::new(
-            &t_0,
-            &challenge_bytes_init,
-        );
+        let public_init = PublicInit::new(&t_0, &challenge_bytes_init);
 
         let verification_key = load_vk(get_target_path(), "vk_init").unwrap();
 
@@ -2081,11 +2052,7 @@ mod test {
         .unwrap();
 
         //Verify
-        let public_update = PublicUpdate::new(
-            &t_0,
-            &t_1,
-            &challenge_bytes_update,
-        );
+        let public_update = PublicUpdate::new(&t_0, &t_1, &challenge_bytes_update);
 
         let vk = load_vk(get_target_path(), "vk_update").unwrap();
 

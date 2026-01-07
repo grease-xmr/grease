@@ -13,6 +13,7 @@ wallet = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 monero = { workspace = true }
+rand_core = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
 
 [dependencies.monero-simple-request-rpc]

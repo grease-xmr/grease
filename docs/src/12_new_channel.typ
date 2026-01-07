@@ -26,14 +26,17 @@ There are *three* half-rounds of communication in this phase#footnote([See `serv
 
 === Channel Id <channelId>
 
-The channel id is a 64 character hexadecimal string that uniquely identifies the channel.
+The channel id is a 65 character hexadecimal string that uniquely identifies the channel. It is defined as the prefix "XGC", followed by the
+ first 31 bytes of the *Blake2b-512* hash of the channel metadata in hexadecimal format.
 
-It is derived from as the first *32 bytes* of the *Blake2b-512* hash of the following transcript represented in hexadecimal format:
+ The hash is calculated from the following transcript:
+
 - The merchant public key, #Pm, 32 bytes in little-endian byte order,
 - The customer public key, #Pc, 32 bytes in little-endian byte order,
 - The merchant initial balance in piconero, as a 64-bit unsigned integer in little-endian byte order,
 - The customer initial balance in piconero, as a 64-bit unsigned integer in little-endian byte order,
-- A channel nonce, a 64-bit little-endian unsigned integer as the sum of 
-  - a 32-bit unsigned integer in little-endian byte order, randomly chosen by the customer, and
-  - a 32-bit unsigned integer in little-endian byte order, randomly chosen by the merchant.
+- The nominated closing address of the merchant, as a Base64 string,
+- The nominated closing address of the customer, as a Base64 string,
+- A merchant nonce, a 64-bit little-endian unsigned integer, randomly chosen by the merchant, and
+- A customer nonce, a 64-bit little-endian unsigned integer, randomly chosen by the customer
 

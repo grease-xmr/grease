@@ -204,6 +204,8 @@ impl LifeCycle for ChannelState {
 #[cfg(test)]
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
+    use crate::balance::Balances;
+    use crate::channel_id::ChannelId;
     use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::cryptography::zk_objects::{
@@ -214,14 +216,13 @@ pub mod test {
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
-    use crate::state_machine::new_channel::NewChannelBuilder;
     use crate::state_machine::open_channel::{EstablishedChannelState, UpdateRecord};
-    use crate::state_machine::{ChannelCloseRecord, NewChannelState};
+    use crate::state_machine::{ChannelCloseRecord, ChannelSeedBuilder, NewChannelProposal, NewChannelState};
     use crate::XmrScalar;
-    use blake2::Blake2b512;
     use ciphersuite::Ed25519;
     use k256::elliptic_curve::Field;
     use log::*;
+    use monero::Network;
 
     const ALICE_ADDRESS: &str =
         "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
@@ -229,22 +230,28 @@ pub mod test {
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state() -> NewChannelState {
+        use crate::cryptography::keys::PublicKey;
+
         // All this info is known, or can be scanned in from a QR code etc
         let kes_pubkey = "4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634";
-        let initial_customer_amount = MoneroAmount::from_xmr("1.25").unwrap();
-        let initial_merchant_amount = MoneroAmount::from_xmr("0.0").unwrap();
-        let initial_state = NewChannelBuilder::new(ChannelRole::Customer);
+        let balances = Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("1.25").unwrap());
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        let initial_state = initial_state
-            .with_kes_public_key(kes_pubkey)
-            .with_customer_initial_balance(initial_customer_amount)
-            .with_merchant_initial_balance(initial_merchant_amount)
-            .with_my_user_label("me")
-            .with_peer_label("you")
-            .with_merchant_closing_address(closing.merchant)
-            .with_customer_closing_address(closing.customer)
-            .build::<Blake2b512>()
-            .expect("Failed to build initial state");
+        // Generate channel keys and nonces for testing
+        let (_, merchant_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
+        let (_, customer_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
+        let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Mainnet)
+            .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
+            .with_initial_balances(balances)
+            .with_channel_nonce(123)
+            .with_channel_key(merchant_key.clone())
+            .with_closing_address(closing.merchant)
+            .build()
+            .expect("to build initial state");
+
+        let channel_id: ChannelId = ChannelId::new(merchant_key, customer_key, balances, closing, 123, 456);
+
+        let proposal = NewChannelProposal { network: seed.network, channel_id, seed };
+        let initial_state = NewChannelState::new(ChannelRole::Customer, proposal);
         // Create a new channel state machine
         assert_eq!(initial_state.stage(), LifecycleStage::New);
         info!("New channel state machine created");
