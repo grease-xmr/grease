@@ -3,15 +3,14 @@ use crate::cryptography::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::multisig::MultisigWalletData;
 use crate::state_machine::closing_channel::ChannelCloseRecord;
-use crate::state_machine::new_channel::RejectNewChannelReason;
+use crate::state_machine::new_channel::{NewChannelProposal, RejectNewChannelReason};
 use crate::state_machine::open_channel::UpdateRecord;
 use crate::state_machine::timeouts::TimeoutReason;
-use crate::state_machine::ProposedChannelInfo;
 use std::fmt::{Display, Formatter};
 
 pub enum LifeCycleEvent {
     /// The channel proposal has been verified and accepted by both parties.
-    VerifiedProposal(Box<ProposedChannelInfo>),
+    VerifiedProposal(Box<NewChannelProposal>),
     RejectNewChannel(Box<RejectNewChannelReason>),
     Timeout(Box<TimeoutReason>),
     MultiSigWalletCreated(Box<MultisigWalletData>),

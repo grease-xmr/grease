@@ -4,14 +4,13 @@ use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::zk_objects::{PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
-    ClosingAddresses, FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets,
-    MultisigSplitSecretsResponse, TransactionId,
+    FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
+    TransactionId,
 };
-use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
-use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, ProposedChannelInfo};
+use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, NewChannelProposal};
 use log::*;
-use monero::Address;
+use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use wallet::multisig_wallet::AdaptSig;
@@ -21,7 +20,7 @@ use wallet::multisig_wallet::AdaptSig;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum GreaseRequest {
     /// The customer proposes a new channel to the merchant.
-    ProposeChannelRequest(NewChannelProposal),
+    ProposeChannelRequest(NewChannelMessage),
     /// The customer sends its multisig wallet key and expects the merchant keys as a response.
     MsKeyExchange(MessageEnvelope<MultisigKeyInfo>),
     /// The customer sends its split secrets to the merchant, and expects the merchant's split secrets and a
@@ -125,104 +124,59 @@ pub struct FundingTxFinalizeResponse;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AckFundingTxBroadcast;
 
+/// Message sent from customer to merchant to propose a new channel.
+///
+/// It is almost equivalent to `NewChannelProposal`, but also includes the contact info for both parties so that libp2p
+/// connections can be established.
+///
+/// You can retrieve the equivalent `NewChannelProposal` via the `as_proposal` method.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NewChannelProposal {
+pub struct NewChannelMessage {
+    /// The Monero network this channel will operate on.
+    #[serde(
+        deserialize_with = "libgrease::monero::helpers::deserialize_network",
+        serialize_with = "libgrease::monero::helpers::serialize_network"
+    )]
+    pub network: Network,
+    /// Contains the information needed to uniquely identify the channel.
+    pub id: ChannelId,
     /// The seed info that the (usually) merchant provided initially.
     pub seed: ChannelSeedInfo,
-    /// The contact info for the customer (usually).
-    pub contact_info_proposer: ContactInfo,
-    /// The contact info for the merchant (usually).
-    pub contact_info_proposee: ContactInfo,
-    /// Salt used to derive the channel ID - customer (usually) portion
-    pub proposer_label: String,
-    /// The address that the proposer will use to close the channel.
-    pub closing_address: Address,
-    /// The public key for channel ID derivation (from the proposer, usually customer)
-    pub proposer_channel_key: libgrease::cryptography::keys::Curve25519PublicKey,
-    /// The nonce for channel ID derivation (from the proposer, usually customer)
-    pub proposer_channel_nonce: u64,
+    /// The libp2p contact info for the customer.
+    pub contact_info_customer: ContactInfo,
+    /// The libp2p contact info for the merchant.
+    pub contact_info_merchant: ContactInfo,
 }
 
-impl NewChannelProposal {
+impl NewChannelMessage {
     pub fn new(
+        network: Network,
+        id: ChannelId,
         seed: ChannelSeedInfo,
-        my_label: impl Into<String>,
         my_contact_info: ContactInfo,
-        my_closing_address: Address,
         their_contact_info: ContactInfo,
-        my_channel_key: libgrease::cryptography::keys::Curve25519PublicKey,
-        my_channel_nonce: u64,
     ) -> Self {
-        Self {
-            seed,
-            contact_info_proposer: my_contact_info,
-            contact_info_proposee: their_contact_info,
-            proposer_label: my_label.into(),
-            closing_address: my_closing_address,
-            proposer_channel_key: my_channel_key,
-            proposer_channel_nonce: my_channel_nonce,
-        }
+        Self { network, id, seed, contact_info_customer: my_contact_info, contact_info_merchant: their_contact_info }
     }
 
     pub fn channel_name(&self) -> String {
-        format!("{}-{}", self.proposer_label, self.seed.user_label)
+        self.id.as_hex()
     }
 
-    /// Produce a struct that contains the information needed to create a new channel.
-    /// The information is from the point of view of the *proposer* of the channel, usually the customer.
-    pub fn proposed_channel_info(&self) -> ProposedChannelInfo {
-        let (merchant_label, customer_label) = match self.seed.role {
-            ChannelRole::Merchant => (self.proposer_label.clone(), self.seed.user_label.clone()),
-            ChannelRole::Customer => (self.seed.user_label.clone(), self.proposer_label.clone()),
-        };
-        let (merchant_address, customer_address) = match self.seed.role {
-            ChannelRole::Merchant => (self.closing_address, self.seed.closing_address),
-            ChannelRole::Customer => (self.seed.closing_address, self.closing_address),
-        };
-        // Assign keys and nonces based on role
-        let (merchant_key, customer_key, merchant_nonce, customer_nonce) = match self.seed.role {
-            ChannelRole::Merchant => (
-                self.proposer_channel_key,
-                self.seed.channel_key,
-                self.proposer_channel_nonce,
-                self.seed.channel_nonce,
-            ),
-            ChannelRole::Customer => (
-                self.seed.channel_key,
-                self.proposer_channel_key,
-                self.seed.channel_nonce,
-                self.proposer_channel_nonce,
-            ),
-        };
-        let closing_addresses = ClosingAddresses { merchant: merchant_address, customer: customer_address };
-        let channel_id: ChannelId = ChannelId::new(
-            merchant_key,
-            customer_key,
-            self.seed.initial_balances,
-            closing_addresses,
-            merchant_nonce,
-            customer_nonce,
-        );
-        ProposedChannelInfo {
-            role: self.seed.role,
-            kes_public_key: self.seed.kes_public_key.clone(),
-            initial_balances: self.seed.initial_balances,
-            customer_label,
-            merchant_label,
-            channel_name: channel_id.name(),
-        }
+    pub fn as_proposal(&self) -> NewChannelProposal {
+        NewChannelProposal { network: self.network, channel_id: self.id.clone(), seed: self.seed.clone() }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum ChannelProposalResult {
-    Accepted(NewChannelProposal),
+    Accepted(NewChannelMessage),
     Rejected(RejectChannelProposal),
 }
 
 impl ChannelProposalResult {
-    pub fn accept(proposal: NewChannelProposal) -> Self {
+    pub fn accept(proposal: NewChannelMessage) -> Self {
         ChannelProposalResult::Accepted(proposal)
     }
     pub fn reject(reason: RejectReason, retry: RetryOptions) -> Self {

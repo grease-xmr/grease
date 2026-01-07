@@ -17,8 +17,7 @@ pub use closing_channel::{ChannelCloseRecord, ClosingChannelState};
 pub use establishing_channel::EstablishingState;
 pub use events::LifeCycleEvent;
 pub use new_channel::{
-    ChannelSeedBuilder, ChannelSeedInfo, NewChannelBuilder, NewChannelState, ProposedChannelInfo,
-    RejectNewChannelReason,
+    ChannelSeedBuilder, ChannelSeedInfo, NewChannelProposal, NewChannelState, RejectNewChannelReason,
 };
 pub use open_channel::{EstablishedChannelState, UpdateRecord};
 pub use timeouts::TimeoutReason;

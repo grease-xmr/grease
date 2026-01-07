@@ -1,4 +1,4 @@
-use super::message_types::{ChannelProposalResult, NewChannelProposal, PrepareUpdate, UpdateCommitted, UpdatePrepared};
+use super::message_types::{ChannelProposalResult, NewChannelMessage, PrepareUpdate, UpdateCommitted, UpdatePrepared};
 use crate::behaviour::ConnectionBehavior;
 use crate::errors::RemoteServerError;
 use crate::event_loop::{ClientCommand, PeerConnectionError, RemoteRequest};
@@ -137,9 +137,9 @@ impl GreaseAPI {
 
     pub async fn new_channel_proposal(
         &mut self,
-        data: NewChannelProposal,
+        data: NewChannelMessage,
     ) -> Result<ChannelProposalResult, PeerConnectionError> {
-        let peer_id = data.contact_info_proposee.peer_id;
+        let peer_id = data.contact_info_merchant.peer_id;
         trace!("NetworkClient: Sending new channel proposal to peer {peer_id}");
         let req = GreaseRequest::ProposeChannelRequest(data);
         let open_result = self.send_request(peer_id, req).await??;

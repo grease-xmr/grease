@@ -1,10 +1,8 @@
-use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
 use crate::cryptography::keys::Curve25519PublicKey;
 use crate::lifecycle_impl;
-use crate::monero::data_objects::ClosingAddresses;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::{InvalidProposal, LifeCycleError};
 use crate::state_machine::establishing_channel::EstablishingState;
@@ -16,30 +14,17 @@ use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Holds all information that needs to be collected before the merchant and client can begin the channel
-/// establishment protocol. At the successful conclusion of this phase, we can emit an `OnNewChannelInfo` event with
-/// all the information needed to start the channel establishment protocol.
-///
-/// There aren't any interaction events in this phase besides the initial call from the customer, so this phase is
-/// structured around a builder pattern. Both merchant and customer get the necessary info from "somewhere". In
-/// practice, it'll be a QR code or deep link, or a direct RPC call from the customer.
-pub struct NewChannelBuilder {
-    network: Option<Network>,
-    channel_role: ChannelRole,
-    // The KES public key used to encrypt the multisig spend key
-    kes_public_key: Option<String>,
-    merchant_amount: Option<MoneroAmount>,
-    customer_amount: Option<MoneroAmount>,
-    peer_label: Option<String>,
-    my_label: Option<String>,
-    merchant_closing: Option<Address>,
-    customer_closing: Option<Address>,
-    // Public keys for channel ID derivation
-    merchant_key: Option<Curve25519PublicKey>,
-    customer_key: Option<Curve25519PublicKey>,
-    // Nonces for channel ID derivation
-    merchant_nonce: Option<u64>,
-    customer_nonce: Option<u64>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NewChannelProposal {
+    /// The Monero network this channel lives on
+    #[serde(
+        deserialize_with = "crate::monero::helpers::deserialize_network",
+        serialize_with = "crate::monero::helpers::serialize_network"
+    )]
+    pub network: Network,
+    pub channel_id: ChannelId,
+    /// The seed info that the (usually) merchant provided initially.
+    pub seed: ChannelSeedInfo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,169 +41,53 @@ impl RejectNewChannelReason {
     }
 }
 
-impl NewChannelBuilder {
-    pub fn new(channel_role: ChannelRole) -> Self {
-        NewChannelBuilder {
-            network: None,
-            channel_role,
-            kes_public_key: None,
-            my_label: None,
-            peer_label: None,
-            merchant_amount: None,
-            customer_amount: None,
-            merchant_closing: None,
-            customer_closing: None,
-            merchant_key: None,
-            customer_key: None,
-            merchant_nonce: None,
-            customer_nonce: None,
-        }
-    }
-
-    /// Build the new channel state. The digest type `D` must have an output size of at least 32 bytes.
-    pub fn build(&self) -> Option<NewChannelState> {
-        if self.my_label.is_none()
-            || self.peer_label.is_none()
-            || (self.merchant_amount.is_none() && self.customer_amount.is_none())
-            || self.kes_public_key.is_none()
-            || self.merchant_closing.is_none()
-            || self.customer_closing.is_none()
-            || self.merchant_key.is_none()
-            || self.customer_key.is_none()
-            || self.merchant_nonce.is_none()
-            || self.customer_nonce.is_none()
-        {
-            return None;
-        }
-
-        let merchant_initial = self.merchant_amount.unwrap_or_default();
-        let customer_initial = self.customer_amount.unwrap_or_default();
-        let initial_balances = Balances::new(merchant_initial, customer_initial);
-
-        // Total balance may not be zero
-        if initial_balances.total().is_zero() {
-            return None;
-        }
-
-        let (merchant_label, customer_label) = match self.channel_role {
-            ChannelRole::Merchant => (self.my_label.clone().unwrap(), self.peer_label.clone().unwrap()),
-            ChannelRole::Customer => (self.peer_label.clone().unwrap(), self.my_label.clone().unwrap()),
-        };
-
-        let closing =
-            ClosingAddresses { customer: self.customer_closing.unwrap(), merchant: self.merchant_closing.unwrap() };
-
-        let channel_id = ChannelId::new(
-            self.merchant_key.unwrap(),
-            self.customer_key.unwrap(),
-            initial_balances,
-            closing,
-            self.merchant_nonce.unwrap(),
-            self.customer_nonce.unwrap(),
-        );
-        let channel_info = ChannelMetadata::new(
-            self.network.unwrap_or(Network::Mainnet),
-            self.channel_role,
-            channel_id,
-            self.kes_public_key.clone().unwrap(),
-        );
-        Some(NewChannelState { metadata: channel_info, customer_label, merchant_label })
-    }
-
-    pub fn with_peer_label(mut self, peer_label: &str) -> Self {
-        self.peer_label = Some(peer_label.to_string());
-        self
-    }
-
-    pub fn with_my_user_label(mut self, my_user_label: &str) -> Self {
-        self.my_label = Some(my_user_label.to_string());
-        self
-    }
-
-    pub fn with_merchant_initial_balance<A: Into<MoneroAmount>>(mut self, amount: A) -> Self {
-        self.merchant_amount = Some(amount.into());
-        self
-    }
-
-    pub fn with_customer_initial_balance<A: Into<MoneroAmount>>(mut self, amount: A) -> Self {
-        self.customer_amount = Some(amount.into());
-        self
-    }
-
-    pub fn with_kes_public_key(mut self, kes_public_key: impl Into<String>) -> Self {
-        self.kes_public_key = Some(kes_public_key.into());
-        self
-    }
-
-    pub fn with_customer_closing_address(mut self, address: Address) -> Self {
-        self.customer_closing = Some(address);
-        self
-    }
-
-    pub fn with_merchant_closing_address(mut self, address: Address) -> Self {
-        self.merchant_closing = Some(address);
-        self
-    }
-
-    pub fn with_merchant_key(mut self, key: Curve25519PublicKey) -> Self {
-        self.merchant_key = Some(key);
-        self
-    }
-
-    pub fn with_customer_key(mut self, key: Curve25519PublicKey) -> Self {
-        self.customer_key = Some(key);
-        self
-    }
-
-    pub fn with_merchant_nonce(mut self, nonce: u64) -> Self {
-        self.merchant_nonce = Some(nonce);
-        self
-    }
-
-    pub fn with_customer_nonce(mut self, nonce: u64) -> Self {
-        self.customer_nonce = Some(nonce);
-        self
-    }
-}
-
 /// The internal state of the channel in the "new" phase.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NewChannelState {
     pub metadata: ChannelMetadata,
-    pub customer_label: String,
-    /// Salt used to derive the channel ID - merchant portion
-    pub merchant_label: String,
+    pub seed_info: ChannelSeedInfo,
 }
 
 impl NewChannelState {
+    /// Create a new `NewChannelState` from the accepted proposal.
+    ///
+    /// At this stage the proposal must have already been checked and validated, hence `accepted_proposal`.
+    /// The `seed_info` is largely kept for record-keeping; if any values differ between the proposal and the seed info,
+    /// the proposal values take precedence.
+    pub fn new(role: ChannelRole, accepted_proposal: NewChannelProposal) -> Self {
+        let metadata = ChannelMetadata::new(
+            accepted_proposal.seed.network,
+            role,
+            accepted_proposal.channel_id,
+            accepted_proposal.seed.kes_public_key.clone(),
+        );
+        NewChannelState { metadata, seed_info: accepted_proposal.seed }
+    }
     /// A sanity check to make sure that information coming from the customer in the proposal matches what was shared
     /// initially.
-    fn review_proposal(&self, proposal: &ProposedChannelInfo) -> Result<(), InvalidProposal> {
+    fn review_proposal(&self, proposal: &NewChannelProposal) -> Result<(), InvalidProposal> {
         debug!("Internal sanity check on proposal info");
         if self.metadata.balances().total().is_zero() {
             return Err(InvalidProposal::ZeroTotalValue);
         }
-        if self.metadata.balances() != proposal.initial_balances {
+        if self.metadata.balances() != proposal.channel_id.initial_balance() {
             return Err(InvalidProposal::MismatchedBalances);
         }
-        if self.metadata.kes_public_key() != proposal.kes_public_key {
+        if self.metadata.kes_public_key() != proposal.seed.kes_public_key {
             return Err(InvalidProposal::MismatchedKesPublicKey);
         }
-        if self.metadata.channel_id().name() != proposal.channel_name {
+        if self.metadata.channel_id().name() != proposal.channel_id.name() {
             return Err(InvalidProposal::MismatchedChannelId);
         }
         Ok(())
     }
 
     /// Convert this state (which contains a secret key) into a proposal (which does not).
-    pub fn for_proposal(&self) -> ProposedChannelInfo {
-        ProposedChannelInfo {
-            role: self.metadata.role(),
-            kes_public_key: self.metadata.kes_public_key().to_string(),
-            initial_balances: self.metadata.balances(),
-            customer_label: self.customer_label.clone(),
-            merchant_label: self.merchant_label.clone(),
-            channel_name: self.metadata.channel_id().name(),
+    pub fn for_proposal(&self) -> NewChannelProposal {
+        NewChannelProposal {
+            network: self.metadata.network(),
+            channel_id: self.metadata.channel_id().clone(),
+            seed: self.seed_info.clone(),
         }
     }
 
@@ -235,10 +104,7 @@ impl NewChannelState {
     /// This is typically `EstablishingState`, but if the sanity checks fail, it will immediately close the channel and
     /// return an error.
     #[allow(clippy::result_large_err)]
-    pub fn next(
-        self,
-        proposal: ProposedChannelInfo,
-    ) -> Result<EstablishingState, (ClosedChannelState, LifeCycleError)> {
+    pub fn next(self, proposal: NewChannelProposal) -> Result<EstablishingState, (ClosedChannelState, LifeCycleError)> {
         match self.review_proposal(&proposal) {
             Err(err) => {
                 let msg = format!("New channel proposal failed basic sanity checks: {}", err);
@@ -275,63 +141,49 @@ impl NewChannelState {
 
 lifecycle_impl!(NewChannelState, New);
 
-#[derive(Clone)]
-pub struct ProposedChannelInfo {
-    pub role: ChannelRole,
-    pub kes_public_key: String,
-    /// The amount of money in the channel
-    pub initial_balances: Balances,
-    /// Salt used to derive the channel ID - customer portion
-    pub customer_label: String,
-    /// Salt used to derive the channel ID - merchant portion
-    pub merchant_label: String,
-    /// The channel name, as given by `ChannelId::name()`
-    pub channel_name: String,
-}
-
 /// A record that (usually) the merchant will send offline to the customer to give them the seed information they
 /// need to complete a new channel proposal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelSeedInfo {
+    /// The Monero network this channel will run on
+    #[serde(
+        deserialize_with = "crate::monero::helpers::deserialize_network",
+        serialize_with = "crate::monero::helpers::serialize_network"
+    )]
+    pub network: Network,
     /// Peer's role. Usually, this will be [`ChannelRole::Customer`]
     pub role: ChannelRole,
-    /// The key id for the merchant, to help them identify this proposal.
-    pub key_id: u64,
     /// The proposed KES public key. May or may not be accepted by the peer.
     pub kes_public_key: String,
     /// The proposed initial set of channel balances
     pub initial_balances: Balances,
-    /// The user label for the (usually) merchant.
-    pub user_label: String,
     /// The address that the closing transaction must pay into
-    pub closing_address: Address,
+    pub merchant_closing_address: Address,
     /// The public key for channel ID derivation (from the seed provider, usually merchant)
-    pub channel_key: Curve25519PublicKey,
-    /// The nonce for channel ID derivation (from the seed provider, usually merchant)
-    pub channel_nonce: u64,
+    pub merchant_channel_key: Curve25519PublicKey,
+    /// The merchant nonce for channel ID derivation, to help them identify this proposal.
+    pub merchant_nonce: u64,
 }
 
 /// The builder struct for the [`ChannelSeedInfo`].
 /// See [`ChannelSeedInfo`] for more information about each field.
 pub struct ChannelSeedBuilder {
     role: ChannelRole,
-    key_id: Option<u64>,
+    network: Network,
     kes_public_key: Option<String>,
     initial_balances: Option<Balances>,
-    user_label: Option<String>,
     closing_address: Option<Address>,
     channel_key: Option<Curve25519PublicKey>,
     channel_nonce: Option<u64>,
 }
 
 impl ChannelSeedBuilder {
-    pub fn new(peer_role: ChannelRole) -> Self {
+    pub fn new(peer_role: ChannelRole, network: Network) -> Self {
         ChannelSeedBuilder {
+            network,
             role: peer_role,
-            key_id: None,
             kes_public_key: None,
             initial_balances: None,
-            user_label: None,
             closing_address: None,
             channel_key: None,
             channel_nonce: None,
@@ -345,16 +197,6 @@ impl ChannelSeedBuilder {
 
     pub fn with_initial_balances(mut self, initial_balances: Balances) -> Self {
         self.initial_balances = Some(initial_balances);
-        self
-    }
-
-    pub fn with_user_label(mut self, label: impl Into<String>) -> Self {
-        self.user_label = Some(label.into());
-        self
-    }
-
-    pub fn with_key_id(mut self, key_id: u64) -> Self {
-        self.key_id = Some(key_id);
         self
     }
 
@@ -374,45 +216,36 @@ impl ChannelSeedBuilder {
     }
 
     pub fn build(self) -> Result<ChannelSeedInfo, MissingSeedInfo> {
-        let key_id = self.key_id.ok_or(MissingSeedInfo::Missing)?;
         let kes_public_key = self.kes_public_key.ok_or(MissingSeedInfo::KesPublicKey)?;
         let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
-        let user_label = self.user_label.ok_or(MissingSeedInfo::PartialChannelId)?;
         let closing_address = self.closing_address.ok_or(MissingSeedInfo::ClosingAddress)?;
         let channel_key = self.channel_key.ok_or(MissingSeedInfo::ChannelKey)?;
         let channel_nonce = self.channel_nonce.ok_or(MissingSeedInfo::ChannelNonce)?;
 
         Ok(ChannelSeedInfo {
+            network: self.network,
             role: self.role,
-            key_id,
             kes_public_key,
             initial_balances,
-            user_label,
-            closing_address,
-            channel_key,
-            channel_nonce,
+            merchant_closing_address: closing_address,
+            merchant_channel_key: channel_key,
+            merchant_nonce: channel_nonce,
         })
     }
 }
 
 impl Default for ChannelSeedBuilder {
     fn default() -> Self {
-        ChannelSeedBuilder::new(ChannelRole::Customer)
+        ChannelSeedBuilder::new(ChannelRole::Customer, Network::Mainnet)
     }
 }
 
 #[derive(Debug, Clone, Error)]
 pub enum MissingSeedInfo {
-    #[error("Missing public key")]
-    PublicKey,
-    #[error("Missing merchant key id")]
-    Missing,
     #[error("Missing KES public key")]
     KesPublicKey,
     #[error("Missing initial balances")]
     InitialBalances,
-    #[error("Missing partial channel ID")]
-    PartialChannelId,
     #[error("Missing closing address")]
     ClosingAddress,
     #[error("Missing channel key")]

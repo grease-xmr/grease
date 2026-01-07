@@ -26,7 +26,7 @@ There are *three* half-rounds of communication in this phase#footnote([See `serv
 
 === Channel Id <channelId>
 
-The channel id is a 65 character hexadecimal string that uniquely identifies the channel. It is defined as the prefix "ZGC", followed by the
+The channel id is a 65 character hexadecimal string that uniquely identifies the channel. It is defined as the prefix "XGC", followed by the
  first 31 bytes of the *Blake2b-512* hash of the channel metadata in hexadecimal format.
 
  The hash is calculated from the following transcript:

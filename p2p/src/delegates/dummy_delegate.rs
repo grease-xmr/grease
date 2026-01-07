@@ -5,7 +5,7 @@ use crate::delegates::traits::{
     ChannelClosure, GreaseChannelDelegate, GreaseInitializer, KesProver, ProposalVerifier, Updater,
     VerifiableSecretShare,
 };
-use crate::grease::NewChannelProposal;
+use crate::grease::NewChannelMessage;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
@@ -35,7 +35,7 @@ impl DummyDelegate {
 }
 
 impl ProposalVerifier for DummyDelegate {
-    async fn verify_proposal(&self, data: &NewChannelProposal) -> Result<(), InvalidProposal> {
+    async fn verify_proposal(&self, data: &NewChannelMessage) -> Result<(), InvalidProposal> {
         info!("DummyDelegate: Verifying proposal. {data:?}");
         Ok(())
     }
