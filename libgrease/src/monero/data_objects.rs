@@ -1,5 +1,6 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
-use monero::{Address, Error as AddressError};
+use crate::monero::error::ClosingAddressError;
+use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
@@ -111,9 +112,18 @@ pub struct ClosingAddresses {
 }
 
 impl ClosingAddresses {
-    pub fn new(customer: &str, merchant: &str) -> Result<Self, AddressError> {
-        let customer = Address::from_str(customer)?;
-        let merchant = Address::from_str(merchant)?;
+    pub fn new(customer: &str, merchant: &str) -> Result<Self, ClosingAddressError> {
+        let customer = Address::from_str(customer).map_err(|e| ClosingAddressError::InvalidAddress(e.to_string()))?;
+        let merchant = Address::from_str(merchant).map_err(|e| ClosingAddressError::InvalidAddress(e.to_string()))?;
+        if customer == merchant {
+            return Err(ClosingAddressError::IdenticalAddresses);
+        }
+        if customer.network != merchant.network {
+            return Err(ClosingAddressError::NetworkMismatch {
+                customer: customer.network,
+                merchant: merchant.network,
+            });
+        }
         Ok(Self { customer, merchant })
     }
 
@@ -123,5 +133,47 @@ impl ClosingAddresses {
 
     pub fn merchant(&self) -> &Address {
         &self.merchant
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STAGENET_ALICE: &str =
+        "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
+    const STAGENET_BOB: &str =
+        "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
+    const TESTNET_ALICE: &str =
+        "9wviCeWe2D8XS82k2ovp5EUYLzBt9pYNW2LXUFsZiv8S3Mt21FZ5qQaAroko1enzw3eGr9qC7X1D7Geoo2RrAotYPwq9Gm8";
+
+    #[test]
+    fn closing_addresses_valid() {
+        let result = ClosingAddresses::new(STAGENET_ALICE, STAGENET_BOB);
+        assert!(result.is_ok());
+        let addresses = result.unwrap();
+        assert_eq!(addresses.customer().to_string(), STAGENET_ALICE);
+        assert_eq!(addresses.merchant().to_string(), STAGENET_BOB);
+    }
+
+    #[test]
+    fn closing_addresses_rejects_identical_addresses() {
+        let result = ClosingAddresses::new(STAGENET_ALICE, STAGENET_ALICE);
+        assert!(matches!(result, Err(ClosingAddressError::IdenticalAddresses)));
+    }
+
+    #[test]
+    fn closing_addresses_rejects_network_mismatch() {
+        let result = ClosingAddresses::new(STAGENET_ALICE, TESTNET_ALICE);
+        assert!(matches!(result, Err(ClosingAddressError::NetworkMismatch { .. })));
+    }
+
+    #[test]
+    fn closing_addresses_rejects_invalid_address() {
+        let result = ClosingAddresses::new("invalid_address", STAGENET_BOB);
+        assert!(matches!(result, Err(ClosingAddressError::InvalidAddress(_))));
+
+        let result = ClosingAddresses::new(STAGENET_ALICE, "also_invalid");
+        assert!(matches!(result, Err(ClosingAddressError::InvalidAddress(_))));
     }
 }
