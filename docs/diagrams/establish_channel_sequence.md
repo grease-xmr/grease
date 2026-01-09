@@ -25,14 +25,15 @@ sequenceDiagram
     C->>C: Adapt signature (Rc, sc) -> (Rc, Qc, ŝc), ωc
     C->>C: Encrypt ωc to KES -> Xc.\nNote: Tc = ωc.G on KES curve
     C->>C: Produce DLEQ proof for Π(Qc <-> Tc) 
-    C->>M: Χc, (Rc, Qc, ŝc), Πc(Tc, Sc)
+    C->>M: Χc, (Rc, Qc, ŝc), Πc(Tc, Sc).. in SignedChannelInitPackage
     
     M->>M: Verify DLEQ proof Πc (i.e. Qc <-> Tc)
     M->>M: Verify adapter signature (Rc, Qc, ŝc)
     alt All verifications PASS
         M->>M: Generate Χm, (Rm, Qm, ŝm), Πm(Tm, Sm) as above.
         activate KES
-        M->>KES: Xc, Xm
+        M->>KES: Xc, Xm, κ
+        KES->>KES: Generate channel keys
         M->>C: (Rm, Qm, ŝm), Πm(Tm, Sm)
     else any verification FAILED
         M-xC: Error: Verification failed
@@ -45,6 +46,14 @@ sequenceDiagram
     KES-->>C: Send PoK (Γm, Γc)
     KES-->>KES: Store (Xc, Xm). Destroy (ωc, ωm)
     deactivate KES
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant M as Merchant
+    participant L1 as Monero blockchain
+    participant KES as KES
     
     M->>M: Verify KES PoK (Γm, Γc)
     C->>C: Perform same verification as M, above
