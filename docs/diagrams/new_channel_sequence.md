@@ -7,7 +7,7 @@ Merchant->>Merchant: Create channel initialization data (CID)
 Merchant-->>Customer: Share CID out-of-band\n{ChannelSeedInfo}
 Customer->>Customer: Create NewChannel state
 note right of Customer: NewChannel
-Customer->>Merchant: New channel proposal\n{ChannelSeedInfo, ContactInfo, ClosingAddress}
+Customer->>Merchant: NewChannelProposal
 Merchant->>Merchant: Verify proposal
 alt Accept Channel
     Merchant->>Merchant: Create NewChannel state
