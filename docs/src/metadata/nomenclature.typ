@@ -1,20 +1,28 @@
 #let pubOf(k, P) = { $#P = #k dot.op G$ }
 #let hashOf(alg, input) = { $H_(#alg)(#input)$ }
 
+
 #let bjj = $"BJJ"$
 #let ed = $"Ed"$
-#let merchant = $"merchant"$
-#let cust = $"customer"$
+#let merchant = $"M"$
+#let cust = $"C"$
 #let initr = $"Initiator"$
 #let respr = $"Responder"$
-#let Gbjj = $G_bjj$
-#let Ged = $G_ed$
-#let Lbjj = $L_bjj$
-#let Led = $L_ed$
+#let Gbjj = $GG_2$
+#let Ged = $G_1$
+#let Lbjj = $L_2$
+#let Led = $L_1$
 #let witness = $omega$
 
+// Wallet protocol nomenclature
+#let pre(actor) = $C^#actor$
+#let preC = $pre(cust)$
+#let preM = $pre(merchant)$
+#let partialSig(actor,sub) = $(R^(#actor)_(#sub), s^(#actor)_(#sub))$
+#let adapterSig(actor,sub) = $(R^(#actor)_(#sub), Q^(#actor)_(#sub), hat(s)^(#actor)_(#sub))$
+
 // Baby Jubjub points
-#let PubBjj(k) = $Pi_#k$
+#let PubBjj(k) = $T_#k$
 
 #let nomenclature = {
 
@@ -71,9 +79,10 @@ table(columns: 2, align: (left, left),
 #let hash(alg, input) = { $H_(#alg)(#input)$ }
 #let H2F(input) = { $H_F (#input)$ }
 #let H2P(input) = { $H_P (#input)$ }
+#let Pvcof(sub) = { $Pi^V_(#sub)$ }
 
-#let w0 = $omega_0$
-#let wn = $omega$
+#let wn(sub) = { if sub == none { $witness_0$ } else { $witness_#sub$ } }
+#let w0 = wn(0)
 #let PubWEd(sub) = { $Q_#sub$ }
 #let PubWBjj(sub) = { $T_#sub$ }
 #let DleqP = $Pi$

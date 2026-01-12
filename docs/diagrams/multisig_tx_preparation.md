@@ -12,19 +12,20 @@ sequenceDiagram
     M->>C: Δm, (Rm, Qm, ŝm)
 
     C->>C: Verify adapter signature (Rm, Qm, ŝm)
-    alt Verify adapter signature: VALID
+    alt Adapter signature is VALID
         C->>C: Partially sign TX0 (details, Δm) -> (Rc, sc)
         C->>C: Adapt signature (Rc, sc) -> (Rc, Qc, ŝc), ωc
-    else Verify adapter signature: INVALID
+    else Adapter signature is INVALID
         C->>M: Error: Invalid adapter signature
         C-xC: ABORT
     end
     
     C->>M: (Rc, Qc, ŝc)
     M->>M: Verify adapter signature (Rc, Qc, ŝc)
-    alt Verify adapter signature: VALID
+    alt Adapter signature is VALID
         M->>C: OK
-    else Verify adapter signature: INVALID
+    else Adapter signature is INVALID
         M->>C: Error: Invalid adapter signature
         M-xM: ABORT
     end
+```

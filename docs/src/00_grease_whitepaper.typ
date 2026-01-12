@@ -11,17 +11,22 @@
   title: title,
   author: author,
   paper-size: "a4",
-  date: datetime(year: 2025, month: 07, day: 21),
+  date: datetime(year: 2026, month: 01, day: 21),
   bibliography: bibliography("metadata/bibliography.yml", title: "References", full: false, style: "american-medical-association"),
   figure-index: (enabled: true),
   table-index: (enabled: true),
   listing-index: (enabled: true),
 )
+
+#show raw: set text(font: "Fira Code", size: 8pt)
+
 //#show link: underline
 #show link: it => { underline(stroke: (paint: blue, dash: "dashed", thickness: 1pt), it.body) + super[#sym.dagger] }
 
-#let fast_mode = false
-#show raw.where(lang: "mermaid"): it => if fast_mode { box(stroke: red, it) } else { pintorita.render(it.text) }
+#show raw.where(lang: "mermaid"): it => {
+  let fast_mode = ("fast" in sys.inputs) and (sys.inputs.fast == "1")
+  if fast_mode { box(stroke: red, it) } else { pintorita.render(it.text) }
+}
 
 
 #include "01_introduction.typ"

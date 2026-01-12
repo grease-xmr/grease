@@ -46,7 +46,7 @@ appropriate adapter signature offset, including any states that favour the custo
 parties to behave honestly.
 
 #warning[
-  One a channel is closed, neither party should use the 2-of-2 multisig wallet again, since there exists another party that can immediately
+  Once a channel is closed, neither party should use the 2-of-2 multisig wallet again, since there exists another party that can immediately
   spend out of that wallet.
 ]
 
@@ -55,18 +55,16 @@ parties to behave honestly.
 On a high level, the payment channel lifecycle goes through 6 phases:
 
 - `New` - The channel has just been created and is entering the establishment negotiation phase. Basic information is swapped in this phase,
-  including the public keys of the peers, the nominated KES, and the initial balance. The channel id is derived data describing the channel,
-  including, the initial balance, public keys and closing addresses (See @channelId). If both parties are satisfied with the proposed
-  channel parameters, the channel moves to the `Establishing` state.
+  including the public keys of the peers, the nominated KES, and the initial balance. The channel id is derived from data describing the
+  channel, including, the initial balance, public keys and closing addresses (See @channelId). If both parties are satisfied with the
+  proposed channel parameters, the channel moves to the `Establishing` state.
 - `Establishing` - The channel is being established. This phase includes the KES establishment and funding transaction. Once the KES is
   established and both parties have verified the funding transaction, the parties will share an `AckChannelEstablished` message. Once
   acknowledged, an `OnChannelEstablished` event is emitted, and the channel will move to the `Open` state.
 - `Open` - The channel is open and ready for use. Any number of channel update events can occur in this phase and the channel can remain in
   this state indefinitely. The channel remains in this state until the channel is closed via the amicable `Closing` state or the `Disputing`
-  state. The peers share an `AckWantToClose` message to signal a desire to close the channel. This triggers an `OnStartClose` event, and the
-  channel will move to the `Closing` state. If the counterparty party initiates a force-close on the channel via the KES, an `onForceClose`
-  event is emitted, and the channel moves to the `Disputing` state. If the counterparty stops responding to updates or for whatever other
-  reason, you can trigger a force close (an `onTriggerForceClose` event), and the channel will move to the `Disputing` state.
+  state. At each update, both parties cryptographically _commit_ to the new state of the channel and collaborate to produce a new,
+  partially-signed commitment transaction.
 - `Closing` - The channel is being closed. This phase includes sharing of adapter secrets and signing of the final commitment transaction.
   Once both parties have signed the final commitment transaction, any party will be able to broadcast it, but by convention it will be the
   merchant that does so.

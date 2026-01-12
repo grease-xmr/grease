@@ -1,23 +1,7 @@
 // Preamble
-#import "@preview/lovelace:0.3.0": *
 #import "@preview/note-me:0.5.0": *
 #import "metadata/nomenclature.typ": *
-
-#show figure.where(
-  kind: table,
-): set figure.caption(position: top)
-
-#set heading(numbering: "1.")
-
-#let algo(caption: none, title: none, list) = {
-  figure(
-    caption: caption,
-    kind: "algorithm",
-    supplement: [Algorithm],
-    placement: auto,
-    pseudocode-list(booktabs: true, title: title)[#list],
-  )
-}
+#import "metadata/front-matter.typ": algo
 
 = The Key Escrow Service (KES) Design <kesDesign>
 
@@ -170,7 +154,6 @@ $#PubWEd(0)^M$ are elements of $EE_1$, the Ed25519 curve. For the KES to work wi
 
 The offsets are chosen such that they are valid scalars on both curves, that is
 $ 0 < w0 < min(N_1, N_2) $
-// REVIEW - is this safe? Are we introducing too much bias here? If so, how else to to this?
 
 The group element on $EE_1$ corresponding to #w0 is #PubWEd(0), while the corresponding point on $EE_K$ is denoted $PubWBjj(0)$. A summary
 of the points and their equivalents is given in @curveCorresp.
@@ -196,7 +179,7 @@ The Customer encrypts $w0_C$ to the KES using `EncryptMessage` (@encM) and sends
 The merchant validates $DleqP_0^C$ and forwards the rest of the package to the KES.
 
 The Merchant performs the analogous tasks and forwards both his and the customer's data to the KES. He also sends his DLEQ proof,
-$DleqP_0^M$ the the Customer, who validates it.
+$DleqP_0^M$ the Customer, who validates it.
 
 === What the KES send back to parties
 
@@ -484,8 +467,7 @@ In summary, the various windows during the dispute phase are:
 #note[In the "abandoned" window, that is, between the closing of the dispute window and the record deletion (@cleanup), the claimant can
   claim the channel using either type of message, but it is recommended to use `ClaimChannelRequest`.]
 
-
-#include "../diagrams/channel_dispute_sequence.md"
+#figure(include "../diagrams/channel_dispute_sequence.md", caption: [The channel dispute sequence]) <channel_dispute_sequence>
 
 == Channel Dispute
 

@@ -22,7 +22,7 @@ There are *three* half-rounds of communication in this phase#footnote([See `serv
 2. New channel proposal from Customer to Merchant
 3. Accepting the proposal from Merchant to Customer
 
-#include "../diagrams/new_channel_sequence.md"
+#figure(include "../diagrams/new_channel_sequence.md", caption: [The New Channel proposal sequence]) <new_channel_sequence>
 
 === Channel Id <channelId>
 
