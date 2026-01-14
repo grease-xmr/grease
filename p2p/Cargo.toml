@@ -21,6 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_yml = {  workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+async-trait = "0.1.89"
 
 [dev-dependencies]
 env_logger = { workspace = true }

@@ -37,15 +37,19 @@
 //! The `EventLoop` is only a data broker. It does not do any business or application logic itself. This is all
 //! delegated to one [`NetworkServer`].
 
+pub mod async_wrapper;
 mod behaviour;
 pub mod delegates;
+
+pub use behaviour::{AsyncAPI, ProtocolCommand, ProtocolHandlers, RequestResponseHandler};
 pub mod errors;
 mod event_loop;
 pub mod grease;
 mod identity;
 mod key_manager;
 
+pub use async_wrapper::{AsyncReqResponseHandler, InboundForwarder, PendingRequests};
 pub use delegates::traits::GreaseChannelDelegate;
-pub use event_loop::EventLoop;
+pub use event_loop::{EventLoop, NetworkCommand, PeerConnectionError, RemoteRequest};
 pub use identity::{ContactInfo, ConversationIdentity, IdentityError};
 pub use key_manager::KeyManager;

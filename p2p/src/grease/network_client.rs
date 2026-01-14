@@ -1,8 +1,8 @@
 use super::message_types::{ChannelProposalResult, NewChannelMessage, PrepareUpdate, UpdateCommitted, UpdatePrepared};
-use crate::behaviour::ConnectionBehavior;
+use crate::behaviour::{ConnectionBehavior, ProtocolCommand, ProtocolHandlers};
 use crate::errors::RemoteServerError;
-use crate::event_loop::{ClientCommand, PeerConnectionError, RemoteRequest};
-use crate::grease::{GreaseChannelEvents, GreaseRequest, GreaseResponse};
+use crate::event_loop::{EventLoop, NetworkCommand, PeerConnectionError, RemoteRequest};
+use crate::grease::{GreaseRequest, GreaseResponse};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
@@ -28,11 +28,14 @@ pub type GreaseRemoteEvent = RemoteRequest<GreaseRequest, GreaseResponse>;
 /// Creates the network components, namely:
 ///
 /// - The network interface [`GreaseAPI`] to interact with the event loop from anywhere within your application.
-/// - The network event stream, e.g. for incoming requests.
-/// - The main business logic sits in the [`GreaseClient`], which responds to commands and messages delivered via the API and event stream.
+/// - The network event stream for incoming Grease requests.
+/// - The [`EventLoop`] that handles network events and commands.
+///
+/// The main business logic sits in the [`GreaseClient`], which responds to commands and messages
+/// delivered via the API and event stream.
 pub fn new_network(
     key: Keypair,
-) -> Result<(GreaseAPI, impl Stream<Item = GreaseRemoteEvent>, GreaseChannelEvents), PeerConnectionError> {
+) -> Result<(GreaseAPI, impl Stream<Item = GreaseRemoteEvent>, EventLoop), PeerConnectionError> {
     let swarm = libp2p::SwarmBuilder::with_existing_identity(key)
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
@@ -44,27 +47,27 @@ pub fn new_network(
                 .with_request_timeout(Duration::from_secs(60))
                 .with_max_concurrent_streams(2);
             let protocols = [(StreamProtocol::new("/grease-channel/comms/1"), ProtocolSupport::Full)];
-            let json = json::Behaviour::new(protocols, config);
-            ConnectionBehavior { identify, json }
+            let grease = json::Behaviour::new(protocols, config);
+            ConnectionBehavior { identify, grease }
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
     let (command_sender, command_receiver) = mpsc::channel(0);
-    let (event_sender, event_receiver) = mpsc::channel(0);
+    let (grease_event_sender, grease_event_receiver) = mpsc::channel(0);
 
-    Ok((
-        GreaseAPI { sender: command_sender },
-        event_receiver,
-        GreaseChannelEvents::new(swarm, command_receiver, event_sender),
-    ))
+    let handlers = ProtocolHandlers::new(grease_event_sender);
+    let event_loop = EventLoop::new(swarm, command_receiver, handlers);
+
+    Ok((GreaseAPI { sender: command_sender }, grease_event_receiver, event_loop))
 }
 
-/// A sender interface to the network event loop. It can be cheaply cloned and shared among threads and multiple sets
-/// of peer-to-peer connections.
+/// A sender interface to the network event loop for Grease protocol operations.
+///
+/// It can be cheaply cloned and shared among threads and multiple sets of peer-to-peer connections.
 #[derive(Clone)]
 pub struct GreaseAPI {
-    sender: mpsc::Sender<ClientCommand<GreaseRequest, GreaseResponse>>,
+    sender: mpsc::Sender<NetworkCommand>,
 }
 
 /// Generates a method for taking a command-type interface, converting it to the appropriate GreaseRequest variant,
@@ -99,16 +102,16 @@ macro_rules! enveloped_command {
 ///
 /// The majority of the (async) methods in this struct follow the following pattern:
 /// - A one-shot channel is created.
-/// - An [`GreaseChannelCommand`] is sent to the [`EventLoop`] via the `sender` channel, containing the one-shot sender half.
+/// - A [`NetworkCommand`] is sent to the [`EventLoop`] via the `sender` channel, containing the one-shot sender half.
 /// - The method waits for the receiver half to receive its value, before returning it.
 ///
 /// **Importantly**, this struct does not do any work.
-/// It simply forwards the [`GreaseChannelCommand`]s to the [`EventLoop`] and waits for the results.
+/// It simply forwards the commands to the [`EventLoop`] and waits for the results.
 impl GreaseAPI {
     /// Listen for incoming connections on the given address.
     pub async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        self.sender.send(ClientCommand::StartListening { addr, sender }).await?;
+        self.sender.send(NetworkCommand::StartListening { addr, sender }).await?;
         receiver.await?
     }
 
@@ -124,13 +127,13 @@ impl GreaseAPI {
             _ => return Err(PeerConnectionError::MissingPeerId),
         };
         let (sender, receiver) = oneshot::channel();
-        self.sender.send(ClientCommand::Dial { peer_id, peer_addr, sender }).await?;
+        self.sender.send(NetworkCommand::Dial { peer_id, peer_addr, sender }).await?;
         receiver.await?
     }
 
     pub async fn connected_peers(&mut self) -> Result<Vec<PeerId>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        self.sender.send(ClientCommand::ConnectedPeers { sender }).await?;
+        self.sender.send(NetworkCommand::ConnectedPeers { sender }).await?;
         let peers = receiver.await?;
         Ok(peers)
     }
@@ -152,11 +155,11 @@ impl GreaseAPI {
     async fn send_request(
         &mut self,
         peer_id: PeerId,
-        req: GreaseRequest,
+        request: GreaseRequest,
     ) -> Result<Result<GreaseResponse, RemoteServerError>, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        let request = Box::new(req);
-        self.sender.send(ClientCommand::NewRequest { peer_id, request, sender }).await?;
+        let cmd = ProtocolCommand::SendGreaseRequest { peer_id, request, sender };
+        self.sender.send(NetworkCommand::Protocol(cmd)).await?;
         let response = receiver.await?;
         Ok(response)
     }
@@ -220,17 +223,17 @@ impl GreaseAPI {
 
     pub async fn send_response_to_peer(
         &mut self,
-        res: GreaseResponse,
-        return_channel: ResponseChannel<GreaseResponse>,
+        response: GreaseResponse,
+        channel: ResponseChannel<GreaseResponse>,
     ) -> Result<(), PeerConnectionError> {
-        let res = Box::new(res);
-        self.sender.send(ClientCommand::ResponseToRequest { res, return_channel }).await?;
+        let cmd = ProtocolCommand::SendGreaseResponse { response, channel };
+        self.sender.send(NetworkCommand::Protocol(cmd)).await?;
         Ok(())
     }
 
     pub async fn shutdown(mut self) -> Result<bool, PeerConnectionError> {
         let (sender, receiver) = oneshot::channel();
-        self.sender.send(ClientCommand::Shutdown(sender)).await?;
+        self.sender.send(NetworkCommand::Shutdown(sender)).await?;
         let result = receiver.await?;
         Ok(result)
     }
