@@ -6,6 +6,7 @@ use crate::p2p_networking::{EventLoop, NetworkCommand, PeerConnectionError, Remo
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
+use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::zk_objects::PublicProof0;
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
@@ -80,7 +81,9 @@ macro_rules! enveloped_command {
             channel: &str,
             req: $request_payload,
         ) -> Result<$response_type, PeerConnectionError> {
-            let envelope = MessageEnvelope::new(channel.into(), req);
+            use std::str::FromStr;
+            let channel_id = ChannelId::from_str(channel).expect("channel id must be a valid ChannelId");
+            let envelope = MessageEnvelope::new(channel_id, req);
             let request = $req_variant(envelope);
             let response = self.send_request(peer_id, request).await??;
             let envelope = match response {
@@ -90,7 +93,7 @@ macro_rules! enveloped_command {
                 }
             };
             let (return_channel, result) = envelope.open();
-            if return_channel != channel {
+            if return_channel.as_str() != channel {
                 return Err(PeerConnectionError::unexpected_channel(channel, return_channel));
             }
             Ok(result)

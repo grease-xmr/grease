@@ -4,7 +4,7 @@ use grease_p2p::delegates::DummyDelegate;
 use grease_p2p::grease::{GreaseClient, GreaseClientOptions, NewChannelMessage, PaymentChannels};
 use grease_p2p::ConversationIdentity;
 use libgrease::balance::Balances;
-use libgrease::channel_id::ChannelId;
+use libgrease::channel_id::ChannelIdMetadata;
 use libgrease::monero::data_objects::ClosingAddresses;
 use libgrease::payment_channel::ChannelRole;
 use libgrease::state_machine::ChannelSeedBuilder;
@@ -62,7 +62,7 @@ pub fn create_channel_proposal(
         customer: customer.config.refund_address().expect("Customer refund address is not set"),
         merchant: merchant.config.refund_address().expect("Merchant refund address is not set"),
     };
-    let channel_id = ChannelId::new(
+    let channel_id = ChannelIdMetadata::new(
         seed_info.merchant_channel_key.clone(),
         customer_channel_key,
         initial_balances,

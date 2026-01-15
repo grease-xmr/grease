@@ -7,8 +7,131 @@ use digest::typenum::{IsGreaterOrEqual, True};
 use digest::OutputSizeUser;
 use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::marker::PhantomData;
+use std::str::FromStr;
+use thiserror::Error;
+
+/// Error returned when parsing a [`ChannelId`] from a string fails.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ChannelIdParseError {
+    #[error("Invalid channel ID format: expected 65 characters starting with 'XGC', got {0} characters")]
+    InvalidLength(usize),
+    #[error("Invalid channel ID format: must start with 'XGC' prefix")]
+    InvalidPrefix,
+    #[error("Invalid channel ID format: contains non-hexadecimal characters after prefix")]
+    InvalidHex,
+}
+
+/// A 65-character string uniquely identifying a payment channel.
+///
+/// Format: "XGC" prefix (3 chars) + first 31 bytes of channel hash as hex (62 chars).
+///
+/// This is the human-readable representation of a [`ChannelId`]. It can be used as a key
+/// in maps, displayed to users, and transmitted over the network.
+///
+/// # Example
+///
+/// ```
+/// use libgrease::channel_id::ChannelId;
+/// use std::str::FromStr;
+///
+/// let id = ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+/// assert_eq!(id.as_str(), "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383");
+/// ```
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ChannelId(String);
+
+impl ChannelId {
+    /// The prefix for all channel ID strings.
+    pub const PREFIX: &'static str = "XGC";
+
+    /// The total length of a channel ID string (3 char prefix + 62 hex chars).
+    pub const LENGTH: usize = 65;
+
+    /// Create a new `ChannelId` from a [`ChannelIdMetadata`].
+    pub fn from_channel_id_metadata<D>(id: &ChannelIdMetadata<D>) -> Self
+    where
+        D: Send + Clone + SecureDigest,
+        <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
+    {
+        Self(id.as_hex())
+    }
+
+    /// Returns the channel ID as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes self and returns the inner String.
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl Debug for ChannelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ChannelId({})", self.0)
+    }
+}
+
+impl Display for ChannelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for ChannelId {
+    type Err = ChannelIdParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() != Self::LENGTH {
+            return Err(ChannelIdParseError::InvalidLength(s.len()));
+        }
+        if !s.starts_with(Self::PREFIX) {
+            return Err(ChannelIdParseError::InvalidPrefix);
+        }
+        // Validate that the hex portion is valid
+        hex::decode(&s[3..]).map_err(|_| ChannelIdParseError::InvalidHex)?;
+        Ok(Self(s.to_string()))
+    }
+}
+
+impl AsRef<str> for ChannelId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for ChannelId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<ChannelId> for String {
+    fn from(id: ChannelId) -> Self {
+        id.0
+    }
+}
+
+impl TryFrom<&str> for ChannelId {
+    type Error = ChannelIdParseError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Self::from_str(s)
+    }
+}
+
+impl TryFrom<String> for ChannelId {
+    type Error = ChannelIdParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::from_str(&s)
+    }
+}
 
 /// The unique identifier for a payment channel.
 ///
@@ -27,7 +150,7 @@ use std::marker::PhantomData;
 /// produces a 64-byte hash. The human-readable channel ID format is `XGC` followed by the
 /// first 31 bytes of the hash encoded as hex (65 characters total).
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ChannelId<D = Blake2b512> {
+pub struct ChannelIdMetadata<D = Blake2b512> {
     merchant_key: Curve25519PublicKey,
     customer_key: Curve25519PublicKey,
     initial_balance: Balances,
@@ -41,14 +164,14 @@ pub struct ChannelId<D = Blake2b512> {
     _phantom: PhantomData<D>,
 }
 
-impl<D> ChannelId<D>
+impl<D> ChannelIdMetadata<D>
 where
     D: Send + Clone + SecureDigest,
     <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
 {
     /// Create a new channel ID from the given parameters.
     ///
-    /// See [`ChannelId`] for the full specification of the hash computation.
+    /// See [`ChannelIdMetadata`] for the full specification of the hash computation.
     ///
     /// The generic parameter `D` controls the digest algorithm and output size.
     /// The digest must produce at least 32 bytes of output (enforced at compile time).
@@ -102,7 +225,7 @@ where
         let output_size = <D as OutputSizeUser>::output_size();
         let hashed_id = challenge[..output_size].to_vec();
 
-        ChannelId {
+        ChannelIdMetadata {
             merchant_key,
             customer_key,
             initial_balance,
@@ -149,13 +272,15 @@ where
         format!("XGC{}", hex::encode(&hash[..31]))
     }
 
-    /// Alias for [`as_hex`](Self::as_hex) for backwards compatibility.
-    pub fn name(&self) -> String {
-        self.as_hex()
+    /// Returns the channel ID as a [`ChannelId`].
+    ///
+    /// This is the preferred way to get the channel identifier for use as a key or display.
+    pub fn name(&self) -> ChannelId {
+        ChannelId::from_channel_id_metadata(self)
     }
 }
 
-impl Debug for ChannelId {
+impl Debug for ChannelIdMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChannelId")
             .field("merchant_key", &self.merchant_key.as_hex())
@@ -169,19 +294,19 @@ impl Debug for ChannelId {
     }
 }
 
-impl Display for ChannelId {
+impl Display for ChannelIdMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_hex())
     }
 }
 
-impl PartialEq for ChannelId {
+impl PartialEq for ChannelIdMetadata {
     fn eq(&self, other: &Self) -> bool {
         self.hashed_id == other.hashed_id
     }
 }
 
-impl Eq for ChannelId {}
+impl Eq for ChannelIdMetadata {}
 
 #[cfg(test)]
 mod test {
@@ -221,7 +346,7 @@ mod test {
     fn channel_id() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        let id: ChannelId = ChannelId::new(merchant_key(), customer_key(), balance, closing, 100, 200);
+        let id: ChannelIdMetadata = ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, 100, 200);
         assert_eq!(id.merchant_key(), &merchant_key());
         assert_eq!(id.customer_key(), &customer_key());
         assert_eq!(id.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
@@ -244,32 +369,32 @@ mod test {
         let closing2 = ClosingAddresses::new(BOB_ADDRESS, ALICE_ADDRESS).expect("should be valid closing addresses");
 
         // Same parameters -> same ID
-        let id1 = ChannelId::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
-        let id2 = ChannelId::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
+        let id1 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
+        let id2 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
         assert_eq!(id1, id2);
 
         // Different merchant key -> different ID
-        let id3 = ChannelId::new(other_key(), customer_key(), amt, closing1, 100, 200);
+        let id3 = ChannelIdMetadata::new(other_key(), customer_key(), amt, closing1, 100, 200);
         assert_ne!(id1, id3);
 
         // Different customer key -> different ID
-        let id4 = ChannelId::new(merchant_key(), other_key(), amt, closing1, 100, 200);
+        let id4 = ChannelIdMetadata::new(merchant_key(), other_key(), amt, closing1, 100, 200);
         assert_ne!(id1, id4);
 
         // Different balance -> different ID
-        let id5 = ChannelId::new(merchant_key(), customer_key(), amt2, closing1, 100, 200);
+        let id5 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt2, closing1, 100, 200);
         assert_ne!(id1, id5);
 
         // Different nonce -> different ID
-        let id6 = ChannelId::new(merchant_key(), customer_key(), amt, closing1, 999, 200);
+        let id6 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, 999, 200);
         assert_ne!(id1, id6);
 
         // Different output size -> different ID
-        let id7 = ChannelId::<Blake2b<U32>>::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
+        let id7 = ChannelIdMetadata::<Blake2b<U32>>::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
         assert_ne!(id1.as_hex(), id7.as_hex());
 
         // Different closing addresses -> different ID
-        let id8 = ChannelId::new(merchant_key(), customer_key(), amt, closing2, 100, 200);
+        let id8 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing2, 100, 200);
         assert_ne!(id1, id8);
     }
 
@@ -277,10 +402,11 @@ mod test {
     fn serialize_deserialize_roundtrip() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        let id: ChannelId = ChannelId::new(merchant_key(), customer_key(), balance, closing, 12345, 67890);
+        let id: ChannelIdMetadata =
+            ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, 12345, 67890);
 
         let serialized = ron::to_string(&id).unwrap();
-        let deserialized: ChannelId = ron::from_str(&serialized).unwrap();
+        let deserialized: ChannelIdMetadata = ron::from_str(&serialized).unwrap();
 
         assert_eq!(id.merchant_key(), deserialized.merchant_key());
         assert_eq!(id.customer_key(), deserialized.customer_key());
@@ -296,5 +422,84 @@ mod test {
             id.closing_addresses().customer().to_string(),
             deserialized.closing_addresses().customer().to_string()
         );
+    }
+
+    #[test]
+    fn channel_id_string_from_channel_id() {
+        let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
+        let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
+        let id: ChannelIdMetadata = ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, 100, 200);
+
+        let id_string = ChannelId::from_channel_id_metadata(&id);
+        assert_eq!(
+            id_string.as_str(),
+            "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383"
+        );
+        assert_eq!(id_string.as_str().len(), 65);
+    }
+
+    #[test]
+    fn channel_id_string_from_str() {
+        // Valid channel ID
+        let valid = "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383";
+        let id = ChannelId::from_str(valid).unwrap();
+        assert_eq!(id.as_str(), valid);
+
+        // Invalid: wrong length
+        let too_short = "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a38";
+        assert!(matches!(
+            ChannelId::from_str(too_short),
+            Err(ChannelIdParseError::InvalidLength(64))
+        ));
+
+        // Invalid: wrong prefix
+        let wrong_prefix = "ABC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383";
+        assert!(matches!(
+            ChannelId::from_str(wrong_prefix),
+            Err(ChannelIdParseError::InvalidPrefix)
+        ));
+
+        // Invalid: non-hex characters - 'z' is not valid hex (62 z's after XGC = 65 chars total)
+        let invalid_hex = "XGCzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        assert_eq!(invalid_hex.len(), 65, "Test setup error: invalid_hex should be 65 chars");
+        assert!(matches!(ChannelId::from_str(invalid_hex), Err(ChannelIdParseError::InvalidHex)));
+    }
+
+    #[test]
+    fn channel_id_string_display() {
+        let valid = "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383";
+        let id = ChannelId::from_str(valid).unwrap();
+        assert_eq!(format!("{id}"), valid);
+        assert_eq!(format!("{id:?}"), format!("ChannelId({valid})"));
+    }
+
+    #[test]
+    fn channel_id_string_equality_and_hash() {
+        use std::collections::HashSet;
+
+        let a = ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+        let b = ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+        // Different ID - 62 zeros after XGC = 65 chars total
+        let c = ChannelId::from_str("XGC00000000000000000000000000000000000000000000000000000000000000").unwrap();
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+
+        // Test hash works correctly
+        let mut set = HashSet::new();
+        set.insert(a.clone());
+        assert!(set.contains(&b));
+        assert!(!set.contains(&c));
+    }
+
+    #[test]
+    fn channel_id_string_serialize_deserialize() {
+        let original =
+            ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+
+        let serialized = ron::to_string(&original).unwrap();
+        let deserialized: ChannelId = ron::from_str(&serialized).unwrap();
+
+        assert_eq!(original, deserialized);
     }
 }

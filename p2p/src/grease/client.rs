@@ -13,6 +13,7 @@ use futures::future::join;
 use futures::StreamExt;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::balance::Balances;
+use libgrease::channel_id::ChannelId;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use libgrease::cryptography::zk_objects::{
@@ -129,9 +130,9 @@ where
         self.inner.clone()
     }
 
-    /// Ensures that there's an active connection to the `name`d channel's peer.
-    pub async fn ensure_connection(&self, name: &str) -> Result<(), PeerConnectionError> {
-        self.inner.ensure_connection(name).await
+    /// Ensures that there's an active connection to the channel's peer.
+    pub async fn ensure_connection(&self, channel_id: &ChannelId) -> Result<(), PeerConnectionError> {
+        self.inner.ensure_connection(channel_id).await
     }
 
     pub fn contact_info(&self) -> ContactInfo {
@@ -142,20 +143,20 @@ where
         self.inner.start_listening(at).await
     }
 
-    pub async fn list_channels(&self) -> Vec<String> {
+    pub async fn list_channels(&self) -> Vec<ChannelId> {
         self.inner.channels.list_channels().await
     }
 
-    pub async fn channel_status(&self, name: &str) -> Option<LifecycleStage> {
-        self.inner.channels.peek(name).await.map(|channel| channel.state().stage())
+    pub async fn channel_status(&self, channel_id: &ChannelId) -> Option<LifecycleStage> {
+        self.inner.channels.peek(channel_id).await.map(|channel| channel.state().stage())
     }
 
-    pub async fn channel_metadata(&self, name: &str) -> Option<ChannelMetadata> {
-        self.inner.get_channel_metadata(name).await
+    pub async fn channel_metadata(&self, channel_id: &ChannelId) -> Option<ChannelMetadata> {
+        self.inner.get_channel_metadata(channel_id).await
     }
 
-    pub async fn transaction_count(&self, name: &str) -> Option<u64> {
-        self.inner.get_transaction_count(name).await
+    pub async fn transaction_count(&self, channel_id: &ChannelId) -> Option<u64> {
+        self.inner.get_transaction_count(channel_id).await
     }
 
     pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
@@ -167,8 +168,8 @@ where
     }
 
     /// Returns the multisig wallet address for the given channel and network.
-    pub async fn wallet_address(&self, channel_name: &str, network: &str) -> Result<String, GreaseClientError> {
-        let channel = self.inner.channels.peek(channel_name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+    pub async fn wallet_address(&self, channel_id: &ChannelId, network: &str) -> Result<String, GreaseClientError> {
+        let channel = self.inner.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let network = match network.to_ascii_lowercase().as_str() {
             "mainnet" => Network::Mainnet,
             "testnet" => Network::Testnet,
@@ -201,45 +202,56 @@ where
     ///      3. Create a new multisig wallet with the public keys.
     ///   2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
     ///   3. Verify the wallet address with the peer.
-    pub async fn establish_new_channel(&self, proposal: NewChannelMessage) -> Result<String, GreaseClientError> {
+    pub async fn establish_new_channel(&self, proposal: NewChannelMessage) -> Result<ChannelId, GreaseClientError> {
         self.inner.customer_establish_new_channel(proposal).await
     }
 
     /// A convenience function for [`Self::update_balance`] that pays the given amount from customer to merchant.
     ///
     /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn pay(&self, channel: &str, amount: MoneroAmount) -> Result<FinalizedUpdate, GreaseClientError> {
+    pub async fn pay(
+        &self,
+        channel_id: &ChannelId,
+        amount: MoneroAmount,
+    ) -> Result<FinalizedUpdate, GreaseClientError> {
         let delta = MoneroDelta::from(amount);
-        self.update_balance(channel, delta).await
+        self.update_balance(channel_id, delta).await
     }
 
     /// A convenience function for [`Self::update_balance`] that refunds the given amount from merchant to customer.
     ///
     /// Refer to [`Self::update_balance`] for more details on the update process.
-    pub async fn refund(&self, channel: &str, amount: MoneroAmount) -> Result<FinalizedUpdate, GreaseClientError> {
+    pub async fn refund(
+        &self,
+        channel_id: &ChannelId,
+        amount: MoneroAmount,
+    ) -> Result<FinalizedUpdate, GreaseClientError> {
         let delta = -MoneroDelta::from(amount);
-        self.update_balance(channel, delta).await
+        self.update_balance(channel_id, delta).await
     }
 
     /// Start the co-operative close process for a channel.
-    pub async fn close_channel(&self, channel: &str) -> Result<Balances, GreaseClientError> {
-        self.ensure_connection(channel).await?;
-        match self.inner.close_channel(channel).await {
+    pub async fn close_channel(&self, channel_id: &ChannelId) -> Result<Balances, GreaseClientError> {
+        self.ensure_connection(channel_id).await?;
+        match self.inner.close_channel(channel_id).await {
             Ok(balances) => {
-                info!("Channel {channel} closed successfully. Balances: {:?}", balances);
+                info!("Channel {channel_id} closed successfully. Balances: {:?}", balances);
                 Ok(balances)
             }
             Err(err) => {
-                warn!("Failed to close channel {channel}: {err}");
+                warn!("Failed to close channel {channel_id}: {err}");
                 Err(err)
             }
         }
     }
 
-    pub async fn rebroadcast_closing_transaction(&self, channel: &str) -> Result<TransactionId, GreaseClientError> {
+    pub async fn rebroadcast_closing_transaction(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<TransactionId, GreaseClientError> {
         // TODO we don't actually need a connection here, but it's handy for testing now
-        self.ensure_connection(channel).await?;
-        self.inner.rebroadcast_closing_transaction(channel).await
+        self.ensure_connection(channel_id).await?;
+        self.inner.rebroadcast_closing_transaction(channel_id).await
     }
 
     /// Perform a channel update.
@@ -248,17 +260,17 @@ where
     /// the update process manually at this point (although the update can still fail for a myriad reasons).
     pub async fn update_balance(
         &self,
-        channel: &str,
+        channel_id: &ChannelId,
         delta: MoneroDelta,
     ) -> Result<FinalizedUpdate, GreaseClientError> {
-        self.ensure_connection(channel).await?;
-        self.inner.customer_channel_update(channel, delta).await
+        self.ensure_connection(channel_id).await?;
+        self.inner.customer_channel_update(channel_id, delta).await
     }
 
-    pub async fn rescan_for_funding(&self, channel: &str) {
-        match self.inner.rescan_for_funding(channel).await {
-            Some(()) => info!("Rescanning {} for funding transaction", channel),
-            None => info!("Not scanning {} for funding transaction. See logs above for reason.", channel),
+    pub async fn rescan_for_funding(&self, channel_id: &ChannelId) {
+        match self.inner.rescan_for_funding(channel_id).await {
+            Some(()) => info!("Rescanning {channel_id} for funding transaction"),
+            None => info!("Not scanning {channel_id} for funding transaction. See logs above for reason."),
         }
     }
 }
@@ -314,19 +326,23 @@ where
         Ok(())
     }
 
-    async fn ensure_connection(&self, name: &str) -> Result<(), PeerConnectionError> {
-        debug!("Ensuring connection to peer for channel {name}");
+    async fn ensure_connection(&self, channel_id: &ChannelId) -> Result<(), PeerConnectionError> {
+        debug!("Ensuring connection to peer for channel {channel_id}");
         let mut client = self.network_client.clone();
-        let channel = self.channels.peek(name).await.ok_or(PeerConnectionError::unexpected_channel(name, "None"))?;
+        let channel = self
+            .channels
+            .peek(channel_id)
+            .await
+            .ok_or(PeerConnectionError::unexpected_channel(channel_id.as_str(), "None"))?;
         let contact_info = channel.peer_info().clone();
         drop(channel);
         let current_peers = client.connected_peers().await?;
         if current_peers.contains(&contact_info.peer_id) {
-            debug!("Channel {name} is already connected. Great!");
+            debug!("Channel {channel_id} is already connected. Great!");
         } else {
             client.dial(contact_info.address.clone()).await?;
             info!(
-                "Reconnected to peer {}({}) for channel {name}",
+                "Reconnected to peer {}({}) for channel {channel_id}",
                 contact_info.name, contact_info.peer_id
             );
         }
@@ -352,85 +368,86 @@ where
     pub async fn customer_establish_new_channel(
         &self,
         proposal: NewChannelMessage,
-    ) -> Result<String, GreaseClientError> {
+    ) -> Result<ChannelId, GreaseClientError> {
         // 1. Proposal phase
         info!("💍️ Sending new channel proposal to merchant");
         // Needed for KES verification later..
         let kes_public_key = proposal.seed.kes_public_key.clone();
-        let name = self.customer_send_proposal(proposal).await?.map_err(GreaseClientError::ProposalRejected)?;
-        info!("💍️ Proposal accepted. Channel name: {name}");
+        let channel_id = self.customer_send_proposal(proposal).await?.map_err(GreaseClientError::ProposalRejected)?;
+        info!("💍️ Proposal accepted. Channel ID: {channel_id}");
         // 2. We're in establishing phase now.
-        let channel = self.channels.peek(&name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let channel = self.channels.peek(&channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let peer_id = channel.peer_id();
         if !channel.is_establishing() {
             return Err(GreaseClientError::ProtocolError(format!(
-                "Channel {name} should be in Establishing phase"
+                "Channel {channel_id} should be in Establishing phase"
             )));
         }
         drop(channel);
         // 2.1.1. Create a new keypair for the wallet.
-        info!("👛️ Creating new multisig wallet keys for channel {name}");
+        info!("👛️ Creating new multisig wallet keys for channel {channel_id}");
         let (k, p) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         // 2.1.2. Exchange the public keys with the merchant.
-        debug!("👛️ Sharing public key with merchant for channel {name}");
-        let peer_key_info = self.exchange_wallet_keys(peer_id, &name, &p, ChannelRole::Customer).await?;
-        debug!("👛️ Received merchant's public key for channel {name}");
+        debug!("👛️ Sharing public key with merchant for channel {channel_id}");
+        let peer_key_info = self.exchange_wallet_keys(peer_id, &channel_id, &p, ChannelRole::Customer).await?;
+        debug!("👛️ Received merchant's public key for channel {channel_id}");
         // 2.1.3. Create a new multisig wallet with the public keys.
-        let wallet = self.customer_create_multisig_wallet(&name, k, p, peer_key_info).await?;
+        let wallet = self.customer_create_multisig_wallet(&channel_id, k, p, peer_key_info).await?;
         // 2.2. Split and encrypt the wallet spend key secrets to give to the KES and merchant.
-        debug!("👛️ Splitting, encrypting and sharing spend key with merchant for channel {name}");
+        debug!("👛️ Splitting, encrypting and sharing spend key with merchant for channel {channel_id}");
         let peer_pubkey = wallet.peer_public_key();
         let merchant_shards = self.split_secrets(wallet.my_spend_key(), &kes_public_key, peer_pubkey).await?;
-        let shards_and_kes =
-            self.customer_exchange_split_secrets(peer_id, &name, merchant_shards.clone(), &kes_public_key).await?;
-        debug!("👛️ Merchant provided their encrypted shards for channel {name}");
+        let shards_and_kes = self
+            .customer_exchange_split_secrets(peer_id, &channel_id, merchant_shards.clone(), &kes_public_key)
+            .await?;
+        debug!("👛️ Merchant provided their encrypted shards for channel {channel_id}");
         let my_shards =
             MultisigSplitSecrets { peer_shard: shards_and_kes.peer_shard, kes_shard: shards_and_kes.kes_shard };
         let shards = ShardInfo { my_shards, their_shards: merchant_shards };
-        self.common_verify_and_store_shards(&name, shards, shards_and_kes.kes_proof).await?;
-        debug!("👛️ Wallet shards are valid and are stored for channel {name}");
+        self.common_verify_and_store_shards(&channel_id, shards, shards_and_kes.kes_proof).await?;
+        debug!("👛️ Wallet shards are valid and are stored for channel {channel_id}");
         // 2.3. Verify the wallet address with the peer.
         let address = wallet.address();
-        debug!("👛️ Verifying wallet address with peer for channel {name}. Address: {address}");
-        let confirmed = self.customer_verify_wallet_address(peer_id, &name, address.to_string()).await?;
+        debug!("👛️ Verifying wallet address with peer for channel {channel_id}. Address: {address}");
+        let confirmed = self.customer_verify_wallet_address(peer_id, &channel_id, address.to_string()).await?;
         if !confirmed {
-            warn!("📢️ Wallet address verification failed for channel {name}. Address: {address}");
+            warn!("📢️ Wallet address verification failed for channel {channel_id}. Address: {address}");
             return Err(GreaseClientError::ProtocolError(format!(
-                "Wallet address verification failed for channel {name}"
+                "Wallet address verification failed for channel {channel_id}"
             )));
         }
         let pvk = wallet.joint_private_view_key().clone();
         let pub_spend_key = *wallet.joint_public_spend_key();
         let birthday = Some(wallet.birthday());
-        info!("👛️ Multisig wallet has been successfully created for channel {name}.");
-        self.watch_for_funding_transaction(&name, pvk, pub_spend_key, birthday).await?;
-        info!("👁️‍🗨️ Generating initial ZK-proofs for channel {name}.");
-        let peer_proof = self.generate_and_store_witness0(&name).await?;
-        info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {name} with merchant.");
-        let merchant_proof = self.customer_send_proofs0(&name, peer_id, peer_proof).await?;
-        info!("👁️‍🗨️ Verifying merchant's initial transaction proof for channel {name}. (ZK-Witness0 proof)");
-        self.verify_proof0(&name, &merchant_proof).await?;
-        info!("👁️‍🗨️ Merchant's initial transaction proof is VALID for channel {name}. (ZK-Witness0 proof)");
-        self.store_public_proof0(&name, merchant_proof).await?;
-        info!("👁️‍🗨️ Stored Merchant's initial transaction proof for channel {name}.");
+        info!("👛️ Multisig wallet has been successfully created for channel {channel_id}.");
+        self.watch_for_funding_transaction(&channel_id, pvk, pub_spend_key, birthday).await?;
+        info!("👁️‍🗨️ Generating initial ZK-proofs for channel {channel_id}.");
+        let peer_proof = self.generate_and_store_witness0(&channel_id).await?;
+        info!("👁️‍🗨️ Exchanging ZK-proofs proofs for channel {channel_id} with merchant.");
+        let merchant_proof = self.customer_send_proofs0(&channel_id, peer_id, peer_proof).await?;
+        info!("👁️‍🗨️ Verifying merchant's initial transaction proof for channel {channel_id}. (ZK-Witness0 proof)");
+        self.verify_proof0(&channel_id, &merchant_proof).await?;
+        info!("👁️‍🗨️ Merchant's initial transaction proof is VALID for channel {channel_id}. (ZK-Witness0 proof)");
+        self.store_public_proof0(&channel_id, merchant_proof).await?;
+        info!("👁️‍🗨️ Stored Merchant's initial transaction proof for channel {channel_id}.");
         // This is as far as we can take the channel establishment process for now.
         // If Txf has already been confirmed, then we will be in the Established state.
-        Ok(name)
+        Ok(channel_id)
     }
 
     /// Rescan the blockchain for the funding transaction for the given channel. This can be used if the initial scan
     /// or watch process was disrupted or there was a re-org, but we feel that the transaction should exist. The
     /// scanning starts just before the wallet's birthday to the present and then continues to scan new blocks.
-    async fn rescan_for_funding(&self, name: &str) -> Option<()> {
-        let channel = self.channels.peek(name).await?;
+    async fn rescan_for_funding(&self, channel_id: &ChannelId) -> Option<()> {
+        let channel = self.channels.peek(channel_id).await?;
         if !channel.is_establishing() {
-            debug!("Channel {name} is not establishing, so no need to scan for funding txn.");
+            debug!("Channel {channel_id} is not establishing, so no need to scan for funding txn.");
             return None;
         }
         let wallet_info = match channel.state().as_establishing().ok()?.wallet() {
             Some(info) => info.clone(),
             None => {
-                debug!("Channel {name} does not have a wallet, so no need to scan for funding transaction.");
+                debug!("Channel {channel_id} does not have a wallet, so no need to scan for funding transaction.");
                 return None;
             }
         };
@@ -438,8 +455,8 @@ where
         let pvt_vk = wallet_info.joint_private_view_key.clone();
         let pub_sk = wallet_info.joint_public_spend_key;
         let bday = wallet_info.birthday.saturating_sub(5);
-        trace!("Scanning blockchain from block {bday} for funding transaction for channel {name}");
-        self.watch_for_funding_transaction(name, pvt_vk, pub_sk, Some(bday))
+        trace!("Scanning blockchain from block {bday} for funding transaction for channel {channel_id}");
+        self.watch_for_funding_transaction(channel_id, pvt_vk, pub_sk, Some(bday))
             .await
             .map_err(|e| warn!("Error creating funding tx watcher: {e}"))
             .ok()?;
@@ -454,7 +471,7 @@ where
     async fn customer_send_proposal(
         &self,
         proposal: NewChannelMessage,
-    ) -> Result<Result<String, RejectChannelProposal>, PeerConnectionError> {
+    ) -> Result<Result<ChannelId, RejectChannelProposal>, PeerConnectionError> {
         let mut client = self.network_client.clone();
         let address = proposal.contact_info_merchant.dial_address();
         // todo: check what happens if there's already a connection?
@@ -494,14 +511,14 @@ where
         state: ChannelState,
         peer_info: ContactInfo,
         info: NewChannelProposal,
-    ) -> Result<String, LifeCycleError> {
+    ) -> Result<ChannelId, LifeCycleError> {
         let mut channel = PaymentChannel::new(peer_info, state);
         let event = LifeCycleEvent::VerifiedProposal(Box::new(info));
         channel.handle_event(event)?;
-        let name = channel.name();
-        trace!("Adding new channel {name}. Stage: {}", channel.state().stage());
+        let channel_id = channel.name();
+        trace!("Adding new channel {channel_id}. Stage: {}", channel.state().stage());
         self.channels.add(channel).await;
-        Ok(name)
+        Ok(channel_id)
     }
 
     /// Helper function. Creates a [`NewChannelState`] from the given proposal and secret.
@@ -522,9 +539,9 @@ where
         info!("💍️ New proposal received from customer: {}", data.contact_info_customer.name);
         self.verify_proposal_and_create_channel(data.clone())
             .await
-            .map(|name| {
+            .map(|channel_id| {
                 info!(
-                    "💍️ Proposal for channel {name} accepted from customer: {}",
+                    "💍️ Proposal for channel {channel_id} accepted from customer: {}",
                     data.contact_info_customer.name
                 );
                 let result = ChannelProposalResult::Accepted(data.clone());
@@ -540,7 +557,7 @@ where
     async fn verify_proposal_and_create_channel(
         &self,
         data: NewChannelMessage,
-    ) -> Result<String, RejectChannelProposal> {
+    ) -> Result<ChannelId, RejectChannelProposal> {
         // Let the delegate do their checks
         self.delegate.verify_proposal(&data).await.map_err(|err| {
             debug!("Channel proposal verification failed: {err}");
@@ -551,11 +568,11 @@ where
         // Construct the new channel
         let peer_info = data.contact_info_customer.clone();
         let new_state = self.merchant_create_new_state(data);
-        let name = self.common_create_channel(new_state, peer_info, proposal).await.map_err(|e| {
+        let channel_id = self.common_create_channel(new_state, peer_info, proposal).await.map_err(|e| {
             warn!("Error creating new channel {e}");
             RejectChannelProposal::internal("Error creating new channel")
         })?;
-        Ok(name)
+        Ok(channel_id)
     }
 
     //----------------------------        Channel establishment functions         ----------------------------------//
@@ -563,13 +580,13 @@ where
     async fn exchange_wallet_keys(
         &self,
         peer_id: PeerId,
-        name: &str,
+        channel_id: &ChannelId,
         my_pubkey: &Curve25519PublicKey,
         role: ChannelRole,
     ) -> Result<MultisigKeyInfo, GreaseClientError> {
         let mut client = self.network_client.clone();
         let key_info = MultisigKeyInfo { key: *my_pubkey, role };
-        let peer_pubkey = client.send_multisig_key(peer_id, name, key_info).await?;
+        let peer_pubkey = client.send_multisig_key(peer_id, channel_id.as_str(), key_info).await?;
         Ok(peer_pubkey)
     }
 
@@ -596,19 +613,19 @@ where
         &self,
         envelope: MessageEnvelope<MultisigKeyInfo>,
     ) -> Result<GreaseResponse, GreaseResponse> {
-        let (name, peer_key_info) = envelope.open();
-        info!("👛️ Received multisig pubkey from Customer. Creating new wallet keys for channel {name}.");
+        let (channel_id, peer_key_info) = envelope.open();
+        info!("👛️ Received multisig pubkey from Customer. Creating new wallet keys for channel {channel_id}.");
         let (k, p) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         let peer_key_info = SharedPublicKey::new(peer_key_info.role, peer_key_info.key);
         let wallet = self
-            .common_create_wallet_and_advance(&name, k, p, peer_key_info)
+            .common_create_wallet_and_advance(&channel_id, k, p, peer_key_info)
             .await
             .map_err(|e| RemoteServerError::internal(format!("Failed to create new wallet: {e}")))?;
         debug!("👛️ Saved multisig data in channel. Watching for funding transaction.");
         let jpvk = wallet.joint_private_view_key().clone();
         let jpsk = *wallet.joint_public_spend_key();
         let _ = self
-            .watch_for_funding_transaction(&name, jpvk, jpsk, Some(wallet.birthday()))
+            .watch_for_funding_transaction(&channel_id, jpvk, jpsk, Some(wallet.birthday()))
             .await
             .map_err(|e| {
                 warn!("Error creating funding transaction watcher: {e}. You will need to rescan manually later.");
@@ -616,24 +633,24 @@ where
             .ok();
         debug!("👛️ Sending public key to customer.");
         let response = MultisigKeyInfo { key: *wallet.my_public_key(), role: ChannelRole::Merchant };
-        let envelope = MessageEnvelope::new(name, response);
+        let envelope = MessageEnvelope::new(channel_id, response);
         Ok(GreaseResponse::MsKeyExchange(envelope))
     }
 
     async fn customer_create_multisig_wallet(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         my_spend_key: Curve25519Secret,
         my_pubkey: Curve25519PublicKey,
         key: MultisigKeyInfo,
     ) -> Result<MultisigWallet, GreaseClientError> {
         let key = SharedPublicKey::new(key.role, key.key);
-        self.common_create_wallet_and_advance(name, my_spend_key, my_pubkey, key).await
+        self.common_create_wallet_and_advance(channel_id, my_spend_key, my_pubkey, key).await
     }
 
     async fn common_create_wallet_and_advance(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         my_spend_key: Curve25519Secret,
         my_pubkey: Curve25519PublicKey,
         peer_key: SharedPublicKey,
@@ -641,7 +658,7 @@ where
         let wallet = self.create_new_2_of_2_wallet(my_spend_key, my_pubkey, peer_key).await?;
         let data = wallet.serializable();
         let event = LifeCycleEvent::MultiSigWalletCreated(Box::new(data));
-        let mut channel = self.channels.checkout(name).await.ok_or_else(|| GreaseClientError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(channel_id).await.ok_or_else(|| GreaseClientError::ChannelNotFound)?;
         channel.handle_event(event)?;
         drop(channel);
         debug!("👛️  Multisig wallet created successfully.");
@@ -663,63 +680,63 @@ where
     async fn customer_exchange_split_secrets(
         &self,
         peer_id: PeerId,
-        name: &str,
+        channel_id: &ChannelId,
         shards_for_merchant: MultisigSplitSecrets,
         kes_public_key: &str,
     ) -> Result<MultisigSplitSecretsResponse, GreaseClientError> {
         let mut client = self.network_client.clone();
         let merchant_kes_shard = shards_for_merchant.kes_shard.clone();
-        let shards_for_customer = client.send_split_secrets(peer_id, name, shards_for_merchant).await?;
-        info!("🔐️ Verifying KES proofs for channel {name}.");
+        let shards_for_customer = client.send_split_secrets(peer_id, channel_id.as_str(), shards_for_merchant).await?;
+        info!("🔐️ Verifying KES proofs for channel {channel_id}.");
         let pubkey = GenericPoint::from_hex(kes_public_key)
             .map_err(|e| GreaseClientError::ProtocolError(format!("Failed to derive KES public key: {e}.")))?;
         self.delegate
             .verify_kes_proofs(
-                name.to_string(),
+                channel_id.clone().into(),
                 merchant_kes_shard,
                 shards_for_customer.kes_shard.clone(),
                 pubkey,
                 shards_for_customer.kes_proof.clone(),
             )
             .await?;
-        trace!("🔐️ KES proofs verified for channel {name}.");
+        trace!("🔐️ KES proofs verified for channel {channel_id}.");
         Ok(shards_for_customer)
     }
 
     async fn common_verify_and_store_shards(
         &self,
-        channel_name: &str,
+        channel_id: &ChannelId,
         shards: ShardInfo,
         kes_proof: KesProof,
     ) -> Result<(), GreaseClientError> {
-        let channel = self.channels.peek(channel_name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let state = channel.state().as_establishing()?;
         let wallet =
             state.wallet().ok_or(GreaseClientError::InvalidState("Multisig wallet not available".to_string()))?;
         let key = wallet.my_spend_key.clone();
         drop(channel);
         self.delegate.verify_my_shards(&key, &shards.my_shards)?;
-        trace!("👛️  My shards are correctly encrypted for channel {channel_name}.");
+        trace!("👛️  My shards are correctly encrypted for channel {channel_id}.");
         // Save the shards info in the state channel.
-        let mut channel = self.channels.checkout(channel_name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let event = LifeCycleEvent::KesShards(Box::new(shards));
         channel.handle_event(event)?;
-        trace!("👛️  Shards are stored in channel {channel_name}.");
+        trace!("👛️  Shards are stored in channel {channel_id}.");
         // Save the KES proof in the state channel.
         let kes_event = LifeCycleEvent::KesCreated(Box::new(kes_proof));
         channel.handle_event(kes_event)?;
-        trace!("👛️  KES proof is stored in channel {channel_name}.");
+        trace!("👛️  KES proof is stored in channel {channel_id}.");
         Ok(())
     }
 
     async fn customer_verify_wallet_address(
         &self,
         peer_id: PeerId,
-        name: &str,
+        channel_id: &ChannelId,
         address: String,
     ) -> Result<bool, GreaseClientError> {
         let mut client = self.network_client.clone();
-        let confirmation = client.send_wallet_confirmation(peer_id, name, address).await?;
+        let confirmation = client.send_wallet_confirmation(peer_id, channel_id.as_str(), address).await?;
         Ok(confirmation)
     }
 
@@ -737,8 +754,8 @@ where
         envelope: MessageEnvelope<MultisigSplitSecrets>,
     ) -> Result<GreaseResponse, GreaseResponse> {
         trace!("👛️  Split secrets exchange request received");
-        let (name, my_shards) = envelope.open();
-        let channel = self.channels.peek(&name).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
+        let (channel_id, my_shards) = envelope.open();
+        let channel = self.channels.peek(&channel_id).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
         let state = channel.state().as_establishing().map_err(|e| RemoteServerError::internal(e.to_string()))?;
         let wallet =
             state.wallet().ok_or_else(|| RemoteServerError::internal("Merchant's Multisig wallet is not available"))?;
@@ -758,16 +775,16 @@ where
         let proof = self
             .delegate
             .create_kes_proofs(
-                name.clone(),
+                channel_id.clone().into(),
                 my_shards.kes_shard.clone(),
                 customer_shards.kes_shard.clone(),
                 kes,
             )
             .await
             .map_err(|e| RemoteServerError::internal(format!("Failed to create KES proofs: {e}")))?;
-        info!("🔐️ KES established for channel {name}.");
+        info!("🔐️ KES established for channel {channel_id}.");
         let shard_info = ShardInfo { my_shards, their_shards: customer_shards.clone() };
-        self.common_verify_and_store_shards(&name, shard_info.clone(), proof.clone())
+        self.common_verify_and_store_shards(&channel_id, shard_info.clone(), proof.clone())
             .await
             .map_err(|e| RemoteServerError::internal(format!("Failed to verify received shards: {e}")))?;
         let response = MultisigSplitSecretsResponse {
@@ -775,25 +792,25 @@ where
             kes_shard: customer_shards.kes_shard,
             kes_proof: proof,
         };
-        let envelope = MessageEnvelope::new(name, response);
+        let envelope = MessageEnvelope::new(channel_id, response);
         Ok(GreaseResponse::MsSplitSecretExchange(envelope))
     }
 
-    async fn address_matches(&self, name: &str, address: &str) -> Result<bool, GreaseClientError> {
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
-        debug!("👛️  Verifying address {address} for channel {name}.");
+    async fn address_matches(&self, channel_id: &ChannelId, address: &str) -> Result<bool, GreaseClientError> {
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        debug!("👛️  Verifying address {address} for channel {channel_id}.");
         let state = channel.state().as_establishing()?;
-        trace!("👛️  Loading wallet for channel {name}.");
+        trace!("👛️  Loading wallet for channel {channel_id}.");
         let wallet =
             state.wallet().ok_or(GreaseClientError::InvalidState("Multisig wallet not available".to_string()))?;
         let rpc = connect_to_rpc(self.rpc_address()).await?;
         let wallet = MultisigWallet::from_serializable(rpc, wallet.clone())?;
         if wallet.address().to_string() == address {
-            debug!("👛️  Address {address} matches for channel {name}.");
+            debug!("👛️  Address {address} matches for channel {channel_id}.");
             Ok(true)
         } else {
             Err(GreaseClientError::ProtocolError(format!(
-                "Address mismatch for channel {name}. Expected {}, got {}",
+                "Address mismatch for channel {channel_id}. Expected {}, got {}",
                 wallet.address(),
                 address
             )))
@@ -806,32 +823,32 @@ where
     /// things to clean up after ourselves here
     async fn watch_for_funding_transaction(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         private_view_key: Curve25519Secret,
         public_spend_key: Curve25519PublicKey,
         birthday: Option<u64>,
     ) -> Result<(), GreaseClientError> {
-        let channel_name = name.to_string();
+        let channel_name = channel_id.clone().into();
         let poll_interval = self.options.tx_poll_interval;
-        let name = name.to_string();
+        let channel_id = channel_id.clone();
         let channels = self.channels.clone();
         let callback = move |record: TransactionRecord| {
             let channels = channels.clone();
-            let name = name.clone();
+            let channel_id = channel_id.clone();
             tokio::spawn(async move {
-                info!("🪙️  Received funding transaction for channel {name}: {:?}", record);
-                match channels.checkout(&name).await {
+                info!("🪙️  Received funding transaction for channel {channel_id}: {:?}", record);
+                match channels.checkout(&channel_id).await {
                     Some(mut channel) => {
                         let event = LifeCycleEvent::FundingTxConfirmed(Box::new(record));
                         match channel.handle_event(event) {
-                            Ok(()) => info!("🪙️  Funding transaction for channel {name} processed successfully."),
+                            Ok(()) => info!("🪙️  Funding transaction for channel {channel_id} processed successfully."),
                             Err(err) => {
-                                warn!("🪙️  Error processing funding transaction for channel {name}: {err}");
+                                warn!("🪙️  Error processing funding transaction for channel {channel_id}: {err}");
                             }
                         }
                     }
                     None => {
-                        warn!("🪙️  Channel {name} not found when processing funding transaction.");
+                        warn!("🪙️  Channel {channel_id} not found when processing funding transaction.");
                     }
                 }
             });
@@ -850,39 +867,43 @@ where
         Ok(())
     }
 
-    async fn generate_and_store_witness0(&self, name: &str) -> Result<PublicProof0, GreaseClientError> {
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+    async fn generate_and_store_witness0(&self, channel_id: &ChannelId) -> Result<PublicProof0, GreaseClientError> {
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let metadata = channel.state().metadata().clone();
         drop(channel);
-        debug!("👁️‍🗨️ Generating witness_0 proof for channel {name}.");
+        debug!("👁️‍🗨️ Generating witness_0 proof for channel {channel_id}.");
         let inputs = generate_txc0_nonces(&mut rand_core::OsRng);
         let proof = self.delegate.generate_initial_proofs(inputs, &metadata).await?;
         let pub_proof = proof.public_only();
-        debug!("👁️‍🗨️ Storing witness_0 proof for channel {name}.");
+        debug!("👁️‍🗨️ Storing witness_0 proof for channel {channel_id}.");
         let event = LifeCycleEvent::MyProof0Generated(Box::new(proof));
-        let mut channel = self.channels.checkout(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         channel.handle_event(event)?;
         Ok(pub_proof)
     }
 
     async fn customer_send_proofs0(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         peer_id: PeerId,
         proof: PublicProof0,
     ) -> Result<PublicProof0, GreaseClientError> {
-        debug!("👁️‍🗨️ Sending public witness_0 proof to peer for channel {name}.");
+        debug!("👁️‍🗨️ Sending public witness_0 proof to peer for channel {channel_id}.");
         let mut client = self.network_client.clone();
-        let remote_proof = client.send_proof0(peer_id, name, proof).await?;
-        debug!("👁️‍🗨️ Received witness_0 proof from peer for channel {name}.");
+        let remote_proof = client.send_proof0(peer_id, channel_id.as_str(), proof).await?;
+        debug!("👁️‍🗨️ Received witness_0 proof from peer for channel {channel_id}.");
         Ok(remote_proof)
     }
 
-    async fn store_public_proof0(&self, name: &str, peer_proof: PublicProof0) -> Result<(), GreaseClientError> {
-        let mut channel = self.channels.checkout(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+    async fn store_public_proof0(
+        &self,
+        channel_id: &ChannelId,
+        peer_proof: PublicProof0,
+    ) -> Result<(), GreaseClientError> {
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof));
         channel.handle_event(event)?;
-        debug!("👁️‍🗨️ Stored peer's witness_0 proof for channel {name}.");
+        debug!("👁️‍🗨️ Stored peer's witness_0 proof for channel {channel_id}.");
         Ok(())
     }
 
@@ -892,25 +913,27 @@ where
         envelope: MessageEnvelope<PublicProof0>,
     ) -> Result<GreaseResponse, GreaseResponse> {
         debug!("👁️‍🗨️  Received witness_0 proof exchange request");
-        let (name, peer_proof) = envelope.open();
-        debug!("👁️‍🗨️  Verifying received witness0 proof for channel {name}.");
-        self.verify_proof0(&name, &peer_proof).await.map_err(|e| RemoteServerError::InvalidProof(e.to_string()))?;
-        debug!("👁️‍🗨️  Storing witness0 proof for channel {name}.");
-        self.store_public_proof0(&name, peer_proof)
+        let (channel_id, peer_proof) = envelope.open();
+        debug!("👁️‍🗨️  Verifying received witness0 proof for channel {channel_id}.");
+        self.verify_proof0(&channel_id, &peer_proof)
+            .await
+            .map_err(|e| RemoteServerError::InvalidProof(e.to_string()))?;
+        debug!("👁️‍🗨️  Storing witness0 proof for channel {channel_id}.");
+        self.store_public_proof0(&channel_id, peer_proof)
             .await
             .map_err(|e| RemoteServerError::internal(format!("Error storing witness_0 proof: {e}")))?;
-        debug!("👁️‍🗨️  Customer's witness0 proof is VALID for channel {name}.");
+        debug!("👁️‍🗨️  Customer's witness0 proof is VALID for channel {channel_id}.");
         let pub_proof = self
-            .generate_and_store_witness0(&name)
+            .generate_and_store_witness0(&channel_id)
             .await
             .map_err(|e| RemoteServerError::internal(format!("Failed to generate witness_0 proof: {e}")))?;
-        debug!("👁️‍🗨️  Sending witness_0 proof to customer for channel {name}.");
-        let envelope = MessageEnvelope::new(name, pub_proof);
+        debug!("👁️‍🗨️  Sending witness_0 proof to customer for channel {channel_id}.");
+        let envelope = MessageEnvelope::new(channel_id, pub_proof);
         Ok(GreaseResponse::ExchangeProof0(envelope))
     }
 
-    async fn verify_proof0(&self, name: &str, proof: &PublicProof0) -> Result<(), GreaseClientError> {
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+    async fn verify_proof0(&self, channel_id: &ChannelId, proof: &PublicProof0) -> Result<(), GreaseClientError> {
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let metadata = channel.state().metadata().clone();
         drop(channel);
         self.delegate.verify_initial_proofs(proof, &metadata).await?;
@@ -919,15 +942,15 @@ where
 
     /// Returns the channel metadata for the given channel name, if the current lifecycle state has the information
     /// available.
-    async fn get_channel_metadata(&self, channel_name: &str) -> Option<ChannelMetadata> {
-        let lock = self.channels.peek(channel_name).await?;
+    async fn get_channel_metadata(&self, channel_id: &ChannelId) -> Option<ChannelMetadata> {
+        let lock = self.channels.peek(channel_id).await?;
         Some(lock.state().metadata().clone())
     }
 
     /// Returns the transaction count the given channel name, if the channel exists. If the channel is not found,
     /// `None` is returned.
-    async fn get_transaction_count(&self, channel_name: &str) -> Option<u64> {
-        let lock = self.channels.peek(channel_name).await?;
+    async fn get_transaction_count(&self, channel_id: &ChannelId) -> Option<u64> {
+        let lock = self.channels.peek(channel_id).await?;
         let count = match lock.state() {
             ChannelState::New(_) => 0,
             ChannelState::Establishing(_) => 0,
@@ -942,8 +965,12 @@ where
     ///
     /// It is assumed that this transaction completely funds the relevant side of the channel. No verifications or
     /// validations are done here.
-    pub async fn submit_funding_transaction(&self, name: &str, tx: TransactionRecord) -> Result<(), GreaseClientError> {
-        let mut channel = self.channels.checkout(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+    pub async fn submit_funding_transaction(
+        &self,
+        channel_id: &ChannelId,
+        tx: TransactionRecord,
+    ) -> Result<(), GreaseClientError> {
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let event = LifeCycleEvent::FundingTxConfirmed(Box::new(tx));
         channel.handle_event(event)?;
         Ok(())
@@ -962,35 +989,39 @@ where
     /// If all goes well, a record of the latest channel balance is received from the merchant.
     async fn customer_channel_update(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         delta: MoneroDelta,
     ) -> Result<FinalizedUpdate, GreaseClientError> {
-        info!("💸️  Preparing new update for channel {name}.");
-        let commit_info = self.send_preparation(name, delta).await?;
-        debug!("💸️  Received update proofs for channel {name} from merchant");
-        let finalized = self.commit_update(name, commit_info).await?;
-        info!("💸️  Update {} successful on channel {name}.", finalized.update_count);
+        info!("💸️  Preparing new update for channel {channel_id}.");
+        let commit_info = self.send_preparation(channel_id, delta).await?;
+        debug!("💸️  Received update proofs for channel {channel_id} from merchant");
+        let finalized = self.commit_update(channel_id, commit_info).await?;
+        info!("💸️  Update {} successful on channel {channel_id}.", finalized.update_count);
         Ok(finalized)
     }
 
     /// First round of update communication from the customer to the merchant.
     /// Prepare the multisig transaction; send it to the merchant; and get their reply
-    async fn send_preparation(&self, name: &str, delta: MoneroDelta) -> Result<CustomerUpdate2, GreaseClientError> {
-        debug!("💸️  Preparing new transaction for update on channel {name} ({delta:?})");
-        let info = self.pre_prepare_wallet(name, delta).await?;
+    async fn send_preparation(
+        &self,
+        channel_id: &ChannelId,
+        delta: MoneroDelta,
+    ) -> Result<CustomerUpdate2, GreaseClientError> {
+        debug!("💸️  Preparing new transaction for update on channel {channel_id} ({delta:?})");
+        let info = self.pre_prepare_wallet(channel_id, delta).await?;
         debug!(
-            "💸️  Transaction prepared for update #{} on channel {name}. ({delta:?})",
+            "💸️  Transaction prepared for update #{} on channel {channel_id}. ({delta:?})",
             info.update_count
         );
         let mut client = self.network_client.clone();
         let prep =
             PrepareUpdate { update_count: info.update_count, delta, prepare_info_customer: info.prepare_data.clone() };
         debug!(
-            "💸️  Sending update {} preparation data to peer for channel {name}",
+            "💸️  Sending update {} preparation data to peer for channel {channel_id}",
             info.update_count
         );
         trace!("SendingToMerchant: {prep:?}");
-        let peer_info = client.send_update_preparation(info.peer, name, prep).await?;
+        let peer_info = client.send_update_preparation(info.peer, channel_id.as_str(), prep).await?;
         if info.update_count != peer_info.update_count {
             return Err(GreaseClientError::ProtocolError("Mismatched update count".to_string()));
         }
@@ -999,7 +1030,7 @@ where
             return Err(GreaseClientError::ProtocolError("Mismatched update delta".to_string()));
         }
         debug!(
-            "💸️  Received. Confirmation. Update {} is ready for signing on channel {name}",
+            "💸️  Received. Confirmation. Update {} is ready for signing on channel {channel_id}",
             info.update_count
         );
         let result = CustomerUpdate2 {
@@ -1015,16 +1046,16 @@ where
     /// Generates the commitment data for a new multisig transaction.
     async fn pre_prepare_wallet(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         delta: MoneroDelta,
     ) -> Result<InternalPrepareUpdate, GreaseClientError> {
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let peer = channel.peer_id();
         let state = channel.state().as_open()?;
         let update_count = state.update_count() + 1;
         let wallet_data = state.wallet_data();
         let funding_txs = state.funding_transactions().cloned().collect::<Vec<_>>();
-        trace!("Reconstructing multisig wallet for channel {name}.");
+        trace!("Reconstructing multisig wallet for channel {channel_id}.");
         let unadjusted = state
             .get_payments_after_spending(delta)
             .ok_or(GreaseClientError::UpdateError(UpdateError::InsufficientFunds))?;
@@ -1051,7 +1082,7 @@ where
             .map_err(|e| GreaseClientError::UpdateError(UpdateError::WalletError(e.to_string())))?;
         let prepare_data = wallet.my_pre_process_data().expect("I've just generated this data, it should be present");
         let pending = PendingUpdate::new(wallet, delta, update_count, prepare_data.clone());
-        self.updates_in_progress.add(name, pending).await;
+        self.updates_in_progress.add(channel_id.as_str(), pending).await;
         Ok(InternalPrepareUpdate { prepare_data, peer, update_count })
     }
 
@@ -1063,11 +1094,15 @@ where
     /// 3. Generate their own proofs for the update.
     /// 4. Send the proofs and adapted signature to the merchant and wait for an affirmative response
     /// 5. Update the state machine with the new update data.
-    async fn commit_update(&self, name: &str, info: CustomerUpdate2) -> Result<FinalizedUpdate, GreaseClientError> {
+    async fn commit_update(
+        &self,
+        channel_id: &ChannelId,
+        info: CustomerUpdate2,
+    ) -> Result<FinalizedUpdate, GreaseClientError> {
         debug!("💸️  Verifying update {} proof from merchant", info.update_count);
         let merchant_info = info.merchant_info;
         self.validate_update(
-            name,
+            channel_id,
             info.update_count,
             info.delta,
             merchant_info.update_proof.clone(),
@@ -1075,28 +1110,32 @@ where
         )
         .await?;
         trace!("💸️  Verifying adapted signature");
-        let pending = self.updates_in_progress.checkout(name).await.ok_or(GreaseClientError::UpdateError(
-            UpdateError::WalletError(format!("Prepared wallet not found for {name}")),
-        ))?;
+        let pending =
+            self.updates_in_progress.checkout(channel_id.as_str()).await.ok_or(GreaseClientError::UpdateError(
+                UpdateError::WalletError(format!("Prepared wallet not found for {channel_id}")),
+            ))?;
         let mut wallet = pending.wallet;
         wallet.verify_adapted_signature(&merchant_info.adapted_sig)?;
         trace!("💸️  Adapted signature ok");
         wallet.partial_sign(&merchant_info.prepare_info_merchant)?;
         let secret = wallet
             .my_signing_share()
-            .ok_or_else(|| UpdateError::WalletError(format!("No signing shares found for {name}")))?;
+            .ok_or_else(|| UpdateError::WalletError(format!("No signing shares found for {channel_id}")))?;
         let my_signature = signature_share_to_bytes(&secret);
-        let my_proofs = self.generate_next_witness(name, info.delta).await?;
+        let my_proofs = self.generate_next_witness(channel_id, info.delta).await?;
         let public_update_proof = my_proofs.public_only();
         let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i)
             .map_err(|e| UpdateError::WalletError(format!("Could not extract adaptor. {e}")))?;
         let my_adapted_signature = wallet.adapt_signature(&witness)?;
         let commited_update = UpdateCommitted { public_update_proof, adapted_signature: my_adapted_signature.clone() };
         let mut client = self.network_client.clone();
-        debug!("💸️  Sending update {} proofs to merchant for channel {name}", info.update_count);
-        let finalized = client.send_update_commitment(info.peer, name, commited_update).await?;
         debug!(
-            "💸️  Received update {} confirmation from merchant for channel {name}",
+            "💸️  Sending update {} proofs to merchant for channel {channel_id}",
+            info.update_count
+        );
+        let finalized = client.send_update_commitment(info.peer, channel_id.as_str(), commited_update).await?;
+        debug!(
+            "💸️  Received update {} confirmation from merchant for channel {channel_id}",
             info.update_count
         );
         let update = UpdateRecord {
@@ -1108,7 +1147,7 @@ where
             my_proofs,
             peer_proofs: merchant_info.update_proof,
         };
-        let my_finalized = self.store_update_proofs(name, info.delta, update).await?;
+        let my_finalized = self.store_update_proofs(channel_id, info.delta, update).await?;
         if my_finalized != finalized {
             error!("This definitely should not happen. The merchant and customer have different finalized updates: {:?} vs {:?}",my_finalized, finalized);
         }
@@ -1117,18 +1156,18 @@ where
 
     async fn validate_update(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         index: u64,
         delta: MoneroDelta,
         peer_proof: PublicUpdateProof,
         _adapted_signature: AdaptSig,
     ) -> Result<(), GreaseClientError> {
         // Verify the peer's proofs.
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let metadata = channel.state().metadata().clone();
         drop(channel);
         self.delegate.verify_update(index, delta, &peer_proof, &metadata).await?;
-        debug!("💸️  Peer's update {index} proofs are VALID for channel {name}.");
+        debug!("💸️  Peer's update {index} proofs are VALID for channel {channel_id}.");
         // Verify the adapted signature.
         // TODO: Implement adapted signature verification.
         error!("💸️  Verifying adapted signature for update is unimplemented");
@@ -1137,21 +1176,21 @@ where
 
     async fn generate_next_witness(
         &self,
-        channel_name: &str,
+        channel_id: &ChannelId,
         delta: MoneroDelta,
     ) -> Result<UpdateProofs, GreaseClientError> {
-        debug!("💸️  Fetching last update for channel {channel_name}.");
-        let channel = self.channels.peek(channel_name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        debug!("💸️  Fetching last update for channel {channel_id}.");
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let state = channel.state().as_open()?;
         let last_witness = state.current_witness();
         let mut index = state.update_count();
         let metadata = state.metadata().clone();
         drop(channel);
         index += 1;
-        info!("💸️  Generating witness_{index} for channel {channel_name}.");
+        info!("💸️  Generating witness_{index} for channel {channel_id}.");
         let blinding_dleq = GenericScalar::random(&mut rand_core::OsRng);
         let proofs = self.delegate.generate_update(index, delta, &last_witness, &blinding_dleq, &metadata).await?;
-        info!("💸️  Witness_{index} for channel {channel_name} successfully generated.");
+        info!("💸️  Witness_{index} for channel {channel_id} successfully generated.");
         Ok(proofs)
     }
 
@@ -1159,8 +1198,8 @@ where
         &self,
         envelope: MessageEnvelope<PrepareUpdate>,
     ) -> Result<GreaseResponse, GreaseResponse> {
-        let (name, customer_info) = envelope.open();
-        info!("💸️  Received new channel update request from customer for channel {name}");
+        let (channel_id, customer_info) = envelope.open();
+        info!("💸️  Received new channel update request from customer for channel {channel_id}");
         let delta = customer_info.delta;
         // TODO We need additional checks if delta < 0 so that customer can't just drain the channel.
         if delta.amount < 0 {
@@ -1168,9 +1207,9 @@ where
         }
         let channel = self
             .channels
-            .peek(&name)
+            .peek(&channel_id)
             .await
-            .ok_or_else(|| RemoteServerError::internal(format!("Channel {name} not found.")))?;
+            .ok_or_else(|| RemoteServerError::internal(format!("Channel {channel_id} not found.")))?;
         let state =
             channel.state().as_open().map_err(|e| RemoteServerError::internal(format!("Channel is not open. {e}")))?; // Expect the update index to be one more than the current update count.
         let index = state.update_count() + 1;
@@ -1182,35 +1221,38 @@ where
             ))
             .into());
         }
-        debug!("💸️  Preparing new transaction for update on channel {name} ({})", delta.amount);
+        debug!(
+            "💸️  Preparing new transaction for update on channel {channel_id} ({})",
+            delta.amount
+        );
         let prep_info = self
-            .pre_prepare_wallet(&name, delta)
+            .pre_prepare_wallet(&channel_id, delta)
             .await
             .map_err(|e| RemoteServerError::internal(format!("Could not prepare wallet for update: {e}")))?;
         debug!(
-            "💸️  Signing new transaction for update {} on channel {name}",
+            "💸️  Signing new transaction for update {} on channel {channel_id}",
             prep_info.update_count
         );
         let pending = self
             .updates_in_progress
-            .checkout(&name)
+            .checkout(channel_id.as_str())
             .await
-            .ok_or_else(|| RemoteServerError::internal(format!("Prepared wallet not found for {name}")))?;
+            .ok_or_else(|| RemoteServerError::internal(format!("Prepared wallet not found for {channel_id}")))?;
         let mut wallet = pending.wallet;
         wallet
             .partial_sign(&customer_info.prepare_info_customer)
             .map_err(|e| RemoteServerError::internal(format!("Could not sign transaction: {e}")))?;
         debug!(
-            "💸️  Generating ZKPs & adapted signature for update {} on channel {name}",
+            "💸️  Generating ZKPs & adapted signature for update {} on channel {channel_id}",
             prep_info.update_count
         );
         let my_proofs = self
-            .generate_next_witness(&name, delta)
+            .generate_next_witness(&channel_id, delta)
             .await
             .map_err(|e| RemoteServerError::internal(format!("Couldn't create ZK proofs: {e}")))?;
         let customer_proofs = my_proofs.public_only();
         debug!(
-            "💸️  Generating adaptor signature for update {} on channel {name}",
+            "💸️  Generating adaptor signature for update {} on channel {channel_id}",
             prep_info.update_count
         );
         let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i)
@@ -1230,7 +1272,7 @@ where
             my_adapted_signature: adapted_sig.clone(),
         };
         pending.merchant_round1 = Some(round1);
-        self.updates_in_progress.add(&name, pending).await;
+        self.updates_in_progress.add(channel_id.as_str(), pending).await;
         let response = UpdatePrepared {
             update_count: index,
             delta,
@@ -1238,7 +1280,7 @@ where
             update_proof: customer_proofs,
             adapted_sig,
         };
-        let envelope = MessageEnvelope::new(name, response);
+        let envelope = MessageEnvelope::new(channel_id, response);
         Ok(GreaseResponse::UpdatePrepared(envelope))
     }
 
@@ -1246,12 +1288,12 @@ where
         &self,
         envelope: MessageEnvelope<UpdateCommitted>,
     ) -> Result<GreaseResponse, GreaseResponse> {
-        let (name, customer_update) = envelope.open();
+        let (channel_id, customer_update) = envelope.open();
         let pending = self
             .updates_in_progress
-            .checkout(&name)
+            .checkout(channel_id.as_str())
             .await
-            .ok_or_else(|| RemoteServerError::internal(format!("Prepared wallet not found for {name}")))?;
+            .ok_or_else(|| RemoteServerError::internal(format!("Prepared wallet not found for {channel_id}")))?;
         if pending.merchant_round1.is_none() {
             return Err(RemoteServerError::internal("First round update data is missing".to_string()).into());
         }
@@ -1260,13 +1302,13 @@ where
         let peer_preprocess = round1.peer_preprocess;
         let update_count = pending.update_count;
         let delta = pending.delta;
-        info!("💸️  Validating proofs and adaptor signature for update on channel {name}");
+        info!("💸️  Validating proofs and adaptor signature for update on channel {channel_id}");
         let adapted_signature = customer_update.adapted_signature.clone();
         let peer_proofs = customer_update.public_update_proof;
-        self.validate_update(&name, update_count, delta, peer_proofs.clone(), adapted_signature)
+        self.validate_update(&channel_id, update_count, delta, peer_proofs.clone(), adapted_signature)
             .await
             .map_err(|e| RemoteServerError::InvalidProof(e.to_string()))?;
-        info!("💸️  Finalizing update on channel {name}");
+        info!("💸️  Finalizing update on channel {channel_id}");
         let update = UpdateRecord {
             my_signature: round1.my_signature.as_scalar().as_bytes().to_vec(),
             my_adapted_signature: round1.my_adapted_signature,
@@ -1277,59 +1319,59 @@ where
             peer_proofs,
         };
         let finalized = self
-            .store_update_proofs(&name, delta, update)
+            .store_update_proofs(&channel_id, delta, update)
             .await
             .map_err(|e| RemoteServerError::internal(format!("Failed to store update proofs: {e}")))?;
-        let envelope = MessageEnvelope::new(name, finalized);
+        let envelope = MessageEnvelope::new(channel_id, finalized);
         Ok(GreaseResponse::UpdateCommitted(envelope))
     }
 
     // Make sure proofs are validated before calling this!
     async fn store_update_proofs(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
         delta: MoneroDelta,
         update: UpdateRecord,
     ) -> Result<FinalizedUpdate, GreaseClientError> {
         let update_count = update.my_proofs.private_outputs.update_count;
-        let mut channel = self.channels.checkout(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let event = LifeCycleEvent::ChannelUpdate(Box::new((delta, update)));
         channel.handle_event(event)?;
-        debug!("💸️  Update stored for channel {name}.");
+        debug!("💸️  Update stored for channel {channel_id}.");
         let result = FinalizedUpdate { new_balances: channel.state().balance(), update_count, delta };
         Ok(result)
     }
 
     //---------------------------------         Channel Closure functions      ---------------------------------//
 
-    async fn close_channel(&self, name: &str) -> Result<Balances, GreaseClientError> {
-        info!("🔚️  Closing channel {name}...");
-        let (close_info, commitment, metadata, peer) = self.get_close_data(name).await?;
-        info!("🔚️  Requesting closing transaction info from peer for channel {name}");
+    async fn close_channel(&self, channel_id: &ChannelId) -> Result<Balances, GreaseClientError> {
+        info!("🔚️  Closing channel {channel_id}...");
+        let (close_info, commitment, metadata, peer) = self.get_close_data(channel_id).await?;
+        info!("🔚️  Requesting closing transaction info from peer for channel {channel_id}");
         let mut client = self.network_client.clone();
         let final_balance = close_info.final_balance;
-        let merchant_close_info = client.send_close_request(peer, name, close_info).await?;
-        info!("🔚️  Received closing transaction info for channel {name} from peer. Verifying its authenticity.");
+        let merchant_close_info = client.send_close_request(peer, channel_id.as_str(), close_info).await?;
+        info!("🔚️  Received closing transaction info for channel {channel_id} from peer. Verifying its authenticity.");
         // Validate the response - in particular, the witness_i should match the T_i that we have on record.
         let peer_witness = merchant_close_info.witness;
         self.delegate.verify_peer_witness(&peer_witness, &commitment, &metadata).await?;
 
         // Happy, so close the channel.
-        info!("🔚️  Closing transaction details are VALID for channel {name}. Moving to close channel.");
+        info!("🔚️  Closing transaction details are VALID for channel {channel_id}. Moving to close channel.");
         let event = LifeCycleEvent::CloseChannel(Box::new(merchant_close_info));
-        let mut channel = self.channels.checkout(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         channel.handle_event(event)?;
         drop(channel);
-        info!("🔚️  Channel {name} is is the closing state. Waiting for final transaction to be confirmed.");
-        let tx_hash = self.closing_transaction(name, true).await?;
-        info!("🚀️ Broadcast closing transaction for channel {name}. Transaction id: {tx_hash}");
+        info!("🔚️  Channel {channel_id} is is the closing state. Waiting for final transaction to be confirmed.");
+        let tx_hash = self.closing_transaction(channel_id, true).await?;
+        info!("🚀️ Broadcast closing transaction for channel {channel_id}. Transaction id: {tx_hash}");
         let mut client = self.network_client.clone();
         // TODO - Do we need to wait for the peer?
         // We don't really care what the peer thinks at this point, right?
-        let closed = client.notify_closing_tx(peer, name, tx_hash.clone()).await?;
-        info!("🚀️  Received response from peer on channel {name}. Closed={closed}.");
+        let closed = client.notify_closing_tx(peer, channel_id.as_str(), tx_hash.clone()).await?;
+        info!("🚀️  Received response from peer on channel {channel_id}. Closed={closed}.");
         let event = LifeCycleEvent::FinalTxConfirmed(Box::new(tx_hash));
-        let mut channel = self.channels.checkout(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let mut channel = self.channels.checkout(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         channel.handle_event(event)?;
         drop(channel);
         Ok(final_balance)
@@ -1337,12 +1379,12 @@ where
 
     async fn get_close_data(
         &self,
-        name: &str,
+        channel_id: &ChannelId,
     ) -> Result<(ChannelCloseRecord, GenericPoint, ChannelMetadata, PeerId), GreaseClientError> {
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         if !channel.is_open() {
             return Err(GreaseClientError::InvalidState(format!(
-                "Channel {name} is not open. Cannot close."
+                "Channel {channel_id} is not open. Cannot close."
             )));
         }
         let state = channel.state().as_open()?;
@@ -1357,10 +1399,10 @@ where
         &self,
         envelope: MessageEnvelope<ChannelCloseRecord>,
     ) -> Result<GreaseResponse, GreaseResponse> {
-        let (name, customer_close_info) = envelope.open();
-        info!("🔚️  Received request to close channel {name}");
+        let (channel_id, customer_close_info) = envelope.open();
+        info!("🔚️  Received request to close channel {channel_id}");
         let (my_close_info, commitment, metadata, _) =
-            self.get_close_data(&name).await.map_err(|e| RemoteServerError::internal(e.to_string()))?;
+            self.get_close_data(&channel_id).await.map_err(|e| RemoteServerError::internal(e.to_string()))?;
         if my_close_info.update_count != customer_close_info.update_count
             || my_close_info.final_balance != customer_close_info.final_balance
         {
@@ -1369,7 +1411,7 @@ where
             )
             .into());
         }
-        info!("🔚️  Received closing transaction info for channel {name} from peer. Verifying its authenticity.");
+        info!("🔚️  Received closing transaction info for channel {channel_id} from peer. Verifying its authenticity.");
         // Validate the response - in particular, the witness_i should match the T_i that we have on record.
         self.delegate
             .verify_peer_witness(&customer_close_info.witness, &commitment, &metadata)
@@ -1377,11 +1419,11 @@ where
             .map_err(|e| RemoteServerError::InvalidProof(e.to_string()))?;
         // Transition to closing state.
 
-        info!("🔚️  Closing transaction details are VALID for {name}. Closing channel and responding to peer.");
+        info!("🔚️  Closing transaction details are VALID for {channel_id}. Closing channel and responding to peer.");
         let event = LifeCycleEvent::CloseChannel(Box::new(customer_close_info.clone()));
-        let mut channel = self.channels.checkout(&name).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
+        let mut channel = self.channels.checkout(&channel_id).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
         channel.handle_event(event).map_err(|e| RemoteServerError::internal(e.to_string()))?;
-        let envelope = MessageEnvelope::new(name, my_close_info);
+        let envelope = MessageEnvelope::new(channel_id, my_close_info);
         Ok(GreaseResponse::ChannelClose(envelope))
     }
 
@@ -1389,21 +1431,27 @@ where
         &self,
         envelope: MessageEnvelope<TransactionId>,
     ) -> Result<GreaseResponse, GreaseResponse> {
-        let (name, peer_tx) = envelope.open();
-        info!("🚀️  Received notification transaction {peer_tx} has been broadcast for channel {name}.");
+        let (channel_id, peer_tx) = envelope.open();
+        info!("🚀️  Received notification transaction {peer_tx} has been broadcast for channel {channel_id}.");
         // TODO - We should now watch for the transaction to be confirmed.
-        let tx_id =
-            self.closing_transaction(&name, false).await.map_err(|e| RemoteServerError::internal(e.to_string()))?;
-        let mut channel = self.channels.checkout(&name).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
+        let tx_id = self
+            .closing_transaction(&channel_id, false)
+            .await
+            .map_err(|e| RemoteServerError::internal(e.to_string()))?;
+        let mut channel = self.channels.checkout(&channel_id).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
         let tx_matches = tx_id == peer_tx;
         let event = LifeCycleEvent::FinalTxConfirmed(Box::new(tx_id));
         channel.handle_event(event).map_err(|e| RemoteServerError::internal(e.to_string()))?;
-        let envelope = MessageEnvelope::new(name, tx_matches);
+        let envelope = MessageEnvelope::new(channel_id, tx_matches);
         Ok(GreaseResponse::ChannelClosed(envelope))
     }
 
-    async fn closing_transaction(&self, name: &str, broadcast: bool) -> Result<TransactionId, GreaseClientError> {
-        let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;
+    async fn closing_transaction(
+        &self,
+        channel_id: &ChannelId,
+        broadcast: bool,
+    ) -> Result<TransactionId, GreaseClientError> {
+        let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let state = channel.state().as_closing()?;
         let wallet_data = state.wallet_data();
         let unadjusted = state.get_closing_payments();
@@ -1441,14 +1489,17 @@ where
         let tx_hash = TransactionId::new(hex::encode(closing_tx.hash()));
         debug!("{role}: Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");
         if broadcast {
-            debug!("{role}: Publishing closing transaction for channel {name}.");
+            debug!("{role}: Publishing closing transaction for channel {channel_id}.");
             publish_transaction(&rpc, &closing_tx).await?;
         }
         Ok(tx_hash)
     }
 
-    pub async fn rebroadcast_closing_transaction(&self, channel: &str) -> Result<TransactionId, GreaseClientError> {
-        self.closing_transaction(channel, true).await
+    pub async fn rebroadcast_closing_transaction(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<TransactionId, GreaseClientError> {
+        self.closing_transaction(channel_id, true).await
     }
 
     //---------------------------------   Network request handling functions   ---------------------------------//
@@ -1460,15 +1511,15 @@ where
     /// to respond.
     async fn handle_incoming_grease_request(&self, event: GreaseRemoteEvent) {
         let GreaseRemoteEvent { request, channel } = event;
-        let name = request.channel_name();
-        let response = if self.channels.exists(&name).await {
+        let channel_id = request.channel_id();
+        let response = if self.channels.exists(&channel_id).await {
             self.handle_request_for_existing_channel(request).await
         } else {
             // Channel doesn't exist, so this must be a new proposal, or we can´t do anything about it
             match &request {
                 GreaseRequest::ProposeChannelRequest(proposal) => self.merchant_handle_proposal(proposal).await,
                 _ => {
-                    warn!("🖥️  Request made for unknown channel: {name}");
+                    warn!("🖥️  Request made for unknown channel: {channel_id}");
                     RemoteServerError::ChannelDoesNotExist.into()
                 }
             }
@@ -1480,7 +1531,7 @@ where
     }
 
     async fn handle_request_for_existing_channel(&self, request: GreaseRequest) -> GreaseResponse {
-        // Note: The channel name has already been checked against the incoming message.
+        // Note: The channel id has already been checked against the incoming message.
         match request {
             GreaseRequest::ProposeChannelRequest(_) => {
                 RemoteServerError::internal("Cannot create a new channel. Channel exists.").into()
@@ -1493,9 +1544,9 @@ where
             }
             GreaseRequest::ConfirmMsAddress(envelope) => {
                 trace!("🖥️  Customer: Confirm multisig address request received");
-                let (channel_name, address) = envelope.open();
-                let response = self.address_matches(&channel_name, &address).await.unwrap_or(false);
-                let envelope = MessageEnvelope::new(channel_name, response);
+                let (channel_id, address) = envelope.open();
+                let response = self.address_matches(&channel_id, &address).await.unwrap_or(false);
+                let envelope = MessageEnvelope::new(channel_id, response);
                 GreaseResponse::ConfirmMsAddress(envelope)
             }
             GreaseRequest::ExchangeProof0(envelope) => {

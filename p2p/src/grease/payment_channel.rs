@@ -1,6 +1,7 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroDelta;
+use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
 use libgrease::monero::data_objects::{TransactionId, TransactionRecord};
 use libgrease::multisig::MultisigWalletData;
@@ -139,7 +140,7 @@ impl PaymentChannel {
     }
 
     /// Returns the channel name, which is identical to `channel_id.name()`
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> ChannelId {
         self.state().name()
     }
 
@@ -360,7 +361,7 @@ impl PaymentChannel {
 
 #[derive(Default)]
 pub struct PaymentChannels {
-    channels: Arc<RwLock<HashMap<String, Arc<RwLock<PaymentChannel>>>>>,
+    channels: Arc<RwLock<HashMap<ChannelId, Arc<RwLock<PaymentChannel>>>>>,
 }
 
 impl Clone for PaymentChannels {
@@ -401,7 +402,7 @@ impl PaymentChannels {
         Ok(channels)
     }
 
-    pub async fn exists(&self, name: &str) -> bool {
+    pub async fn exists(&self, name: &ChannelId) -> bool {
         let lock = self.channels.read().await;
         lock.contains_key(name)
     }
@@ -420,30 +421,30 @@ impl PaymentChannels {
     /// Check the channel out for writing, if it exists.
     /// If the channel is already checked out, this method will block until the channel is available.
     /// If the channel does not exist, `checkout` returns None.
-    pub async fn checkout(&self, channel_name: &str) -> Option<OwnedRwLockWriteGuard<PaymentChannel>> {
-        trace!("Trying to check out channel {channel_name}");
+    pub async fn checkout(&self, channel_id: &ChannelId) -> Option<OwnedRwLockWriteGuard<PaymentChannel>> {
+        trace!("Trying to check out channel {channel_id}");
         let lock = self.channels.read().await;
-        match lock.get(channel_name) {
+        match lock.get(channel_id) {
             Some(lock) => {
                 let channel = lock.clone().write_owned().await;
-                trace!("Check out channel {channel_name} success");
+                trace!("Check out channel {channel_id} success");
                 Some(channel)
             }
             None => None,
         }
     }
 
-    pub async fn peek(&self, channel_name: &str) -> Option<OwnedRwLockReadGuard<PaymentChannel>> {
-        trace!("Trying to peek at channel {channel_name}");
+    pub async fn peek(&self, channel_id: &ChannelId) -> Option<OwnedRwLockReadGuard<PaymentChannel>> {
+        trace!("Trying to peek at channel {channel_id}");
         let map_lock = self.channels.read().await;
-        match map_lock.get(channel_name) {
+        match map_lock.get(channel_id) {
             Some(lock) => {
                 let channel = lock.clone().read_owned().await;
-                trace!("Peek for {channel_name} success");
+                trace!("Peek for {channel_id} success");
                 Some(channel)
             }
             None => {
-                trace!("Channel {channel_name} not found");
+                trace!("Channel {channel_id} not found");
                 None
             }
         }
@@ -465,7 +466,7 @@ impl PaymentChannels {
     }
 
     /// Provides a list of channels, which can be used to index the channels
-    pub async fn list_channels(&self) -> Vec<String> {
+    pub async fn list_channels(&self) -> Vec<ChannelId> {
         let lock = self.channels.read().await;
         lock.keys().cloned().collect()
     }
@@ -477,7 +478,7 @@ mod test {
     use crate::ContactInfo;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::balance::Balances;
-    use libgrease::channel_id::ChannelId;
+    use libgrease::channel_id::ChannelIdMetadata;
     use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
     use libgrease::cryptography::zk_objects::{
         GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
@@ -515,7 +516,7 @@ mod test {
             .with_channel_nonce(1234)
             .build()
             .expect("Failed to build initial state");
-        let channel_id = ChannelId::new(merchant_key, customer_key, balances, closing, 1234, 4567);
+        let channel_id = ChannelIdMetadata::new(merchant_key, customer_key, balances, closing, 1234, 4567);
         let accepted_proposal = NewChannelProposal { network: Network::Mainnet, channel_id, seed };
         let initial_state = NewChannelState::new(ChannelRole::Customer, accepted_proposal);
         initial_state

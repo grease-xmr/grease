@@ -1,5 +1,5 @@
 use crate::balance::Balances;
-use crate::channel_id::ChannelId;
+use crate::channel_id::ChannelIdMetadata;
 use crate::channel_metadata::ChannelMetadata;
 use crate::cryptography::keys::Curve25519PublicKey;
 use crate::lifecycle_impl;
@@ -22,7 +22,7 @@ pub struct NewChannelProposal {
         serialize_with = "crate::monero::helpers::serialize_network"
     )]
     pub network: Network,
-    pub channel_id: ChannelId,
+    pub channel_id: ChannelIdMetadata,
     /// The seed info that the (usually) merchant provided initially.
     pub seed: ChannelSeedInfo,
 }

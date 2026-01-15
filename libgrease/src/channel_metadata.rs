@@ -1,6 +1,6 @@
 use crate::amount::MoneroDelta;
 use crate::balance::Balances;
-use crate::channel_id::ChannelId;
+use crate::channel_id::ChannelIdMetadata;
 use crate::payment_channel::ChannelRole;
 use monero::Network;
 use serde::{Deserialize, Serialize};
@@ -20,13 +20,13 @@ pub struct ChannelMetadata {
     /// The number of updates that have been made to this channel
     update_count: u64,
     /// The channel ID
-    channel_id: ChannelId,
+    channel_id: ChannelIdMetadata,
     /// The KES identifier.
     kes_public_key: String,
 }
 
 impl ChannelMetadata {
-    pub fn new(network: Network, role: ChannelRole, channel_id: ChannelId, kes_public_key: String) -> Self {
+    pub fn new(network: Network, role: ChannelRole, channel_id: ChannelIdMetadata, kes_public_key: String) -> Self {
         Self {
             network,
             role,
@@ -37,7 +37,7 @@ impl ChannelMetadata {
         }
     }
 
-    pub fn channel_id(&self) -> &ChannelId {
+    pub fn channel_id(&self) -> &ChannelIdMetadata {
         &self.channel_id
     }
 

@@ -1,6 +1,7 @@
 use cucumber::World;
 use e2e::user::{create_users, User};
 use e2e::{GreaseInfra, MoneroNode, MoneroNodeConfig, NodeStatus, MONEROD_RPC};
+use libgrease::channel_id::ChannelId;
 use log::*;
 use monero_address::MoneroAddress;
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ pub struct GreaseWorld {
     pub monero_node: Option<MoneroNode>,
     pub users: HashMap<String, User>,
     pub servers: HashMap<String, GreaseInfra>,
-    pub current_channel: Option<String>,
+    pub current_channel: Option<ChannelId>,
 }
 
 impl Default for GreaseWorld {
