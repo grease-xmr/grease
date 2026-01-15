@@ -5,9 +5,9 @@ use super::message_types::{
 use super::pending_updates::{PendingUpdate, PendingUpdates, ResponderInfo};
 use crate::delegates::error::DelegateError;
 use crate::errors::{PaymentChannelError, RemoteServerError};
-use crate::event_loop::PeerConnectionError;
 use crate::grease::network_client::{new_network, GreaseAPI, GreaseRemoteEvent};
 use crate::grease::{PaymentChannel, PaymentChannels};
+use crate::p2p_networking::PeerConnectionError;
 use crate::{ContactInfo, ConversationIdentity, GreaseChannelDelegate};
 use futures::future::join;
 use futures::StreamExt;
@@ -1121,7 +1121,7 @@ where
         index: u64,
         delta: MoneroDelta,
         peer_proof: PublicUpdateProof,
-        adapted_signature: AdaptSig,
+        _adapted_signature: AdaptSig,
     ) -> Result<(), GreaseClientError> {
         // Verify the peer's proofs.
         let channel = self.channels.peek(name).await.ok_or(GreaseClientError::ChannelNotFound)?;

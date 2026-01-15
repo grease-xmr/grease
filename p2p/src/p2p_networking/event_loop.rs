@@ -2,7 +2,7 @@
 //!
 //! See [`EventLoop`] for more information.
 
-use crate::behaviour::{ConnectionBehavior, ConnectionBehaviorEvent, ProtocolCommand, ProtocolHandlers};
+use crate::behaviour::{ConnectionBehavior, ConnectionBehaviorEvent, ProtocolCommand, RequestResponseHandlers};
 use crate::errors::RemoteServerError;
 use futures::channel::{mpsc, oneshot};
 use futures::StreamExt;
@@ -34,9 +34,10 @@ const SHUTDOWN: usize = 2;
 ///
 /// **Important**: The `EventLoop` is only a data broker. It does not perform any business or application logic itself.
 ///
-/// ## Protocol Handlers
+/// ## Request-Response Handlers
 ///
-/// Each protocol (Grease, KES, etc.) has its own [`AsyncApiWrapper`] handler that:
+/// Each request-response protocol (Grease, KES, etc.) has its own handler wrapped by
+/// [`AsyncReqResponseHandler`](crate::p2p_networking::AsyncReqResponseHandler) that:
 /// - Tracks pending outbound requests with oneshot senders
 /// - Forwards inbound requests to the application layer via mpsc channel
 /// - Completes pending requests when responses arrive
@@ -51,8 +52,8 @@ const SHUTDOWN: usize = 2;
 pub struct EventLoop {
     swarm: Swarm<ConnectionBehavior>,
     command_receiver: mpsc::Receiver<NetworkCommand>,
-    /// All protocol handlers (Grease, KES, etc.)
-    handlers: ProtocolHandlers,
+    /// Request-response handlers for all message types (Grease, KES, etc.)
+    handlers: RequestResponseHandlers,
     /// Pending dial attempts
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), PeerConnectionError>>>,
     /// Pending shutdown signal
@@ -64,11 +65,11 @@ pub struct EventLoop {
 }
 
 impl EventLoop {
-    /// Create a new EventLoop with the given swarm, command receiver, and protocol handlers.
+    /// Create a new EventLoop with the given swarm, command receiver, and request-response handlers.
     pub fn new(
         swarm: Swarm<ConnectionBehavior>,
         command_receiver: mpsc::Receiver<NetworkCommand>,
-        handlers: ProtocolHandlers,
+        handlers: RequestResponseHandlers,
     ) -> Self {
         Self {
             swarm,
@@ -428,10 +429,12 @@ pub enum PeerConnectionError {
 }
 
 impl PeerConnectionError {
+    /// Create an error for receiving an unexpected response type.
     pub fn unexpected_response(expected: &'static str, got: impl Display) -> Self {
         PeerConnectionError::UnexpectedResponseType { expected, got: got.to_string() }
     }
 
+    /// Create an error for receiving a response on an unexpected channel.
     pub fn unexpected_channel(expected: impl Display, got: impl Display) -> Self {
         PeerConnectionError::UnexpectedChannel { expected: expected.to_string(), got: got.to_string() }
     }

@@ -1,8 +1,8 @@
 use super::message_types::{ChannelProposalResult, NewChannelMessage, PrepareUpdate, UpdateCommitted, UpdatePrepared};
-use crate::behaviour::{ConnectionBehavior, ProtocolCommand, ProtocolHandlers};
+use crate::behaviour::{ConnectionBehavior, ProtocolCommand, RequestResponseHandlers};
 use crate::errors::RemoteServerError;
-use crate::event_loop::{EventLoop, NetworkCommand, PeerConnectionError, RemoteRequest};
 use crate::grease::{GreaseRequest, GreaseResponse};
+use crate::p2p_networking::{EventLoop, NetworkCommand, PeerConnectionError, RemoteRequest};
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use futures::Stream;
@@ -56,7 +56,7 @@ pub fn new_network(
     let (command_sender, command_receiver) = mpsc::channel(0);
     let (grease_event_sender, grease_event_receiver) = mpsc::channel(0);
 
-    let handlers = ProtocolHandlers::new(grease_event_sender);
+    let handlers = RequestResponseHandlers::new(grease_event_sender);
     let event_loop = EventLoop::new(swarm, command_receiver, handlers);
 
     Ok((GreaseAPI { sender: command_sender }, grease_event_receiver, event_loop))
