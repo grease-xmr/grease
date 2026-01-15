@@ -1,30 +1,58 @@
-use async_trait::async_trait;
+//! Protocol-specific network behaviour and handler configuration.
+//!
+//! This module defines the application-level network behaviour for Grease, bridging the
+//! low-level networking infrastructure in [`crate::p2p_networking`] with protocol-specific
+//! message types and handlers.
+//!
+//! # Overview
+//!
+//! The module provides:
+//!
+//! - [`ConnectionBehavior`]: The libp2p `NetworkBehaviour` implementation that composes all
+//!   supported protocols (identify, Grease request-response, etc.).
+//!
+//! - [`RequestResponseHandlers`]: A container managing handlers for each protocol, responsible for
+//!   dispatching events and processing commands.
+//!
+//! - [`ProtocolCommand`]: An enum of protocol-specific commands that can be sent to the
+//!   event loop for execution.
+//!
+//! # Adding New Protocols
+//!
+//! To add a new protocol (e.g., KES key exchange):
+//!
+//! 1. Add a `json::Behaviour<Req, Resp>` field to [`ConnectionBehavior`]
+//! 2. Create a type alias for the handler (e.g., `KesHandler`)
+//! 3. Add the handler field to [`RequestResponseHandlers`]
+//! 4. Initialise the handler in [`RequestResponseHandlers::new()`]
+//! 5. Add a dispatch arm in [`RequestResponseHandlers::dispatch_event()`]
+//! 6. Add command variants to [`ProtocolCommand`]
+//! 7. Handle the commands in [`RequestResponseHandlers::handle_command()`]
+//!
+//! # Separation of Concerns
+//!
+//! This module is the **extension point** for adding new protocols. Generic networking
+//! infrastructure (event loop, async wrappers, etc.) lives in [`crate::p2p_networking`]
+//! and should not be modified when adding protocols.
+
 use futures::channel::{mpsc, oneshot};
 use libp2p::identify::Event as IdentifyEvent;
-use libp2p::request_response::{
-    json, InboundFailure, InboundRequestId, Message, OutboundFailure, OutboundRequestId, ResponseChannel,
-};
-use libp2p::swarm::{ConnectionId, NetworkBehaviour};
-use libp2p::{identify, request_response, PeerId};
+use libp2p::request_response::{json, ResponseChannel};
+use libp2p::swarm::NetworkBehaviour;
+use libp2p::{identify, PeerId};
 use log::*;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 
-use crate::async_wrapper::{AsyncReqResponseHandler, InboundForwarder, PendingRequests};
 use crate::errors::RemoteServerError;
-use crate::event_loop::RemoteRequest;
 use crate::grease::{GreaseRequest, GreaseResponse};
+use crate::p2p_networking::{
+    AsyncAPI, AsyncReqResponseHandler, InboundForwarder, PendingRequests, RemoteRequest, RequestResponseHandler,
+};
 
 /// Network behavior with protocol-specific request-response handlers.
 ///
 /// Each protocol (Grease, KES, etc.) has its own `json::Behaviour` field.
 /// The `#[derive(NetworkBehaviour)]` macro generates a `ConnectionBehaviorEvent` enum
 /// with variants for each behavior field.
-///
-/// To add a new protocol:
-/// 1. Add a new `json::Behaviour<MyRequest, MyResponse>` field here
-/// 2. Add a handler field in `EventLoop`
-/// 3. Add a dispatch arm in `EventLoop::behaviour_event()`
 #[derive(NetworkBehaviour)]
 pub struct ConnectionBehavior {
     pub(crate) identify: identify::Behaviour,
@@ -33,116 +61,18 @@ pub struct ConnectionBehavior {
     // pub(crate) kes: json::Behaviour<KesRequest, KesResponse>,
 }
 
-/// Trait for handling JSON request-response messages in libp2p.
-#[async_trait]
-pub trait RequestResponseHandler {
-    type Request: DeserializeOwned + Serialize + Send + 'static;
-    type Response: DeserializeOwned + Serialize + Send + 'static;
-
-    async fn handle_event(&mut self, event: request_response::Event<Self::Request, Self::Response>) {
-        match event {
-            request_response::Event::Message { peer, connection_id, message } => {
-                self.on_message(peer, connection_id, message).await;
-            }
-            request_response::Event::InboundFailure { peer, connection_id, request_id, error } => {
-                self.on_inbound_failure(peer, connection_id, request_id, error);
-            }
-            request_response::Event::ResponseSent { peer, connection_id, request_id } => {
-                self.on_response_sent(peer, connection_id, request_id);
-            }
-            request_response::Event::OutboundFailure { peer, connection_id, request_id, error } => {
-                self.on_outbound_failure(peer, connection_id, request_id, error);
-            }
-        }
-    }
-
-    /// Respond to a new request or response message from a network peer.
-    async fn on_message(
-        &mut self,
-        peer: PeerId,
-        connection_id: ConnectionId,
-        message: Message<Self::Request, Self::Response>,
-    );
-
-    /// Handle a failed inbound request
-    ///
-    /// ## Parameters
-    /// * `peer` - The peer from whom the request was received.
-    /// * `connection_id` - Identifier of the connection that the request was received on.
-    /// * `request_id` - The id of the failed request.
-    /// * `error` - The error that happened.
-    fn on_inbound_failure(
-        &mut self,
-        peer: PeerId,
-        connection_id: ConnectionId,
-        request_id: InboundRequestId,
-        error: InboundFailure,
-    ) {
-        warn!("Inbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
-    }
-
-    /// This gets called when a response to an inbound request has been sent.
-    /// When this event is received, the response has already been flushed on the underlying transport connection.
-    ///
-    /// ## Parameters
-    /// * `peer` - The peer to whom the response was sent.
-    /// * `connection_id` - Identifier of the connection that the response was sent on.
-    /// * `request_id` - The id of the request for which the response was sent.
-    fn on_response_sent(&mut self, peer: PeerId, connection_id: ConnectionId, request_id: InboundRequestId) {
-        trace!("EVENT: Response sent. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}");
-    }
-
-    /// Handle a failed outbound request
-    ///
-    /// ## Parameters
-    /// * `peer` - The peer to whom the request was sent.
-    /// * `connection_id` - Identifier of the connection that the request was sent on.
-    /// * `request_id` - The (local) ID of the failed request.
-    /// * `error` - The error that happened.
-    fn on_outbound_failure(
-        &mut self,
-        peer: PeerId,
-        connection_id: ConnectionId,
-        request_id: OutboundRequestId,
-        error: OutboundFailure,
-    ) {
-        warn!("Outbound request failed. Peer: {peer}. Connection id: {connection_id}. Request id: {request_id}. Error: {error}");
-    }
-}
-
-/// Trait for handlers that need async/await support with pending request tracking.
-///
-/// This allows EventLoop to register pending requests without knowing the internal
-/// structure of the handler. Handlers that need to track pending outbound requests
-/// should implement this trait.
-pub trait AsyncAPI<Resp> {
-    /// Register a pending outbound request.
-    ///
-    /// The sender will be used to complete the request when the response arrives
-    /// (handled by the `RequestResponseHandler::on_message` implementation).
-    fn register_pending_request(
-        &mut self,
-        request_id: OutboundRequestId,
-        sender: oneshot::Sender<Result<Resp, RemoteServerError>>,
-    );
-    fn remove_pending_request(
-        &mut self,
-        request_id: OutboundRequestId,
-    ) -> Option<oneshot::Sender<Result<Resp, RemoteServerError>>>;
-}
-
 // ============================================================================
-// Protocol Handlers - All protocol-specific code below this line
+// Request-Response Handlers - All protocol-specific code below this line
 // ============================================================================
 //
-// To add a new protocol:
+// To add a new request-response protocol:
 // 1. Add a `json::Behaviour<Req, Resp>` field to `ConnectionBehavior` above
 // 2. Add a type alias for the handler below
-// 3. Add a field to `ProtocolHandlers`
-// 4. Add initialization in `ProtocolHandlers::new()`
-// 5. Add dispatch arm in `ProtocolHandlers::dispatch_event()`
+// 3. Add a field to `RequestResponseHandlers`
+// 4. Add initialization in `RequestResponseHandlers::new()`
+// 5. Add dispatch arm in `RequestResponseHandlers::dispatch_event()`
 // 6. Add variants to `ProtocolCommand`
-// 7. Add handling in `ProtocolHandlers::handle_command()`
+// 7. Add handling in `RequestResponseHandlers::handle_command()`
 
 /// Type alias for the Grease protocol handler.
 pub type GreaseHandler =
@@ -150,19 +80,19 @@ pub type GreaseHandler =
 // Future protocols: add type aliases here
 // pub type KesHandler = AsyncReqResponseHandler<InboundForwarder<KesRequest, KesResponse>, PendingRequests<KesResponse>>;
 
-/// Container for all protocol handlers.
+/// Container for all request-response handlers.
 ///
-/// This struct centralizes all protocol-specific handling, allowing `EventLoop`
-/// to remain protocol-agnostic. Adding a new protocol only requires changes to
-/// this file.
-pub struct ProtocolHandlers {
+/// This struct centralizes request-response handling for all message types (Grease, KES, etc.),
+/// allowing `EventLoop` to remain protocol-agnostic. Adding a new request-response protocol
+/// only requires changes to this file.
+pub struct RequestResponseHandlers {
     grease: GreaseHandler,
     // Future protocols: add handler fields here
     // kes: KesHandler,
 }
 
-impl ProtocolHandlers {
-    /// Create new protocol handlers with the given inbound request forwarders.
+impl RequestResponseHandlers {
+    /// Create new request-response handlers with the given inbound request forwarders.
     pub fn new(
         grease_inbound_tx: mpsc::Sender<RemoteRequest<GreaseRequest, GreaseResponse>>,
         // Future protocols: add parameters here
@@ -240,9 +170,9 @@ impl ProtocolHandlers {
     }
 }
 
-/// Protocol-specific commands for sending requests and responses.
+/// Commands for sending requests and responses via the request-response protocols.
 ///
-/// These commands are handled by `ProtocolHandlers::handle_command()`.
+/// These commands are handled by [`RequestResponseHandlers::handle_command()`].
 #[derive(Debug)]
 pub enum ProtocolCommand {
     /// Send a Grease protocol request.

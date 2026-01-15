@@ -9,9 +9,9 @@
 
 use async_trait::async_trait;
 
-use crate::behaviour::{AsyncAPI, RequestResponseHandler};
 use crate::errors::RemoteServerError;
-use crate::event_loop::RemoteRequest;
+use crate::p2p_networking::event_loop::RemoteRequest;
+use crate::p2p_networking::request_response::RequestResponseHandler;
 use futures::channel::{mpsc, oneshot};
 use futures::SinkExt;
 use libp2p::request_response::{InboundFailure, InboundRequestId, Message, OutboundFailure, OutboundRequestId};
@@ -22,6 +22,30 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Display;
+
+/// Trait for handlers that need async/await support with pending request tracking.
+///
+/// This allows EventLoop to register pending requests without knowing the internal
+/// structure of the handler. Handlers that need to track pending outbound requests
+/// should implement this trait.
+pub trait AsyncAPI<Resp> {
+    /// Register a pending outbound request.
+    ///
+    /// The sender will be used to complete the request when the response arrives
+    /// (handled by the `RequestResponseHandler::on_message` implementation).
+    fn register_pending_request(
+        &mut self,
+        request_id: OutboundRequestId,
+        sender: oneshot::Sender<Result<Resp, RemoteServerError>>,
+    );
+    /// Remove and return a pending request's response sender.
+    ///
+    /// Returns `None` if no request with the given ID was registered.
+    fn remove_pending_request(
+        &mut self,
+        request_id: OutboundRequestId,
+    ) -> Option<oneshot::Sender<Result<Resp, RemoteServerError>>>;
+}
 
 /// Tracks pending outbound requests awaiting responses.
 ///
