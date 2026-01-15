@@ -59,7 +59,7 @@ The adapter signature is a cryptographic construct that allows the Merchant to c
 witness value. This signature appears complete but cannot be verified as a standard signature without knowledge of the witness.
 
 The Merchant transmits its preprocessing data and the adapted signature back to the Customer, but notably *withholds* the witness value
-$$w0^#merchant$$.
+$w0^#merchant$.
 
 ==== Phase 3: Customer Verification and Signing
 

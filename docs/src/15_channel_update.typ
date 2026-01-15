@@ -85,7 +85,7 @@ The Grease VCOF makes use of a ZK-SNARK to produce the following update algorith
   + $P_1 = wn(i+1) dot.c Gbjj$
   + `assert` $PubBjj(i+1) == P_1$
   + $P_2 = wn(i+1) dot.c Gbjj$
-  + `assert` $PubWEd(i+1) == P_2$
+  + `assert` $PubBjj(i+1) == P_2$
   + return $Pvcof(i+1)$
 ] #label("vcofProve")
 

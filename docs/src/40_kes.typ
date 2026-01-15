@@ -179,7 +179,7 @@ The Customer encrypts $w0_C$ to the KES using `EncryptMessage` (@encM) and sends
 The merchant validates $DleqP_0^C$ and forwards the rest of the package to the KES.
 
 The Merchant performs the analogous tasks and forwards both his and the customer's data to the KES. He also sends his DLEQ proof,
-$DleqP_0^M$ the Customer, who validates it.
+$DleqP_0^M$ to the Customer, who validates it.
 
 === What the KES send back to parties
 
