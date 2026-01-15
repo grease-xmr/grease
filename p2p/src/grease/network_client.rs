@@ -82,7 +82,9 @@ macro_rules! enveloped_command {
             req: $request_payload,
         ) -> Result<$response_type, PeerConnectionError> {
             use std::str::FromStr;
-            let channel_id = ChannelId::from_str(channel).expect("channel id must be a valid ChannelId");
+            let channel_id = ChannelId::from_str(channel).map_err(|e| {
+                PeerConnectionError::InvalidChannelId(format!("{channel} is not a valid ChannelId: {e}"))
+            })?;
             let envelope = MessageEnvelope::new(channel_id, req);
             let request = $req_variant(envelope);
             let response = self.send_request(peer_id, request).await??;

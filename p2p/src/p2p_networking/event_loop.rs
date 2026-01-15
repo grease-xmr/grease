@@ -426,6 +426,8 @@ pub enum PeerConnectionError {
     UnexpectedResponseType { expected: &'static str, got: String },
     #[error("Received a response for an unexpected channel. Expected {expected}, but got {got}.")]
     UnexpectedChannel { expected: String, got: String },
+    #[error("{0}")]
+    InvalidChannelId(String),
 }
 
 impl PeerConnectionError {
