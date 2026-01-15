@@ -20,7 +20,7 @@ A party sends a `RequestChannelClose` message to initiate a co-operative channel
 ```rs
 pub struct RequestChannelClose {
   /// The globally unique channel id
-  channel_id: ChannelIdHash,
+  channel_id: ChannelId,
   /// The latest adapter offset for the initiating party
   offset: Scalar,
   /// The update count corresponding to the latest adapter offset
@@ -33,7 +33,7 @@ The counterparty responds with either a `RequestCloseFailed` or `ChannelCloseSuc
 ```rs
 pub struct ChannelCloseSuccess {
   /// The globally unique channel id
-  channel_id: ChannelIdHash,
+  channel_id: ChannelId,
   /// The latest adapter offset for the responding party
   offset: Scalar,
   /// The transaction id of the closing transaction. Optional.
@@ -44,10 +44,10 @@ pub struct ChannelCloseSuccess {
 ```rs
 pub struct RequestCloseFailed {
   /// The globally unique channel id
-  channel_id: ChannelIdHash,
+  channel_id: ChannelId,
   /// An error code indicating the reason for the failure
   reason: CloseFailureReason,
 }
 ```
 
-#include "../diagrams/close_channel_sequence.md"
+#figure(include "../diagrams/close_channel_sequence.md", caption: [The Channel Close sequence]) <close_channel_sequence>
