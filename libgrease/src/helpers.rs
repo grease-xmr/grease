@@ -1,3 +1,5 @@
+use crate::XmrScalar;
+use ciphersuite::group::ff::PrimeField;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -46,6 +48,28 @@ where
     hex::decode_to_slice(hex_str, &mut result)
         .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
     Ok(result)
+}
+
+/// Serialize an XmrScalar (Ed25519 scalar) as a hex string.
+pub fn xmr_scalar_to_hex<S>(scalar: &XmrScalar, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    hex::encode(scalar.to_repr()).serialize(s)
+}
+
+/// Deserialize an XmrScalar (Ed25519 scalar) from a hex string.
+pub fn xmr_scalar_from_hex<'de, D>(de: D) -> Result<XmrScalar, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(de)?;
+    let mut bytes = [0u8; 32];
+    hex::decode_to_slice(&hex_str, &mut bytes)
+        .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
+    let scalar = Option::<XmrScalar>::from(XmrScalar::from_repr(bytes.into()))
+        .ok_or_else(|| serde::de::Error::custom("Invalid scalar value"))?;
+    Ok(scalar)
 }
 
 /// A UTC Unix timestamp representing seconds since January 1, 1970.

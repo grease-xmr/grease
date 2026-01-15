@@ -10,12 +10,12 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::channel_metadata::ChannelMetadata;
 use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::zk_objects::{
-    GenericPoint, GenericScalar, KesProof, Proofs0, PublicProof0, PublicUpdateProof, ShardInfo, UpdateProofs,
-};
+use crate::cryptography::zk_objects::{GenericPoint, KesProof, PublicUpdateProof, UpdateProofs};
+use crate::XmrScalar;
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::multisig::MultisigWalletData;
+use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;
@@ -50,14 +50,9 @@ impl Debug for UpdateRecord {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EstablishedChannelState {
     pub(crate) metadata: ChannelMetadata,
-    /// The shards of the multisig wallet, containing the split secrets for the multisig wallet.
-    /// Getting hold of both parts gives full control of the wallet.
-    pub(crate) shards: ShardInfo,
     /// Information needed to reconstruct the multisig wallet.
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) my_proof0: Proofs0,
-    pub peer_proof0: PublicProof0,
     pub(crate) kes_proof: KesProof,
     pub(crate) current_update: Option<UpdateRecord>,
 }
@@ -83,12 +78,15 @@ impl EstablishedChannelState {
         self.metadata.update_count()
     }
 
-    /// Returns the current witness for the channel. If no updates have been made, it returns the initial witness.
-    pub fn current_witness(&self) -> GenericScalar {
+    /// Returns the current witness for the channel.
+    ///
+    /// # Panics
+    /// Panics if no updates have been made. Use `current_update` to check first.
+    pub fn current_witness(&self) -> &XmrScalar {
         self.current_update
             .as_ref()
-            .map(|update| update.my_proofs.private_outputs.witness_i)
-            .unwrap_or(self.my_proof0.private_outputs.witness_0)
+            .map(|update| &update.my_proofs.private_outputs.witness_i)
+            .expect("No updates have been made yet")
     }
 
     pub fn multisig_address(&self, network: Network) -> Option<String> {
@@ -96,11 +94,15 @@ impl EstablishedChannelState {
         Some(addr)
     }
 
+    /// Returns the current peer commitment.
+    ///
+    /// # Panics
+    /// Panics if no updates have been made. Use `current_update` to check first.
     pub fn current_peer_commitment(&self) -> GenericPoint {
         self.current_update
             .as_ref()
             .map(|update| update.peer_proofs.public_outputs.T_current)
-            .unwrap_or(self.peer_proof0.public_outputs.T_0)
+            .expect("No updates have been made yet")
     }
 
     /// Returns the keys to be able to reconstruct the multisig wallet.
@@ -129,7 +131,7 @@ impl EstablishedChannelState {
         ChannelCloseRecord {
             final_balance: self.metadata.balances(),
             update_count: self.metadata.update_count(),
-            witness: self.current_witness(),
+            witness: *self.current_witness(),
         }
     }
 
@@ -174,11 +176,8 @@ impl EstablishedChannelState {
             peer_witness: close_record.witness,
             metadata: self.metadata.clone(),
             reason: ChannelClosedReason::Normal,
-            shards: self.shards,
             multisig_wallet: self.multisig_wallet,
             funding_transactions: self.funding_transactions,
-            my_proof0: self.my_proof0,
-            peer_proof0: self.peer_proof0,
             kes_proof: self.kes_proof,
             last_update: self.current_update.unwrap(),
             final_tx: None,
@@ -189,3 +188,11 @@ impl EstablishedChannelState {
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 lifecycle_impl!(EstablishedChannelState, Open);
+
+// --- Protocol Trait Implementations ---
+
+impl HasRole for EstablishedChannelState {
+    fn role(&self) -> ChannelRole {
+        self.metadata.role()
+    }
+}

@@ -10,11 +10,13 @@ use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::cryptography::zk_objects::{
-    Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0,
-    PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
+    Comm0PrivateInputs, Comm0PrivateOutputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey,
+    PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
 };
 use libgrease::monero::data_objects::MultisigSplitSecrets;
 use libgrease::state_machine::error::InvalidProposal;
+use libgrease::XmrScalar;
+use libgrease::Field;
 use log::*;
 
 #[derive(Debug, Clone)]
@@ -48,7 +50,15 @@ impl GreaseInitializer for DummyDelegate {
         metadata: &ChannelMetadata,
     ) -> Result<Proofs0, DelegateError> {
         info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
-        Ok(Proofs0::default())
+        Ok(Proofs0 {
+            public_outputs: Default::default(),
+            private_outputs: Comm0PrivateOutputs {
+                witness_0: XmrScalar::random(&mut rand_core::OsRng),
+                delta_bjj: Default::default(),
+                delta_ed: Default::default(),
+            },
+            proofs: vec![],
+        })
     }
 
     async fn verify_initial_proofs(
@@ -115,15 +125,13 @@ impl Updater for DummyDelegate {
         &self,
         index: u64,
         delta: MoneroDelta,
-        _witness: &GenericScalar,
-        _blinding_dleq: &GenericScalar,
+        _witness: &XmrScalar,
         metadata: &ChannelMetadata,
     ) -> Result<UpdateProofs, DelegateError> {
         info!("DummyDelegate: Generating update {index} proof for channel.  {}", delta.amount);
         let mut rng = rand_core::OsRng;
         // The witnesses need to be valid scalars
-        let next_witness = Curve25519Secret::random(&mut rng);
-        let witness_i = GenericScalar(next_witness.as_scalar().to_bytes());
+        let witness_i = XmrScalar::random(&mut rng);
         let public_outputs = PublicUpdateOutputs {
             T_prev: GenericPoint::random(&mut rng),
             T_current: GenericPoint::random(&mut rng),
@@ -168,7 +176,7 @@ impl Updater for DummyDelegate {
 impl ChannelClosure for DummyDelegate {
     async fn verify_peer_witness(
         &self,
-        _w: &GenericScalar,
+        _w: &XmrScalar,
         _c: &GenericPoint,
         metadata: &ChannelMetadata,
     ) -> Result<(), DelegateError> {

@@ -2480,8 +2480,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "blake2",
+ "ciphersuite",
  "env_logger",
  "futures",
+ "grease-babyjubjub",
  "hex",
  "libgrease",
  "libp2p",
@@ -3291,8 +3293,8 @@ name = "libgrease"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "blake2",
- "chrono",
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group",
@@ -3311,10 +3313,10 @@ dependencies = [
  "rand_core 0.6.4",
  "ron",
  "serde",
- "serde_json",
  "sha3",
  "subtle",
  "thiserror 2.0.17",
+ "tokio",
  "zeroize",
 ]
 

@@ -149,7 +149,7 @@ pub enum MultisigTxError {
     FinalSignError(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SharedPublicKey {
     pub role: ChannelRole,
     pub public_key: Curve25519PublicKey,

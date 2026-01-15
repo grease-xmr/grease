@@ -92,6 +92,20 @@ where
     role: ChannelRole,
 }
 
+impl<C> std::fmt::Debug for KesSecrets<C>
+where
+    C: FrostCurve,
+    Ed25519: Dleq<C>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KesSecrets")
+            .field("role", &self.role)
+            .field("kes_pubkey", &"<hidden>")
+            .field("adapter_sig_offset", &"<secret>")
+            .finish()
+    }
+}
+
 impl<C> HasRole for KesSecrets<C>
 where
     C: FrostCurve,

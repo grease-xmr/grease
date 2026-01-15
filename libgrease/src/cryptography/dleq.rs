@@ -228,6 +228,7 @@ fn ownership_challenge(nonce_pub: &XmrPoint, public_point: &XmrPoint) -> XmrScal
     <Ed25519 as Ciphersuite>::hash_to_F(b"message_challenge", &t.challenge(b"challenge"))
 }
 
+#[derive(Clone)]
 pub struct DleqProof<C, D>
 where
     C: Curve,
@@ -236,6 +237,19 @@ where
     pub proof: D::Proof,
     pub xmr_point: XmrPoint,
     pub foreign_point: <C as Ciphersuite>::G,
+}
+
+impl<C, D> std::fmt::Debug for DleqProof<C, D>
+where
+    C: Curve,
+    D: Dleq<C>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DleqProof")
+            .field("xmr_point", &self.xmr_point)
+            .field("foreign_point", &"<curve point>")
+            .finish()
+    }
 }
 
 impl<C, D> DleqProof<C, D>

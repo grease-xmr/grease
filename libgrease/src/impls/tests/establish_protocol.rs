@@ -4,11 +4,11 @@ use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey
 use crate::cryptography::pok::KesPoK;
 use crate::cryptography::secret_encryption::EncryptedSecret;
 use crate::grease_protocol::adapter_signature::AdapterSignatureHandler;
+use crate::grease_protocol::establish_channel::{
+    EstablishProtocolCommon, EstablishProtocolCustomer, EstablishProtocolError, EstablishProtocolMerchant, PeerInfo,
+};
 use crate::grease_protocol::kes::{KesClient, KesClientError, KesSecrets};
 use crate::grease_protocol::multisig_wallet::{HasPublicKey, HasSecretKey, LinkedMultisigWallets};
-use crate::grease_protocol::open_channel::{
-    CustomerOpenProtocol, MerchantOpenProtocol, OpenProtocol, OpenProtocolError, PeerInfo,
-};
 use crate::grease_protocol::utils::Readable;
 use crate::impls::multisig::MultisigWalletKeyRing;
 use crate::payment_channel::{ChannelRole, HasRole};
@@ -29,26 +29,26 @@ fn kes_keypair() -> (BjjScalar, BjjPoint) {
     (k, p)
 }
 
-struct ChannelOpenData {
+struct ChannelEstablishData {
     wallet_keyring: MultisigWalletKeyRing,
     kes_secrets: Option<KesSecrets<BabyJubJub>>,
     peer_dleq_proof: Option<DleqProof<BabyJubJub, Ed25519>>,
     peer_adapted_sig: Option<AdaptedSignature<Ed25519>>,
 }
 
-impl HasSecretKey for ChannelOpenData {
+impl HasSecretKey for ChannelEstablishData {
     fn secret_key(&self) -> Curve25519Secret {
         self.wallet_keyring.partial_spend_key.clone()
     }
 }
 
-impl HasPublicKey for ChannelOpenData {
+impl HasPublicKey for ChannelEstablishData {
     fn public_key(&self) -> Curve25519PublicKey {
         self.wallet_keyring.public_key()
     }
 }
 
-impl PeerInfo<BabyJubJub> for ChannelOpenData {
+impl PeerInfo<BabyJubJub> for ChannelEstablishData {
     fn peer_dleq_proof(&self) -> Option<&DleqProof<BabyJubJub, Ed25519>> {
         self.peer_dleq_proof.as_ref()
     }
@@ -62,13 +62,13 @@ impl PeerInfo<BabyJubJub> for ChannelOpenData {
     }
 }
 
-impl HasRole for ChannelOpenData {
+impl HasRole for ChannelEstablishData {
     fn role(&self) -> ChannelRole {
         self.wallet_keyring.role()
     }
 }
 
-impl OpenProtocol<BabyJubJub, Blake2b512> for ChannelOpenData {
+impl EstablishProtocolCommon<BabyJubJub, Blake2b512> for ChannelEstablishData {
     type MultisigWallet = MultisigWalletKeyRing;
     type KesClient = KesSecrets<BabyJubJub>;
 
@@ -81,20 +81,19 @@ impl OpenProtocol<BabyJubJub, Blake2b512> for ChannelOpenData {
         &mut self,
         rng: &mut R,
         kes_pubkey: BjjPoint,
-    ) -> Result<(), OpenProtocolError> {
+    ) -> Result<(), EstablishProtocolError> {
         let kes_secrets = KesSecrets::generate(rng, kes_pubkey, self.role()).map_err(|e| match e {
-            KesClientError::InvalidKesPublicKey => OpenProtocolError::InvalidKesPublicKey,
-            KesClientError::DleqProofGenerationError(e) => OpenProtocolError::AdapterSigOffsetError(e),
+            KesClientError::InvalidKesPublicKey => EstablishProtocolError::InvalidKesPublicKey,
+            KesClientError::DleqProofGenerationError(e) => EstablishProtocolError::AdapterSigOffsetError(e),
         })?;
         self.kes_secrets = Some(kes_secrets);
         Ok(())
     }
 
-    fn kes_client(&self) -> Result<&Self::KesClient, OpenProtocolError> {
-        let client = self
-            .kes_secrets
-            .as_ref()
-            .ok_or_else(|| OpenProtocolError::MissingInformation("initialize_kes_client has not been called".into()))?;
+    fn kes_client(&self) -> Result<&Self::KesClient, EstablishProtocolError> {
+        let client = self.kes_secrets.as_ref().ok_or_else(|| {
+            EstablishProtocolError::MissingInformation("initialize_kes_client has not been called".into())
+        })?;
         Ok(client)
     }
 
@@ -115,23 +114,23 @@ impl OpenProtocol<BabyJubJub, Blake2b512> for ChannelOpenData {
     }
 }
 
-impl CustomerOpenProtocol<BabyJubJub, Blake2b512> for ChannelOpenData {
-    fn read_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), OpenProtocolError> {
+impl EstablishProtocolCustomer<BabyJubJub, Blake2b512> for ChannelEstablishData {
+    fn read_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let commitment =
-            PublicKeyCommitment::read(reader).map_err(|e| OpenProtocolError::InvalidCommitment(e.to_string()))?;
+            PublicKeyCommitment::read(reader).map_err(|e| EstablishProtocolError::InvalidCommitment(e.to_string()))?;
         self.wallet_keyring.set_peer_public_key_commitment(commitment);
         Ok(())
     }
 
-    fn verify_merchant_public_key(&self) -> Result<(), OpenProtocolError> {
+    fn verify_merchant_public_key(&self) -> Result<(), EstablishProtocolError> {
         self.wallet_keyring.verify_peer_public_key()?;
         Ok(())
     }
 }
 
-impl MerchantOpenProtocol<BabyJubJub, Blake2b512> for ChannelOpenData {}
+impl EstablishProtocolMerchant<BabyJubJub, Blake2b512> for ChannelEstablishData {}
 
-fn setup_new_multisig_wallets(merchant: &mut ChannelOpenData, customer: &mut ChannelOpenData) {
+fn setup_new_multisig_wallets(merchant: &mut ChannelEstablishData, customer: &mut ChannelEstablishData) {
     let commitment = merchant.wallet().commit_to_public_key();
     // The merchant needs to commit to his pubkey before seeing the customer's pubkey
     // ---> Commitment to customer
@@ -154,18 +153,18 @@ fn setup_new_multisig_wallets(merchant: &mut ChannelOpenData, customer: &mut Cha
     customer.verify_merchant_public_key().expect("Expected merchant public key verification");
 }
 
-fn wallet_transaction_protocol(_m: &mut ChannelOpenData, _c: &mut ChannelOpenData) {
+fn wallet_transaction_protocol(_m: &mut ChannelEstablishData, _c: &mut ChannelEstablishData) {
     // We're not going to do anything in this test. This is just a marker to indicate where the TX negotiation goes.
 }
 
 #[test]
-fn channel_opening_protocol() {
+fn channel_establish_protocol() {
     let _ = env_logger::try_init();
     let mut rng = OsRng;
     let (kes_secret, kes_pubkey) = kes_keypair();
-    // Merchant starts a new "Open Channel" protocol
-    let mut merchant_protocol = ChannelOpenData::new(&mut rng, ChannelRole::Merchant);
-    let mut customer_protocol = ChannelOpenData::new(&mut rng, ChannelRole::Customer);
+    // Merchant starts a new "Establish Channel" protocol
+    let mut merchant_protocol = ChannelEstablishData::new(&mut rng, ChannelRole::Merchant);
+    let mut customer_protocol = ChannelEstablishData::new(&mut rng, ChannelRole::Customer);
     info!("Customer pubkey: {}", customer_protocol.public_key().as_hex());
     info!("Merchant pubkey: {}", merchant_protocol.public_key().as_hex());
     setup_new_multisig_wallets(&mut merchant_protocol, &mut customer_protocol);

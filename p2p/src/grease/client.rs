@@ -17,9 +17,10 @@ use libgrease::channel_id::ChannelId;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use libgrease::cryptography::zk_objects::{
-    generate_txc0_nonces, GenericPoint, GenericScalar, KesProof, PublicProof0, PublicUpdateProof, ShardInfo,
-    UpdateProofs,
+    generate_txc0_nonces, GenericPoint, KesProof, PublicProof0, PublicUpdateProof, ShardInfo, UpdateProofs,
 };
+use libgrease::XmrScalar;
+use libgrease::grease_protocol::establish_channel::EstablishProtocolCommon;
 use libgrease::grease_protocol::multisig_wallet::SharedPublicKey;
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
@@ -444,7 +445,7 @@ where
             debug!("Channel {channel_id} is not establishing, so no need to scan for funding txn.");
             return None;
         }
-        let wallet_info = match channel.state().as_establishing().ok()?.wallet() {
+        let wallet_info = match channel.state().as_establishing().ok()?.multisig_wallet_data() {
             Some(info) => info.clone(),
             None => {
                 debug!("Channel {channel_id} does not have a wallet, so no need to scan for funding transaction.");
@@ -711,9 +712,8 @@ where
     ) -> Result<(), GreaseClientError> {
         let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let state = channel.state().as_establishing()?;
-        let wallet =
-            state.wallet().ok_or(GreaseClientError::InvalidState("Multisig wallet not available".to_string()))?;
-        let key = wallet.my_spend_key.clone();
+        let wallet = state.wallet();
+        let key = wallet.partial_spend_key.clone();
         drop(channel);
         self.delegate.verify_my_shards(&key, &shards.my_shards)?;
         trace!("👛️  My shards are correctly encrypted for channel {channel_id}.");
@@ -757,10 +757,13 @@ where
         let (channel_id, my_shards) = envelope.open();
         let channel = self.channels.peek(&channel_id).await.ok_or(RemoteServerError::ChannelDoesNotExist)?;
         let state = channel.state().as_establishing().map_err(|e| RemoteServerError::internal(e.to_string()))?;
-        let wallet =
-            state.wallet().ok_or_else(|| RemoteServerError::internal("Merchant's Multisig wallet is not available"))?;
-        let key = wallet.my_spend_key.clone();
-        let peer = *wallet.peer_public_key();
+        let wallet = state.wallet();
+        let key = wallet.partial_spend_key.clone();
+        let peer = wallet
+            .peer_public_key
+            .as_ref()
+            .ok_or_else(|| RemoteServerError::internal("Peer public key not set"))?
+            .public_key;
         let kes_pubkey = channel.state().metadata().kes_public_key().to_string();
         drop(channel);
         debug!("👛️  Splitting multisig wallet spend key for customer and KES.");
@@ -801,10 +804,11 @@ where
         debug!("👛️  Verifying address {address} for channel {channel_id}.");
         let state = channel.state().as_establishing()?;
         trace!("👛️  Loading wallet for channel {channel_id}.");
-        let wallet =
-            state.wallet().ok_or(GreaseClientError::InvalidState("Multisig wallet not available".to_string()))?;
+        let wallet_data = state
+            .multisig_wallet_data()
+            .ok_or(GreaseClientError::InvalidState("Multisig wallet not available".to_string()))?;
         let rpc = connect_to_rpc(self.rpc_address()).await?;
-        let wallet = MultisigWallet::from_serializable(rpc, wallet.clone())?;
+        let wallet = MultisigWallet::from_serializable(rpc, wallet_data.clone())?;
         if wallet.address().to_string() == address {
             debug!("👛️  Address {address} matches for channel {channel_id}.");
             Ok(true)
@@ -956,6 +960,7 @@ where
             ChannelState::Establishing(_) => 0,
             ChannelState::Open(s) => s.update_count(),
             ChannelState::Closing(s) => s.metadata().update_count(),
+            ChannelState::Disputing(s) => s.metadata().update_count(),
             ChannelState::Closed(s) => s.metadata().update_count(),
         };
         Some(count)
@@ -1124,8 +1129,7 @@ where
         let my_signature = signature_share_to_bytes(&secret);
         let my_proofs = self.generate_next_witness(channel_id, info.delta).await?;
         let public_update_proof = my_proofs.public_only();
-        let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i)
-            .map_err(|e| UpdateError::WalletError(format!("Could not extract adaptor. {e}")))?;
+        let witness = Curve25519Secret::from(my_proofs.private_outputs.witness_i);
         let my_adapted_signature = wallet.adapt_signature(&witness)?;
         let commited_update = UpdateCommitted { public_update_proof, adapted_signature: my_adapted_signature.clone() };
         let mut client = self.network_client.clone();
@@ -1182,14 +1186,13 @@ where
         debug!("💸️  Fetching last update for channel {channel_id}.");
         let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let state = channel.state().as_open()?;
-        let last_witness = state.current_witness();
+        let last_witness = *state.current_witness();
         let mut index = state.update_count();
         let metadata = state.metadata().clone();
         drop(channel);
         index += 1;
         info!("💸️  Generating witness_{index} for channel {channel_id}.");
-        let blinding_dleq = GenericScalar::random(&mut rand_core::OsRng);
-        let proofs = self.delegate.generate_update(index, delta, &last_witness, &blinding_dleq, &metadata).await?;
+        let proofs = self.delegate.generate_update(index, delta, &last_witness, &metadata).await?;
         info!("💸️  Witness_{index} for channel {channel_id} successfully generated.");
         Ok(proofs)
     }
@@ -1255,8 +1258,7 @@ where
             "💸️  Generating adaptor signature for update {} on channel {channel_id}",
             prep_info.update_count
         );
-        let witness = Curve25519Secret::from_generic_scalar(&my_proofs.private_outputs.witness_i)
-            .map_err(|e| RemoteServerError::internal(format!("Couldn't extract witness: {e}")))?;
+        let witness = Curve25519Secret::from(my_proofs.private_outputs.witness_i);
         let adapted_sig = wallet
             .adapt_signature(&witness)
             .map_err(|e| RemoteServerError::internal(format!("Could not create adapted signature: {e}")))?;
@@ -1470,9 +1472,7 @@ where
             .map_err(|_| GreaseClientError::UpdateError(UpdateError::InsufficientFunds))?;
         trace!("{role}: Added {} outputs to transaction. {:?}", payments.len(), payments);
         let final_update = state.final_update();
-        let offset = state.peer_witness().map_err(|e| {
-            GreaseClientError::ProtocolError(format!("Final witness is not a valid monero scalar: {e}"))
-        })?;
+        let offset = state.peer_witness().clone();
         drop(channel);
         trace!("{role}: Reconstructing wallet for closing tx.");
         let rpc = connect_to_rpc(self.rpc_address()).await?;
@@ -1484,7 +1484,7 @@ where
         wallet.partial_sign(&final_update.peer_preprocess)?;
         trace!("{role}: Signed final transaction with my key.");
         let adapted = final_update.peer_adapted_signature;
-        let ss_b = wallet.extract_true_signature(&adapted, offset.as_scalar())?;
+        let ss_b = wallet.extract_true_signature(&adapted, &offset)?;
         let closing_tx = wallet.sign(ss_b)?;
         let tx_hash = TransactionId::new(hex::encode(closing_tx.hash()));
         debug!("{role}: Signed transaction with peer's witness. Final transaction hash is {tx_hash}.");

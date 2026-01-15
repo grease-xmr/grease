@@ -1,13 +1,19 @@
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
+use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
-use crate::cryptography::keys::{Curve25519Secret, KeyError};
-use crate::cryptography::zk_objects::{GenericScalar, KesProof, Proofs0, PublicProof0, ShardInfo};
+use crate::cryptography::zk_objects::KesProof;
+use crate::grease_protocol::close_channel::{
+    ChannelCloseSuccess, CloseFailureReason, CloseProtocolCommon, CloseProtocolError, CloseProtocolInitiator,
+    CloseProtocolResponder, RequestChannelClose, RequestCloseFailed,
+};
 use crate::lifecycle_impl;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::multisig::MultisigWalletData;
+use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::error::LifeCycleError;
+use crate::XmrScalar;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,19 +22,24 @@ use std::collections::HashMap;
 pub struct ChannelCloseRecord {
     pub final_balance: Balances,
     pub update_count: u64,
-    pub witness: GenericScalar,
+    #[serde(
+        serialize_with = "crate::helpers::xmr_scalar_to_hex",
+        deserialize_with = "crate::helpers::xmr_scalar_from_hex"
+    )]
+    pub witness: XmrScalar,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClosingChannelState {
     pub(crate) metadata: ChannelMetadata,
     pub(crate) reason: ChannelClosedReason,
-    pub(crate) shards: ShardInfo,
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) peer_witness: GenericScalar,
-    pub(crate) my_proof0: Proofs0,
-    pub(crate) peer_proof0: PublicProof0,
+    #[serde(
+        serialize_with = "crate::helpers::xmr_scalar_to_hex",
+        deserialize_with = "crate::helpers::xmr_scalar_from_hex"
+    )]
+    pub(crate) peer_witness: XmrScalar,
     pub(crate) kes_proof: KesProof,
     pub(crate) last_update: UpdateRecord,
     pub(crate) final_tx: Option<TransactionId>,
@@ -62,8 +73,8 @@ impl ClosingChannelState {
         self.last_update.clone()
     }
 
-    pub fn peer_witness(&self) -> Result<Curve25519Secret, KeyError> {
-        Curve25519Secret::from_generic_scalar(&self.peer_witness)
+    pub fn peer_witness(&self) -> &XmrScalar {
+        &self.peer_witness
     }
 
     pub fn reason(&self) -> &ChannelClosedReason {
@@ -108,3 +119,115 @@ use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use crate::state_machine::open_channel::UpdateRecord;
 
 lifecycle_impl!(ClosingChannelState, Closing);
+
+// --- Protocol Trait Implementations ---
+
+impl HasRole for ClosingChannelState {
+    fn role(&self) -> ChannelRole {
+        self.metadata.role()
+    }
+}
+
+impl CloseProtocolCommon for ClosingChannelState {
+    fn channel_id(&self) -> ChannelId {
+        self.metadata.channel_id().name()
+    }
+
+    fn update_count(&self) -> u64 {
+        self.metadata.update_count()
+    }
+
+    fn current_offset(&self) -> &XmrScalar {
+        &self.last_update.my_proofs.private_outputs.witness_i
+    }
+
+    fn verify_offset(&self, offset: &[u8], update_count: u64) -> Result<(), CloseProtocolError> {
+        if update_count != self.update_count() {
+            return Err(CloseProtocolError::UpdateCountMismatch {
+                expected: self.update_count(),
+                actual: update_count,
+            });
+        }
+        // Basic length validation - XmrScalar is 32 bytes
+        if offset.len() != 32 {
+            return Err(CloseProtocolError::InvalidOffset(format!(
+                "Expected 32 bytes, got {}",
+                offset.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl CloseProtocolInitiator for ClosingChannelState {
+    fn create_close_request(&self) -> Result<RequestChannelClose, CloseProtocolError> {
+        use ciphersuite::group::ff::PrimeField;
+        Ok(RequestChannelClose {
+            channel_id: self.channel_id(),
+            offset: self.current_offset().to_repr().to_vec(),
+            update_count: self.update_count(),
+        })
+    }
+
+    fn handle_close_success(&mut self, response: ChannelCloseSuccess) -> Result<(), CloseProtocolError> {
+        // Validate the response channel ID matches
+        if response.channel_id != self.channel_id() {
+            return Err(CloseProtocolError::InvalidOffset("Channel ID mismatch".into()));
+        }
+
+        // Store the peer's offset for later use in transaction broadcast
+        // The peer_witness field holds this
+        self.verify_offset(&response.offset, self.update_count())?;
+
+        // If the responder broadcast the transaction, store it
+        if let Some(txid) = response.txid {
+            self.with_final_tx(txid);
+        }
+
+        Ok(())
+    }
+
+    fn handle_close_failed(&mut self, response: RequestCloseFailed) -> Result<(), CloseProtocolError> {
+        Err(CloseProtocolError::CloseRejected(response.reason))
+    }
+
+    fn broadcast_closing_tx(&self, _peer_offset: &[u8]) -> Result<TransactionId, CloseProtocolError> {
+        // This requires actual Monero transaction creation and broadcast.
+        // The implementation would use the wallet_data() and combine offsets to create the closing tx.
+        Err(CloseProtocolError::MissingInformation(
+            "Transaction broadcast requires wallet integration - use external wallet service".into(),
+        ))
+    }
+}
+
+impl CloseProtocolResponder for ClosingChannelState {
+    fn receive_close_request(&mut self, request: RequestChannelClose) -> Result<(), CloseProtocolError> {
+        // Validate the request
+        if request.channel_id != self.channel_id() {
+            return Err(CloseProtocolError::InvalidOffset("Channel ID mismatch".into()));
+        }
+
+        self.verify_offset(&request.offset, request.update_count)?;
+
+        Ok(())
+    }
+
+    fn sign_and_broadcast(&mut self, _initiator_offset: &[u8]) -> Result<Option<TransactionId>, CloseProtocolError> {
+        // This requires actual Monero transaction creation and broadcast.
+        // Return None to indicate the initiator should broadcast.
+        Ok(None)
+    }
+
+    fn create_success_response(&self, txid: Option<TransactionId>) -> ChannelCloseSuccess {
+        use ciphersuite::group::ff::PrimeField;
+        ChannelCloseSuccess {
+            channel_id: self.channel_id(),
+            offset: self.current_offset().to_repr().to_vec(),
+            txid,
+        }
+    }
+
+    fn create_failure_response(&self, reason: CloseFailureReason) -> RequestCloseFailed {
+        RequestCloseFailed { channel_id: self.channel_id(), reason }
+    }
+}

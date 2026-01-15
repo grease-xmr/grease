@@ -2,6 +2,7 @@ use crate::cryptography::common_types::HashCommitment256;
 use crate::cryptography::Commit;
 use crate::grease_protocol::utils::write_field_element;
 use crate::monero::data_objects::MultisigSplitSecrets;
+use crate::XmrScalar;
 use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::GroupEncoding;
 use curve25519_dalek::{EdwardsPoint, Scalar};
@@ -313,10 +314,14 @@ pub struct Comm0PublicOutputs {
 }
 
 /// The proof outputs that are stored, but not shared with the peer.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Comm0PrivateOutputs {
     /// **ω₀** - The root private key protecting access to the user's locked value (witness₀).
-    pub witness_0: GenericScalar,
+    #[serde(
+        serialize_with = "crate::helpers::xmr_scalar_to_hex",
+        deserialize_with = "crate::helpers::xmr_scalar_from_hex"
+    )]
+    pub witness_0: XmrScalar,
     /// **Δ_BabyJubjub** - Optimization parameter (response_div_BabyJubjub).
     pub delta_bjj: GenericScalar,
     /// **Δ_Ed25519** - Optimization parameter (response_div_BabyJubJub).
@@ -346,19 +351,23 @@ pub struct PublicUpdateOutputs {
 }
 
 /// Struct representing private variables.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PrivateUpdateOutputs {
     /// The ith update index. The initial commitment is update 0.
     pub update_count: u64,
     /// **ω_i** - The next private key protecting access to close the payment channel (`witness_i`).
-    pub witness_i: GenericScalar,
+    #[serde(
+        serialize_with = "crate::helpers::xmr_scalar_to_hex",
+        deserialize_with = "crate::helpers::xmr_scalar_from_hex"
+    )]
+    pub witness_i: XmrScalar,
     /// **Δ_BabyJubjub** - Optimization parameter (`response_div_BabyJubjub`).
     pub delta_bjj: GenericScalar,
     /// **Δ_Ed25519** - Optimization parameter (`response_div_BabyJubJub`).
     pub delta_ed: GenericScalar,
 }
 
-#[derive(Default, Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Proofs0 {
     pub public_outputs: Comm0PublicOutputs,
     pub private_outputs: Comm0PrivateOutputs,
@@ -372,7 +381,7 @@ impl Proofs0 {
 }
 
 /// The output of the ZK proof for a channel update.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpdateProofs {
     pub public_outputs: PublicUpdateOutputs,
     pub private_outputs: PrivateUpdateOutputs,

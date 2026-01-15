@@ -2,8 +2,11 @@ use crate::balance::Balances;
 use crate::channel_id::ChannelIdMetadata;
 use crate::channel_metadata::ChannelMetadata;
 use crate::cryptography::keys::Curve25519PublicKey;
+use crate::grease_protocol::propose_channel::{
+    ChannelSeedConfig, ProposeProtocolCommon, ProposeProtocolError, ProposeProtocolProposee, ProposeProtocolProposer,
+};
 use crate::lifecycle_impl;
-use crate::payment_channel::ChannelRole;
+use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::error::{InvalidProposal, LifeCycleError};
 use crate::state_machine::establishing_channel::EstablishingState;
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
@@ -11,6 +14,7 @@ use crate::state_machine::timeouts::TimeoutReason;
 use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
 use log::*;
 use monero::{Address, Network};
+use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -140,6 +144,103 @@ impl NewChannelState {
 }
 
 lifecycle_impl!(NewChannelState, New);
+
+// --- Protocol Trait Implementations ---
+
+impl HasRole for NewChannelState {
+    fn role(&self) -> ChannelRole {
+        self.metadata.role()
+    }
+}
+
+impl ProposeProtocolCommon for NewChannelState {
+    fn channel_id(&self) -> Option<&ChannelIdMetadata> {
+        Some(self.metadata.channel_id())
+    }
+
+    fn seed_info(&self) -> Option<&ChannelSeedInfo> {
+        Some(&self.seed_info)
+    }
+
+    fn validate_seed_info(&self) -> Result<(), ProposeProtocolError> {
+        // Validate the seed info is consistent with the metadata
+        if self.metadata.kes_public_key() != self.seed_info.kes_public_key {
+            return Err(ProposeProtocolError::InvalidSeedInfo("KES public key mismatch".into()));
+        }
+        if self.metadata.network() != self.seed_info.network {
+            return Err(ProposeProtocolError::NetworkMismatch {
+                expected: format!("{:?}", self.metadata.network()),
+                actual: format!("{:?}", self.seed_info.network),
+            });
+        }
+        if self.metadata.balances().total().is_zero() {
+            return Err(ProposeProtocolError::BalanceValidationFailed("Total balance is zero".into()));
+        }
+        Ok(())
+    }
+}
+
+impl ProposeProtocolProposer for NewChannelState {
+    fn create_channel_seed<R: RngCore + CryptoRng>(
+        &mut self,
+        _rng: &mut R,
+        _config: ChannelSeedConfig,
+    ) -> Result<ChannelSeedInfo, ProposeProtocolError> {
+        // NewChannelState already has seed info from when it was created.
+        // This method would typically be called before the state exists.
+        // Return the existing seed info.
+        Ok(self.seed_info.clone())
+    }
+
+    fn receive_proposal(&mut self, proposal: &NewChannelProposal) -> Result<(), ProposeProtocolError> {
+        // Validate the incoming proposal against our stored data
+        self.review_proposal(proposal).map_err(|e| ProposeProtocolError::InvalidProposal(e.to_string()))
+    }
+
+    fn accept_proposal(&self) -> Result<NewChannelProposal, ProposeProtocolError> {
+        // Return the proposal for transmission to the customer
+        Ok(self.for_proposal())
+    }
+
+    fn reject_proposal(&self, _reason: RejectNewChannelReason) -> Result<(), ProposeProtocolError> {
+        // In the FSM model, rejection is handled by the `reject()` method which transitions to ClosedChannelState.
+        // This trait method signals intent; actual state transition happens via FSM methods.
+        Ok(())
+    }
+}
+
+impl ProposeProtocolProposee for NewChannelState {
+    fn receive_seed_info(&mut self, seed: ChannelSeedInfo) -> Result<(), ProposeProtocolError> {
+        // NewChannelState already has seed info stored when created.
+        // Validate the incoming seed matches what we have.
+        if self.seed_info.kes_public_key != seed.kes_public_key {
+            return Err(ProposeProtocolError::InvalidSeedInfo("KES public key mismatch".into()));
+        }
+        // Update with any new information if needed
+        self.seed_info = seed;
+        Ok(())
+    }
+
+    fn create_proposal<R: RngCore + CryptoRng>(
+        &self,
+        _rng: &mut R,
+        _closing_address: &Address,
+    ) -> Result<NewChannelProposal, ProposeProtocolError> {
+        // Return the proposal based on stored data
+        Ok(self.for_proposal())
+    }
+
+    fn handle_acceptance(&mut self, accepted: &NewChannelProposal) -> Result<(), ProposeProtocolError> {
+        // Validate the accepted proposal matches what we sent
+        self.review_proposal(accepted).map_err(|e| ProposeProtocolError::InvalidProposal(e.to_string()))
+    }
+
+    fn handle_rejection(&mut self, reason: RejectNewChannelReason) -> Result<(), ProposeProtocolError> {
+        // Log the rejection; actual state transition happens via FSM methods
+        debug!("Proposal rejected: {}", reason.reason());
+        Err(ProposeProtocolError::ProposalRejected(reason.reason().to_string()))
+    }
+}
 
 /// A record that (usually) the merchant will send offline to the customer to give them the seed information they
 /// need to complete a new channel proposal.

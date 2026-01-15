@@ -6,11 +6,12 @@ use libgrease::amount::MoneroDelta;
 use libgrease::channel_metadata::ChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::cryptography::zk_objects::{
-    Comm0PrivateInputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey, Proofs0, PublicProof0,
-    PublicUpdateProof, UpdateProofs,
+    Comm0PrivateInputs, GenericPoint, KesProof, PartialEncryptedKey, Proofs0, PublicProof0, PublicUpdateProof,
+    UpdateProofs,
 };
 use libgrease::monero::data_objects::MultisigSplitSecrets;
 use libgrease::state_machine::error::InvalidProposal;
+use libgrease::XmrScalar;
 use std::future::Future;
 
 pub trait ProposalVerifier {
@@ -78,8 +79,7 @@ pub trait Updater {
         &self,
         index: u64,
         delta: MoneroDelta,
-        last_witness: &GenericScalar,
-        blinding_dleq: &GenericScalar,
+        last_witness: &XmrScalar,
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<UpdateProofs, DelegateError>> + Send;
 
@@ -98,7 +98,7 @@ pub trait ChannelClosure {
     /// Verifies that the witness (ω_i) shared by the peer is valid for the given commitment, T_i.
     fn verify_peer_witness(
         &self,
-        witness_i: &GenericScalar,
+        witness_i: &XmrScalar,
         commitment: &GenericPoint,
         metadata: &ChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;

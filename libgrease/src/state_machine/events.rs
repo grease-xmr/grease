@@ -18,6 +18,8 @@ pub enum LifeCycleEvent {
     MyProof0Generated(Box<Proofs0>),
     PeerProof0Received(Box<PublicProof0>),
     KesShards(Box<ShardInfo>),
+    /// The KES client has been initialized with cryptographic secrets for this channel.
+    KesClientInitialized,
     KesCreated(Box<KesProof>),
     FundingTxConfirmed(Box<TransactionRecord>),
     FinalTxConfirmed(Box<TransactionId>),
@@ -34,6 +36,7 @@ impl Display for LifeCycleEvent {
             LifeCycleEvent::Timeout(_) => write!(f, "OnTimeout"),
             LifeCycleEvent::MultiSigWalletCreated(_) => write!(f, "OnMultiSigWalletCreated"),
             LifeCycleEvent::FundingTxWatcher(_) => write!(f, "SaveFundingTxWatcher"),
+            LifeCycleEvent::KesClientInitialized => write!(f, "KesClientInitialized"),
             LifeCycleEvent::KesCreated(_) => write!(f, "KesCreated"),
             LifeCycleEvent::FundingTxConfirmed(_) => write!(f, "FundingTxConfirmed"),
             LifeCycleEvent::MyProof0Generated(_) => write!(f, "MyProof0Generated"),
