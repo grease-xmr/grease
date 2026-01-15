@@ -1,3 +1,4 @@
+use crate::channel_id::ChannelId;
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle};
 use crate::storage::traits::StateStore;
 use ron::ser::PrettyConfig;
@@ -38,8 +39,8 @@ impl StateStore for FileStore {
         Ok(())
     }
 
-    fn load_channel(&self, name: &str) -> Result<ChannelState, anyhow::Error> {
-        let file_path = self.path.join(format!("{}.ron", name));
+    fn load_channel(&self, channel_id: &ChannelId) -> Result<ChannelState, anyhow::Error> {
+        let file_path = self.path.join(format!("{channel_id}.ron"));
         let val = fs::read_to_string(&file_path)?;
         let state: ChannelState = ron::de::from_str(&val)?;
         Ok(state)

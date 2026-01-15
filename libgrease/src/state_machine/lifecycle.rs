@@ -1,5 +1,6 @@
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
+use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::LifeCycleError;
@@ -52,7 +53,7 @@ impl StateStorageError {
 }
 
 pub trait LifeCycle {
-    fn name(&self) -> String {
+    fn name(&self) -> ChannelId {
         self.metadata().channel_id().name()
     }
 
@@ -205,7 +206,7 @@ impl LifeCycle for ChannelState {
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
     use crate::balance::Balances;
-    use crate::channel_id::ChannelId;
+    use crate::channel_id::ChannelIdMetadata;
     use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::cryptography::zk_objects::{
@@ -248,7 +249,8 @@ pub mod test {
             .build()
             .expect("to build initial state");
 
-        let channel_id: ChannelId = ChannelId::new(merchant_key, customer_key, balances, closing, 123, 456);
+        let channel_id: ChannelIdMetadata =
+            ChannelIdMetadata::new(merchant_key, customer_key, balances, closing, 123, 456);
 
         let proposal = NewChannelProposal { network: seed.network, channel_id, seed };
         let initial_state = NewChannelState::new(ChannelRole::Customer, proposal);

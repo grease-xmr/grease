@@ -1,4 +1,5 @@
 use crate::amount::{MoneroAmount, MoneroDelta};
+use crate::channel_id::ChannelId;
 use crate::monero::error::ClosingAddressError;
 use monero::Address;
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ pub struct MessageEnvelope<T>
 where
     T: Clone + Debug,
 {
-    pub channel: String,
+    pub channel: ChannelId,
     pub payload: T,
 }
 
@@ -42,15 +43,15 @@ impl<T> MessageEnvelope<T>
 where
     T: Clone + Debug,
 {
-    pub fn new(channel: String, payload: T) -> Self {
+    pub fn new(channel: ChannelId, payload: T) -> Self {
         Self { channel, payload }
     }
 
-    pub fn channel_name(&self) -> String {
-        self.channel.clone()
+    pub fn channel_id(&self) -> &ChannelId {
+        &self.channel
     }
 
-    pub fn open(self) -> (String, T) {
+    pub fn open(self) -> (ChannelId, T) {
         (self.channel, self.payload)
     }
 }

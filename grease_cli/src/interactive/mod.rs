@@ -18,7 +18,7 @@ use grease_p2p::grease::{
 };
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
-use libgrease::channel_id::ChannelId;
+use libgrease::channel_id::{ChannelId, ChannelIdMetadata};
 use libgrease::cryptography::keys::Curve25519Secret;
 use libgrease::monero::data_objects::ClosingAddresses;
 use libgrease::state_machine::lifecycle::LifecycleStage;
@@ -37,7 +37,7 @@ pub struct InteractiveApp {
     config: GlobalOptions,
     current_menu: &'static Menu,
     breadcrumbs: Vec<&'static Menu>,
-    current_channel: Option<String>,
+    current_channel: Option<ChannelId>,
     channel_status: Option<LifecycleStage>,
     server: MoneroNetworkServer,
 }
@@ -82,12 +82,12 @@ impl InteractiveApp {
 
     async fn update_status(&mut self) {
         if let Some(name) = self.current_channel.as_ref() {
-            let status = self.server.channel_status(name.as_str()).await;
+            let status = self.server.channel_status(name).await;
             self.channel_status = status;
         }
     }
 
-    async fn select_channel(&mut self) -> Result<String> {
+    async fn select_channel(&mut self) -> Result<ChannelId> {
         let channels = self.server.list_channels().await;
         if channels.is_empty() {
             return Err(anyhow!("No channels found"));
@@ -178,21 +178,18 @@ impl InteractiveApp {
             debug!("Channel is closing. Rebroadcasting closing transaction..");
             self.server.rebroadcast_closing_transaction(&channel).await?;
         }
-        Ok("Channel {channel} selected".to_string())
+        Ok(format!("Channel {channel} selected"))
     }
 
     async fn submit_funding_tx(&mut self) -> Result<String> {
-        if self.current_channel.is_none() {
-            return Err(anyhow!("No channel selected"));
-        }
-        let name = self.current_channel.clone().unwrap();
-        let info = self.server.channel_metadata(&name).await.ok_or_else(|| anyhow!("No channel metadata found"))?;
+        let name = self.current_channel.as_ref().ok_or_else(|| anyhow!("No channel selected"))?;
+        let info = self.server.channel_metadata(name).await.ok_or_else(|| anyhow!("No channel metadata found"))?;
         let balances = info.balances().customer;
         let address = self
             .server
-            .wallet_address(&name, "mainnet")
+            .wallet_address(name, "mainnet")
             .await
-            .map_err(|e| anyhow!("Error getting wallet channel address: {}", e))?;
+            .map_err(|e| anyhow!("Error getting wallet channel address: {e}"))?;
         Ok(format!("Send {balances} to {address} to fund the channel"))
     }
 
@@ -201,7 +198,7 @@ impl InteractiveApp {
         if channels.is_empty() {
             return println!("No channels found.");
         }
-        let names = channels.join("\n");
+        let names = channels.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("\n");
         println!("Found {} channels:\n{}", channels.len(), names);
     }
 
@@ -220,13 +217,13 @@ impl InteractiveApp {
         let proposal = self.create_channel_proposal(oob_info, address)?;
         trace!("Generated new proposal");
         // Send the proposal to the merchant and wait for reply
-        let name = self.server.establish_new_channel(proposal.clone()).await?;
+        let channel_id = self.server.establish_new_channel(proposal.clone()).await?;
         self.save_channels().await?;
         info!("Channels saved.");
-        self.current_channel = Some(name.clone());
-        let status = self.server.channel_status(&name).await;
+        self.current_channel = Some(channel_id.clone());
+        let status = self.server.channel_status(&channel_id).await;
         self.channel_status = status;
-        Ok(format!("New channel created: {name}"))
+        Ok(format!("New channel created: {channel_id}"))
     }
 
     async fn send_payment(&mut self) -> Result<String> {
@@ -294,7 +291,7 @@ impl InteractiveApp {
         let my_channel_nonce = OsRng.next_u64();
         let closing = ClosingAddresses { customer: my_closing_address, merchant: seed_info.merchant_closing_address };
         let (_, pubkey) = self.key_manager.new_keypair(my_channel_nonce);
-        let channel_id = ChannelId::new(
+        let channel_id = ChannelIdMetadata::new(
             seed_info.merchant_channel_key.clone(),
             pubkey,
             seed_info.initial_balances,

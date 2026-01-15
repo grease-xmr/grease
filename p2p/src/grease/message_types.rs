@@ -1,7 +1,7 @@
 use crate::errors::RemoteServerError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroDelta;
-use libgrease::channel_id::ChannelId;
+use libgrease::channel_id::{ChannelId, ChannelIdMetadata};
 use libgrease::cryptography::zk_objects::{PublicProof0, PublicUpdateProof};
 use libgrease::monero::data_objects::{
     FinalizedUpdate, MessageEnvelope, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse,
@@ -100,17 +100,17 @@ impl Display for GreaseResponse {
 }
 
 impl GreaseRequest {
-    pub fn channel_name(&self) -> String {
+    pub fn channel_id(&self) -> ChannelId {
         match self {
-            GreaseRequest::ProposeChannelRequest(ref proposal) => proposal.channel_name(),
-            GreaseRequest::MsKeyExchange(env) => env.channel_name(),
-            GreaseRequest::ConfirmMsAddress(env) => env.channel_name(),
-            GreaseRequest::MsSplitSecretExchange(env) => env.channel_name(),
-            GreaseRequest::ExchangeProof0(env) => env.channel_name(),
-            GreaseRequest::ChannelClose(env) => env.channel_name(),
-            GreaseRequest::PrepareUpdate(env) => env.channel_name(),
-            GreaseRequest::CommitUpdate(env) => env.channel_name(),
-            GreaseRequest::ChannelClosed(env) => env.channel_name(),
+            GreaseRequest::ProposeChannelRequest(ref proposal) => proposal.channel_id(),
+            GreaseRequest::MsKeyExchange(env) => env.channel_id().clone(),
+            GreaseRequest::ConfirmMsAddress(env) => env.channel_id().clone(),
+            GreaseRequest::MsSplitSecretExchange(env) => env.channel_id().clone(),
+            GreaseRequest::ExchangeProof0(env) => env.channel_id().clone(),
+            GreaseRequest::ChannelClose(env) => env.channel_id().clone(),
+            GreaseRequest::PrepareUpdate(env) => env.channel_id().clone(),
+            GreaseRequest::CommitUpdate(env) => env.channel_id().clone(),
+            GreaseRequest::ChannelClosed(env) => env.channel_id().clone(),
         }
     }
 }
@@ -139,7 +139,7 @@ pub struct NewChannelMessage {
     )]
     pub network: Network,
     /// Contains the information needed to uniquely identify the channel.
-    pub id: ChannelId,
+    pub id: ChannelIdMetadata,
     /// The seed info that the (usually) merchant provided initially.
     pub seed: ChannelSeedInfo,
     /// The libp2p contact info for the customer.
@@ -151,7 +151,7 @@ pub struct NewChannelMessage {
 impl NewChannelMessage {
     pub fn new(
         network: Network,
-        id: ChannelId,
+        id: ChannelIdMetadata,
         seed: ChannelSeedInfo,
         my_contact_info: ContactInfo,
         their_contact_info: ContactInfo,
@@ -159,8 +159,8 @@ impl NewChannelMessage {
         Self { network, id, seed, contact_info_customer: my_contact_info, contact_info_merchant: their_contact_info }
     }
 
-    pub fn channel_name(&self) -> String {
-        self.id.as_hex()
+    pub fn channel_id(&self) -> ChannelId {
+        self.id.name()
     }
 
     pub fn as_proposal(&self) -> NewChannelProposal {
