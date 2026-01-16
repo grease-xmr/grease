@@ -12,6 +12,7 @@ pub mod adapter_signature;
 pub mod common_types;
 pub mod dleq;
 pub mod hashes;
+pub mod kes_functions;
 pub mod keys;
 pub mod pok;
 pub mod secret_encryption;
