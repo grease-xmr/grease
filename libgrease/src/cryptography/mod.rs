@@ -17,6 +17,8 @@ pub mod keys;
 pub mod pok;
 pub mod secret_encryption;
 pub mod vcof;
+mod vcof_snark_dleq;
+mod witness;
 pub mod zk_objects;
 
 pub use commit::Commit;
