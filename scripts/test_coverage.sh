@@ -71,7 +71,7 @@ case $OUTPUT_FORMAT in
             --exclude circuits \
             --release \
             --html \
-            --output-dir "$COVERAGE_DIR"
+            --output-dir "$COVERAGE_DIR/html"
 
         echo ""
         echo "Coverage report generated at: $COVERAGE_DIR/html/index.html"
