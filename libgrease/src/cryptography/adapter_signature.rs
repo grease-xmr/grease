@@ -60,14 +60,7 @@ impl<C: Ciphersuite> SchnorrSignature<C> {
     /// The returned signature signs a challenge bound to $R$ and $P = k\cdot G$, such that if we knew $q, Q = q\cdot G$
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
     #[expect(non_snake_case)]
-    pub fn sign<
-        B: AsRef<[u8]>,
-        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
-    >(
-        secret: &C::F,
-        msg: B,
-        rng: &mut R,
-    ) -> Self {
+    pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, msg: B, rng: &mut R) -> Self {
         let mut nonce = C::F::random(&mut *rng);
         while nonce == C::F::ZERO {
             nonce = C::F::random(&mut *rng);
@@ -109,15 +102,7 @@ impl<C: Ciphersuite> AdaptedSignature<C> {
     /// The returned signature signs a challenge bound to $R$ and $P = k\cdot G$, such that if we knew $q, Q = q\cdot G$
     /// we could easily calculate a valid signature $(s,R)$ for the same challenge.
     #[expect(non_snake_case)]
-    pub fn sign<
-        B: AsRef<[u8]>,
-        R: RngCore + CryptoRng + k256::elliptic_curve::rand_core::RngCore + k256::elliptic_curve::rand_core::CryptoRng,
-    >(
-        secret: &C::F,
-        payload: &C::F,
-        msg: B,
-        rng: &mut R,
-    ) -> Self {
+    pub fn sign<B: AsRef<[u8]>, R: RngCore + CryptoRng>(secret: &C::F, payload: &C::F, msg: B, rng: &mut R) -> Self {
         let mut nonce = C::F::random(&mut *rng);
         while nonce == C::F::ZERO {
             nonce = C::F::random(&mut *rng);
