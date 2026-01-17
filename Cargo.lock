@@ -3292,6 +3292,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake2",
+ "chrono",
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group",
@@ -3310,6 +3311,7 @@ dependencies = [
  "rand_core 0.6.4",
  "ron",
  "serde",
+ "serde_json",
  "sha3",
  "subtle",
  "thiserror 2.0.17",
