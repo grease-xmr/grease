@@ -1294,14 +1294,6 @@ impl InitialProof {
             rho_ed: big_int_to_generic(&self.rho_ed).unwrap(),
         }
     }
-
-    pub fn as_private_outputs(&self) -> Comm0PrivateOutputs {
-        Comm0PrivateOutputs {
-            witness_0: big_int_to_generic(&self.witness_0).unwrap(),
-            delta_bjj: GenericScalar::new(self.response_div_baby_jub_jub),
-            delta_ed: GenericScalar::new(self.response_div_ed25519),
-        }
-    }
 }
 
 /// Generates initial proofs for the circuit.

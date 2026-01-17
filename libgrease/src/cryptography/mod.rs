@@ -9,10 +9,8 @@
 mod commit;
 
 pub mod adapter_signature;
-pub mod common_types;
 pub mod dleq;
-pub mod hashes;
-pub mod kes_functions;
+pub mod ecdh_encrypt;
 pub mod keys;
 pub mod pok;
 pub mod secret_encryption;
@@ -21,4 +19,5 @@ mod vcof_snark_dleq;
 mod witness;
 pub mod zk_objects;
 
-pub use commit::Commit;
+pub use commit::{Commit, HashCommitment256};
+pub use witness::{ChannelWitness, WitnessError};

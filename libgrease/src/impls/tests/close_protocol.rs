@@ -3,6 +3,7 @@
 //! These tests verify the cooperative channel close flow between initiator and responder.
 
 use crate::channel_id::ChannelId;
+use crate::cryptography::ChannelWitness;
 use crate::grease_protocol::close_channel::{
     ChannelCloseSuccess, CloseFailureReason, CloseProtocolCommon, CloseProtocolError, CloseProtocolInitiator,
     CloseProtocolResponder, RequestChannelClose, RequestCloseFailed,
@@ -10,6 +11,7 @@ use crate::grease_protocol::close_channel::{
 use crate::monero::data_objects::TransactionId;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::XmrScalar;
+use grease_babyjubjub::BabyJubJub;
 use std::str::FromStr;
 
 /// Test implementation of CloseProtocolInitiator
@@ -17,8 +19,8 @@ struct TestCloseInitiator {
     role: ChannelRole,
     channel_id: ChannelId,
     update_count: u64,
-    current_offset: XmrScalar,
-    peer_offset: Option<Vec<u8>>,
+    current_offset: ChannelWitness<BabyJubJub>,
+    peer_offset: Option<ChannelWitness<BabyJubJub>>,
     close_failed: Option<CloseFailureReason>,
 }
 
@@ -28,7 +30,8 @@ impl TestCloseInitiator {
             role,
             channel_id,
             update_count,
-            current_offset: XmrScalar::default(),
+            current_offset: ChannelWitness::<BabyJubJub>::try_from(XmrScalar::default())
+                .expect("default scalar should be valid"),
             peer_offset: None,
             close_failed: None,
         }
@@ -41,7 +44,7 @@ impl HasRole for TestCloseInitiator {
     }
 }
 
-impl CloseProtocolCommon for TestCloseInitiator {
+impl CloseProtocolCommon<BabyJubJub> for TestCloseInitiator {
     fn channel_id(&self) -> ChannelId {
         self.channel_id.clone()
     }
@@ -50,26 +53,30 @@ impl CloseProtocolCommon for TestCloseInitiator {
         self.update_count
     }
 
-    fn current_offset(&self) -> &XmrScalar {
-        &self.current_offset
+    fn current_offset(&self) -> ChannelWitness<BabyJubJub> {
+        self.current_offset
     }
 
-    fn verify_offset(&self, _offset: &[u8], _update_count: u64) -> Result<(), CloseProtocolError> {
+    fn verify_offset(
+        &self,
+        _offset: &ChannelWitness<BabyJubJub>,
+        _update_count: u64,
+    ) -> Result<(), CloseProtocolError> {
         // Mock verification - always succeeds
         Ok(())
     }
 }
 
-impl CloseProtocolInitiator for TestCloseInitiator {
-    fn create_close_request(&self) -> Result<RequestChannelClose, CloseProtocolError> {
+impl CloseProtocolInitiator<BabyJubJub> for TestCloseInitiator {
+    fn create_close_request(&self) -> Result<RequestChannelClose<BabyJubJub>, CloseProtocolError> {
         Ok(RequestChannelClose {
             channel_id: self.channel_id.clone(),
-            offset: vec![0x01, 0x02, 0x03, 0x04], // Mock offset bytes
+            offset: self.current_offset,
             update_count: self.update_count,
         })
     }
 
-    fn handle_close_success(&mut self, response: ChannelCloseSuccess) -> Result<(), CloseProtocolError> {
+    fn handle_close_success(&mut self, response: ChannelCloseSuccess<BabyJubJub>) -> Result<(), CloseProtocolError> {
         if response.channel_id != self.channel_id {
             return Err(CloseProtocolError::InvalidChannelState("channel ID mismatch".into()));
         }
@@ -85,7 +92,10 @@ impl CloseProtocolInitiator for TestCloseInitiator {
         Err(CloseProtocolError::CloseRejected(response.reason))
     }
 
-    fn broadcast_closing_tx(&self, _peer_offset: &[u8]) -> Result<TransactionId, CloseProtocolError> {
+    fn broadcast_closing_tx(
+        &self,
+        _peer_offset: &ChannelWitness<BabyJubJub>,
+    ) -> Result<TransactionId, CloseProtocolError> {
         if self.peer_offset.is_none() {
             return Err(CloseProtocolError::MissingInformation("peer offset not received".into()));
         }
@@ -98,8 +108,8 @@ struct TestCloseResponder {
     role: ChannelRole,
     channel_id: ChannelId,
     update_count: u64,
-    current_offset: XmrScalar,
-    received_request: Option<RequestChannelClose>,
+    current_offset: ChannelWitness<BabyJubJub>,
+    received_request: Option<RequestChannelClose<BabyJubJub>>,
     should_broadcast: bool,
 }
 
@@ -109,7 +119,8 @@ impl TestCloseResponder {
             role,
             channel_id,
             update_count,
-            current_offset: XmrScalar::default(),
+            current_offset: ChannelWitness::<BabyJubJub>::try_from(XmrScalar::default())
+                .expect("default scalar should be valid"),
             received_request: None,
             should_broadcast,
         }
@@ -122,7 +133,7 @@ impl HasRole for TestCloseResponder {
     }
 }
 
-impl CloseProtocolCommon for TestCloseResponder {
+impl CloseProtocolCommon<BabyJubJub> for TestCloseResponder {
     fn channel_id(&self) -> ChannelId {
         self.channel_id.clone()
     }
@@ -131,17 +142,21 @@ impl CloseProtocolCommon for TestCloseResponder {
         self.update_count
     }
 
-    fn current_offset(&self) -> &XmrScalar {
-        &self.current_offset
+    fn current_offset(&self) -> ChannelWitness<BabyJubJub> {
+        self.current_offset
     }
 
-    fn verify_offset(&self, _offset: &[u8], _update_count: u64) -> Result<(), CloseProtocolError> {
+    fn verify_offset(
+        &self,
+        _offset: &ChannelWitness<BabyJubJub>,
+        _update_count: u64,
+    ) -> Result<(), CloseProtocolError> {
         Ok(())
     }
 }
 
-impl CloseProtocolResponder for TestCloseResponder {
-    fn receive_close_request(&mut self, request: RequestChannelClose) -> Result<(), CloseProtocolError> {
+impl CloseProtocolResponder<BabyJubJub> for TestCloseResponder {
+    fn receive_close_request(&mut self, request: RequestChannelClose<BabyJubJub>) -> Result<(), CloseProtocolError> {
         if self.received_request.is_some() {
             return Err(CloseProtocolError::CloseRequestAlreadyReceived);
         }
@@ -161,7 +176,10 @@ impl CloseProtocolResponder for TestCloseResponder {
         Ok(())
     }
 
-    fn sign_and_broadcast(&mut self, _initiator_offset: &[u8]) -> Result<Option<TransactionId>, CloseProtocolError> {
+    fn sign_and_broadcast(
+        &mut self,
+        _initiator_offset: &ChannelWitness<BabyJubJub>,
+    ) -> Result<Option<TransactionId>, CloseProtocolError> {
         if self.received_request.is_none() {
             return Err(CloseProtocolError::NoCloseRequestReceived);
         }
@@ -173,12 +191,8 @@ impl CloseProtocolResponder for TestCloseResponder {
         }
     }
 
-    fn create_success_response(&self, txid: Option<TransactionId>) -> ChannelCloseSuccess {
-        ChannelCloseSuccess {
-            channel_id: self.channel_id.clone(),
-            offset: vec![0x05, 0x06, 0x07, 0x08], // Mock responder offset
-            txid,
-        }
+    fn create_success_response(&self, txid: Option<TransactionId>) -> ChannelCloseSuccess<BabyJubJub> {
+        ChannelCloseSuccess { channel_id: self.channel_id.clone(), offset: self.current_offset, txid }
     }
 
     fn create_failure_response(&self, reason: CloseFailureReason) -> RequestCloseFailed {
@@ -190,6 +204,10 @@ fn test_channel_id() -> ChannelId {
     ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap()
 }
 
+fn test_witness() -> ChannelWitness<BabyJubJub> {
+    ChannelWitness::<BabyJubJub>::try_from(XmrScalar::default()).expect("default scalar should be valid")
+}
+
 #[test]
 fn test_create_close_request() {
     let channel_id = test_channel_id();
@@ -199,7 +217,6 @@ fn test_create_close_request() {
 
     assert_eq!(request.channel_id, channel_id);
     assert_eq!(request.update_count, 5);
-    assert!(!request.offset.is_empty());
 }
 
 #[test]
@@ -227,7 +244,8 @@ fn test_cooperative_close_success_initiator_broadcasts() {
     assert!(initiator.peer_offset.is_some());
 
     // 6. Initiator broadcasts
-    let final_txid = initiator.broadcast_closing_tx(&[]).expect("should broadcast");
+    let peer_offset = initiator.peer_offset.as_ref().unwrap();
+    let final_txid = initiator.broadcast_closing_tx(peer_offset).expect("should broadcast");
     assert!(!final_txid.id.is_empty());
 }
 
@@ -266,7 +284,10 @@ fn test_close_update_count_mismatch() {
     let request = initiator.create_close_request().expect("should create request");
 
     let result = responder.receive_close_request(request);
-    assert!(matches!(result, Err(CloseProtocolError::UpdateCountMismatch { expected: 10, actual: 5 })));
+    assert!(matches!(
+        result,
+        Err(CloseProtocolError::UpdateCountMismatch { expected: 10, actual: 5 })
+    ));
 }
 
 #[test]
@@ -308,7 +329,7 @@ fn test_sign_without_request_fails() {
     let channel_id = test_channel_id();
     let mut responder = TestCloseResponder::new(ChannelRole::Merchant, channel_id, 5, false);
 
-    let result = responder.sign_and_broadcast(&[1, 2, 3]);
+    let result = responder.sign_and_broadcast(&test_witness());
     assert!(matches!(result, Err(CloseProtocolError::NoCloseRequestReceived)));
 }
 
@@ -317,7 +338,7 @@ fn test_broadcast_without_peer_offset_fails() {
     let channel_id = test_channel_id();
     let initiator = TestCloseInitiator::new(ChannelRole::Customer, channel_id, 5);
 
-    let result = initiator.broadcast_closing_tx(&[]);
+    let result = initiator.broadcast_closing_tx(&test_witness());
     assert!(matches!(result, Err(CloseProtocolError::MissingInformation(_))));
 }
 
@@ -340,28 +361,28 @@ fn test_close_failure_reason_display() {
 #[test]
 fn test_close_request_serialization() {
     let channel_id = test_channel_id();
-    let request = RequestChannelClose { channel_id: channel_id.clone(), offset: vec![0x01, 0x02, 0x03], update_count: 42 };
+    let request =
+        RequestChannelClose::<BabyJubJub> { channel_id: channel_id.clone(), offset: test_witness(), update_count: 42 };
 
     // Test serialization roundtrip
     let serialized = ron::to_string(&request).expect("should serialize");
-    let deserialized: RequestChannelClose = ron::from_str(&serialized).expect("should deserialize");
+    let deserialized: RequestChannelClose<BabyJubJub> = ron::from_str(&serialized).expect("should deserialize");
 
     assert_eq!(deserialized.channel_id, channel_id);
     assert_eq!(deserialized.update_count, 42);
-    assert_eq!(deserialized.offset, vec![0x01, 0x02, 0x03]);
 }
 
 #[test]
 fn test_close_success_serialization() {
     let channel_id = test_channel_id();
-    let success = ChannelCloseSuccess {
+    let success = ChannelCloseSuccess::<BabyJubJub> {
         channel_id: channel_id.clone(),
-        offset: vec![0x04, 0x05, 0x06],
+        offset: test_witness(),
         txid: Some(TransactionId { id: "test_txid".to_string() }),
     };
 
     let serialized = ron::to_string(&success).expect("should serialize");
-    let deserialized: ChannelCloseSuccess = ron::from_str(&serialized).expect("should deserialize");
+    let deserialized: ChannelCloseSuccess<BabyJubJub> = ron::from_str(&serialized).expect("should deserialize");
 
     assert_eq!(deserialized.channel_id, channel_id);
     assert!(deserialized.txid.is_some());
@@ -388,6 +409,6 @@ fn test_verify_offset_called() {
     let initiator = TestCloseInitiator::new(ChannelRole::Customer, channel_id, 5);
 
     // Verify offset should succeed with mock
-    let result = initiator.verify_offset(&[1, 2, 3], 5);
+    let result = initiator.verify_offset(&test_witness(), 5);
     assert!(result.is_ok());
 }

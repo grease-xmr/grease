@@ -1,8 +1,8 @@
 use crate::config::{default_config_path, GlobalOptions, IdCommand};
 use crate::error::ServerError;
 use anyhow::anyhow;
+use ciphersuite::{Ciphersuite, Ed25519};
 use grease_p2p::{ConversationIdentity, KeyManager};
-use libgrease::cryptography::hashes::{Blake512, HashToScalar};
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
@@ -35,11 +35,12 @@ impl KeyManager for MoneroKeyManager {
     /// # Returns
     /// A tuple containing the derived secret key and its corresponding public key.
     fn new_keypair(&self, index: u64) -> (Curve25519Secret, Curve25519PublicKey) {
+        const DST: &[u8; 16] = b"GreaseCLIKeyPair";
         let secret = self.initial_key.as_scalar().as_bytes();
         let mut buf = [0u8; 40];
         buf[0..32].copy_from_slice(secret);
         buf[32..40].copy_from_slice(&index.to_le_bytes());
-        let scalar = Blake512.hash_to_scalar(buf);
+        let scalar = Ed25519::hash_to_F(DST, &buf);
         let next_key = Curve25519Secret::from(scalar);
         let next_public_key = Curve25519PublicKey::from_secret(&next_key);
         (next_key, next_public_key)

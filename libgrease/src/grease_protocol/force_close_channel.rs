@@ -4,16 +4,21 @@
 //! including dispute mechanisms when parties disagree on the channel state.
 
 use crate::channel_id::ChannelId;
+use crate::cryptography::adapter_signature::SchnorrSignature;
 use crate::cryptography::keys::Curve25519PublicKey;
+use crate::cryptography::ChannelWitness;
+use crate::helpers::Timestamp;
 use crate::monero::data_objects::TransactionId;
 use crate::payment_channel::HasRole;
 use crate::XmrScalar;
+use ciphersuite::Ciphersuite;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
 
 /// Request to initiate a force close via the KES.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForceCloseRequest {
+pub struct ForceCloseRequest<K: Ciphersuite> {
     /// The channel being force closed
     pub channel_id: ChannelId,
     /// Public key of the claimant
@@ -23,34 +28,32 @@ pub struct ForceCloseRequest {
     /// The update count claimed by the claimant
     pub update_count_claimed: u64,
     /// Signature over the request
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    pub signature: Vec<u8>,
+    pub signature: SchnorrSignature<K>,
 }
 
 /// Response to a force close request from the KES.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ForceCloseResponse {
     /// The force close request was accepted
-    Accepted { dispute_window_end: u64 },
+    Accepted { dispute_window_end: Timestamp },
     /// The force close request was rejected
     Rejected { reason: String },
 }
 
-/// Request to claim channel funds after the dispute window.
+/// Request to claim channel funds after the dispute window closes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaimChannelRequest {
+pub struct ClaimChannelRequest<K: Ciphersuite> {
     /// The channel being claimed
     pub channel_id: ChannelId,
     /// Public key of the claimant
     pub claimant: Curve25519PublicKey,
     /// Signature over the request
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    pub signature: Vec<u8>,
+    pub signature: SchnorrSignature<K>,
 }
 
 /// Request for consensus close (defendant agrees with claimed state).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsensusCloseRequest {
+pub struct ConsensusCloseRequest<SF: Ciphersuite, K: Ciphersuite> {
     /// The channel being closed
     pub channel_id: ChannelId,
     /// Public key of the claimant
@@ -59,12 +62,10 @@ pub struct ConsensusCloseRequest {
     pub defendant: Curve25519PublicKey,
     /// The update count (agreed upon)
     pub update_count_claimed: u64,
-    /// Encrypted offset from the defendant
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    pub encrypted_offset: Vec<u8>,
-    /// Defendant's signature
-    #[serde(serialize_with = "crate::helpers::to_hex", deserialize_with = "crate::helpers::from_hex")]
-    pub signature: Vec<u8>,
+    /// Encrypted offset from the defendant (SNARK-friendly curve)
+    pub encrypted_offset: ChannelWitness<SF>,
+    /// Defendant's signature (signing curve)
+    pub signature: SchnorrSignature<K>,
 }
 
 /// Dispute when the defendant has a more recent state.
@@ -88,9 +89,9 @@ pub struct DisputeChannelState {
 
 /// Resolution of a dispute.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DisputeResolution {
+pub enum DisputeResolution<SF: Ciphersuite> {
     /// The claimant won (defendant didn't respond or dispute failed)
-    ClaimantWins { encrypted_offset: Vec<u8> },
+    ClaimantWins { encrypted_offset: ChannelWitness<SF> },
     /// The defendant won (proved more recent state)
     DefendantWins { penalty_applied: bool },
 }
@@ -105,7 +106,7 @@ pub struct PendingChannelClose {
     /// The update count claimed
     pub update_count_claimed: u64,
     /// When the dispute window ends (unix timestamp)
-    pub dispute_window_end: u64,
+    pub dispute_window_end: Timestamp,
 }
 
 /// Status of a pending close operation.
@@ -128,7 +129,7 @@ pub enum PendingCloseStatus {
 }
 
 /// Common functionality shared by both claimant and defendant.
-pub trait ForceCloseProtocolCommon: HasRole {
+pub trait ForceCloseProtocolCommon<K: Ciphersuite>: HasRole {
     /// Returns the channel ID.
     fn channel_id(&self) -> ChannelId;
 
@@ -138,37 +139,41 @@ pub trait ForceCloseProtocolCommon: HasRole {
     /// Returns the peer's public key.
     fn peer_public_key(&self) -> &Curve25519PublicKey;
 
-    /// Returns the dispute window duration in seconds.
-    fn dispute_window_secs(&self) -> u64;
+    /// Returns the dispute window duration.
+    fn dispute_window(&self) -> Duration;
 
     /// Returns the current update count.
     fn update_count(&self) -> u64;
 
     /// Sign a message for KES interaction.
-    fn sign_for_kes(&self, message: &[u8]) -> Result<Vec<u8>, ForceCloseProtocolError>;
+    fn sign_for_kes(&self, message: &[u8]) -> Result<SchnorrSignature<K>, ForceCloseProtocolError>;
 
     /// Verify a signature from the peer.
-    fn verify_peer_signature(&self, message: &[u8], sig: &[u8]) -> Result<(), ForceCloseProtocolError>;
+    fn verify_peer_signature(&self, message: &[u8], sig: &SchnorrSignature<K>) -> Result<(), ForceCloseProtocolError>;
 }
 
 /// Protocol trait for the force close claimant.
 ///
 /// The claimant initiates a force close when they cannot get a cooperative
 /// close from their peer.
-pub trait ForceCloseProtocolClaimant: ForceCloseProtocolCommon {
+pub trait ForceCloseProtocolClaimant<SF, K>: ForceCloseProtocolCommon<K>
+where
+    SF: Ciphersuite,
+    K: Ciphersuite,
+{
     /// Create a force close request to send to the KES.
-    fn create_force_close_request(&self) -> Result<ForceCloseRequest, ForceCloseProtocolError>;
+    fn create_force_close_request(&self) -> Result<ForceCloseRequest<K>, ForceCloseProtocolError>;
 
     /// Handle the response from the KES to the force close request.
     fn handle_force_close_response(&mut self, response: ForceCloseResponse) -> Result<(), ForceCloseProtocolError>;
 
     /// Create a claim request after the dispute window has passed.
-    fn create_claim_request(&self) -> Result<ClaimChannelRequest, ForceCloseProtocolError>;
+    fn create_claim_request(&self) -> Result<ClaimChannelRequest<K>, ForceCloseProtocolError>;
 
     /// Process the encrypted offset received from the KES.
     ///
     /// Returns the decrypted offset needed to complete the closing transaction.
-    fn process_claimed_offset(&mut self, encrypted: &[u8]) -> Result<XmrScalar, ForceCloseProtocolError>;
+    fn process_claimed_offset(&mut self, encrypted: &[u8]) -> Result<ChannelWitness<SF>, ForceCloseProtocolError>;
 
     /// Complete the closing transaction with the peer's offset.
     fn complete_closing_tx(&self, peer_offset: &XmrScalar) -> Result<Vec<u8>, ForceCloseProtocolError>;
@@ -181,7 +186,11 @@ pub trait ForceCloseProtocolClaimant: ForceCloseProtocolCommon {
 ///
 /// The defendant receives notification of a force close and can either
 /// agree (consensus close) or dispute with a more recent state.
-pub trait ForceCloseProtocolDefendant: ForceCloseProtocolCommon {
+pub trait ForceCloseProtocolDefendant<SF, K>: ForceCloseProtocolCommon<K>
+where
+    SF: Ciphersuite,
+    K: Ciphersuite,
+{
     /// Receive notification of a pending force close.
     fn receive_force_close_notification(&mut self, notif: PendingChannelClose) -> Result<(), ForceCloseProtocolError>;
 
@@ -189,13 +198,13 @@ pub trait ForceCloseProtocolDefendant: ForceCloseProtocolCommon {
     fn has_more_recent_state(&self, claimed_count: u64) -> bool;
 
     /// Create a consensus close request (agree with the claimed state).
-    fn create_consensus_close(&self) -> Result<ConsensusCloseRequest, ForceCloseProtocolError>;
+    fn create_consensus_close(&self) -> Result<ConsensusCloseRequest<SF, K>, ForceCloseProtocolError>;
 
     /// Create a dispute to prove a more recent state.
     fn create_dispute(&self) -> Result<DisputeChannelState, ForceCloseProtocolError>;
 
     /// Handle the resolution of a dispute.
-    fn handle_dispute_resolution(&mut self, resolution: DisputeResolution) -> Result<(), ForceCloseProtocolError>;
+    fn handle_dispute_resolution(&mut self, resolution: DisputeResolution<SF>) -> Result<(), ForceCloseProtocolError>;
 }
 
 /// Errors that can occur during the force close protocol.

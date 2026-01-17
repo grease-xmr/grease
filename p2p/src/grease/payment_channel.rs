@@ -241,16 +241,14 @@ impl PaymentChannel {
     fn on_my_proof0(&mut self, _proof: Proofs0) -> Result<(), LifeCycleError> {
         // Proof0 data is no longer stored in the state machine.
         // The proof is used externally during the establish protocol.
-        self.update_establishing(|establishing| {
-            match establishing.next() {
-                Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after saving witness0 proof");
-                    Ok(established.to_channel_state())
-                }
-                Err((establishing, err)) => {
-                    trace!("⚡️  Staying in establishing state: {err}");
-                    Ok(establishing.to_channel_state())
-                }
+        self.update_establishing(|establishing| match establishing.next() {
+            Ok(established) => {
+                debug!("⚡️  Transitioned to Established state after saving witness0 proof");
+                Ok(established.to_channel_state())
+            }
+            Err((establishing, err)) => {
+                trace!("⚡️  Staying in establishing state: {err}");
+                Ok(establishing.to_channel_state())
             }
         })
     }
@@ -258,16 +256,14 @@ impl PaymentChannel {
     fn on_peer_proof0(&mut self, _peer_proof: PublicProof0) -> Result<(), LifeCycleError> {
         // Peer proof0 data is no longer stored in the state machine.
         // The proof is used externally during the establish protocol.
-        self.update_establishing(|establishing| {
-            match establishing.next() {
-                Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after receiving peer's proof0");
-                    Ok(established.to_channel_state())
-                }
-                Err((establishing, err)) => {
-                    trace!("⚡️  Staying in establishing state: {err}");
-                    Ok(establishing.to_channel_state())
-                }
+        self.update_establishing(|establishing| match establishing.next() {
+            Ok(established) => {
+                debug!("⚡️  Transitioned to Established state after receiving peer's proof0");
+                Ok(established.to_channel_state())
+            }
+            Err((establishing, err)) => {
+                trace!("⚡️  Staying in establishing state: {err}");
+                Ok(establishing.to_channel_state())
             }
         })
     }
@@ -275,16 +271,14 @@ impl PaymentChannel {
     fn on_kes_shards(&mut self, _shards: ShardInfo) -> Result<(), LifeCycleError> {
         // KES shards are no longer stored in the state machine.
         // The shards are handled externally by the KES client.
-        self.update_establishing(|establishing| {
-            match establishing.next() {
-                Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after receiving KES shards");
-                    Ok(established.to_channel_state())
-                }
-                Err((establishing, err)) => {
-                    trace!("⚡️  Staying in establishing state: {err}");
-                    Ok(establishing.to_channel_state())
-                }
+        self.update_establishing(|establishing| match establishing.next() {
+            Ok(established) => {
+                debug!("⚡️  Transitioned to Established state after receiving KES shards");
+                Ok(established.to_channel_state())
+            }
+            Err((establishing, err)) => {
+                trace!("⚡️  Staying in establishing state: {err}");
+                Ok(establishing.to_channel_state())
             }
         })
     }
@@ -506,7 +500,6 @@ mod test {
         Comm0PrivateOutputs, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicProof0,
         ShardInfo, UpdateProofs,
     };
-    use libgrease::{Field, XmrScalar};
     use libgrease::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
     use libgrease::multisig::MultisigWalletData;
     use libgrease::payment_channel::ChannelRole;
@@ -514,6 +507,7 @@ mod test {
     use libgrease::state_machine::{
         ChannelCloseRecord, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord,
     };
+    use libgrease::{Field, XmrScalar};
     use libp2p::{Multiaddr, PeerId};
     use monero::{Address, Network};
     use std::str::FromStr;

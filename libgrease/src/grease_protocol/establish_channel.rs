@@ -5,11 +5,10 @@
 //! adapter signatures, and interact with the KES for offset encryption.
 
 use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::dleq::{Dleq, DleqProof};
+use crate::cryptography::dleq::{Dleq, DleqError, DleqProof};
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::cryptography::Commit;
 use crate::error::ReadError;
-use crate::grease_protocol::error::DleqError;
 use crate::grease_protocol::kes::KesClient;
 use crate::grease_protocol::multisig_wallet::{LinkedMultisigWallets, MultisigWalletError};
 use crate::grease_protocol::utils::Readable;
@@ -23,17 +22,26 @@ use std::io::Read;
 use thiserror::Error;
 
 /// Provides information about a peer in the establish channel protocol.
-pub trait PeerInfo<C>
+pub trait PeerInfo<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
-    fn peer_dleq_proof(&self) -> Option<&DleqProof<C, Ed25519>>;
+    /// Returns the peer's public key for this channel
     fn peer_public_key(&self) -> Option<Curve25519PublicKey>;
+
+    /// Returns the peer's DLEQ proof if available.
+    fn peer_dleq_proof(&self) -> Option<&DleqProof<SF, Ed25519>>;
+
+    /// If available, returns the adapted signature for the initial commitment transaction.
     fn peer_adapted_signature(&self) -> Option<&AdaptedSignature<Ed25519>>;
 
     /// Verify that the adaptor signature offset given to the KES.
     ///
+    /// TODO: It's possible that the VCOF could be replaced by something without a DLEQ proof.
+    /// So we should not explicitly check DLEQ proofs here, but delegate it to the VCOF implementation.
+    ///
+    /// Under the hood, the following still remains true:
     /// Each peer needs to verify that the value that the counterparty gave to the KES is in fact ω0.
     ///
     /// This is done in three steps:
@@ -56,18 +64,7 @@ where
             ));
         }
         trace!("VALID: Peer's adapted signature is valid.");
-        let proof =
-            self.peer_dleq_proof().ok_or_else(|| EstablishProtocolError::MissingInformation("DLEQ proof".into()))?;
-        proof.verify()?;
-        trace!("VALID: Peer's DLEQ proof is valid.");
-
-        let q_ed25519 = sig.adapter_commitment();
-        if proof.xmr_point != q_ed25519 {
-            return Err(EstablishProtocolError::InvalidDataFromPeer(
-                "DLEQ proof XMR point does not match adapted signature commitment".into(),
-            ));
-        }
-        trace!("VALID: Peer's DLEQ proof XMR point matches adapted signature commitment.");
+        todo!("delegate DLEQ proof verification to VCOF implementation");
         debug!("✅ Adapter signature offset verified successfully.");
         Ok(())
     }
@@ -77,14 +74,14 @@ where
 ///
 /// This trait defines the core operations shared by both merchant and customer
 /// during the channel establishment phase.
-pub trait EstablishProtocolCommon<C, D>: Sized + HasRole
+pub trait EstablishProtocolCommon<SF, D>: Sized + HasRole
 where
-    C: FrostCurve,
+    SF: FrostCurve,
     D: SecureDigest,
-    Ed25519: Dleq<C>,
+    Ed25519: Dleq<SF>,
 {
     type MultisigWallet: LinkedMultisigWallets<D>;
-    type KesClient: KesClient<C>;
+    type KesClient: KesClient<SF>;
 
     /// Start a new channel establishment protocol.
     fn new<R: RngCore + CryptoRng>(rng: &mut R, role: ChannelRole) -> Self;
@@ -93,7 +90,7 @@ where
     fn initialize_kes_client<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-        kes_pubkey: C::G,
+        kes_pubkey: SF::G,
     ) -> Result<(), EstablishProtocolError>;
 
     fn kes_client(&self) -> Result<&Self::KesClient, EstablishProtocolError>;
@@ -105,7 +102,7 @@ where
     fn wallet_mut(&mut self) -> &mut Self::MultisigWallet;
 
     /// Read the peer's shared public key (includes role) from the given reader and store it.
-    fn read_peer_shared_public_key<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_peer_shared_public_key<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let shared_pubkey = <Self::MultisigWallet as LinkedMultisigWallets<D>>::SharedKeyType::read(reader)?;
         if shared_pubkey.role() == self.role() {
             return Err(EstablishProtocolError::InvalidDataFromPeer(format!(
@@ -119,7 +116,7 @@ where
     }
 
     /// Read the peer's adapted signature from the given reader and store it.
-    fn read_peer_adapted_signature<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_peer_adapted_signature<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let adapted_signature = AdaptedSignature::<Ed25519>::read(reader)?;
         self.set_peer_adapted_signature(adapted_signature);
         Ok(())
@@ -130,42 +127,35 @@ where
     /// This is usually not called directly, but rather through [`read_peer_adapted_signature`].
     fn set_peer_adapted_signature(&mut self, adapted_signature: AdaptedSignature<Ed25519>);
 
-    /// Read the peer's DLEQ proof from the given reader and store it.
-    fn read_peer_dleq_proof<R: Read>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
-        let dleq_proof = DleqProof::<C, Ed25519>::read(reader)?;
-        self.set_peer_dleq_proof(dleq_proof);
-        Ok(())
-    }
-
     /// Set the peer's DLEQ proof.
-    ///
-    /// This is usually not called directly, but rather through [`read_peer_dleq_proof`].
-    fn set_peer_dleq_proof(&mut self, dleq_proof: DleqProof<C, Ed25519>);
+    fn set_peer_dleq_proof(&mut self, dleq_proof: DleqProof<SF, Ed25519>);
 }
 
 /// Merchant-specific requirements for the channel establishment protocol.
-pub trait EstablishProtocolMerchant<C, D>: EstablishProtocolCommon<C, D>
+pub trait EstablishProtocolMerchant<SF, D>: EstablishProtocolCommon<SF, D>
 where
-    C: FrostCurve,
+    SF: FrostCurve,
     D: SecureDigest,
-    Ed25519: Dleq<C>,
+    Ed25519: Dleq<SF>,
 {
 }
 
 /// Customer-specific requirements for the channel establishment protocol.
-pub trait EstablishProtocolCustomer<C, D>: EstablishProtocolCommon<C, D>
+pub trait EstablishProtocolCustomer<SF, D>: EstablishProtocolCommon<SF, D>
 where
-    C: FrostCurve,
+    SF: FrostCurve,
     D: SecureDigest,
-    Ed25519: Dleq<C>,
+    Ed25519: Dleq<SF>,
 {
-    fn read_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    /// Read the peer's public key commitment from the given reader and store it.
+    fn store_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let commitment =
-            <<<Self as EstablishProtocolCommon<C, D>>::MultisigWallet as LinkedMultisigWallets<D>>::SharedKeyType as Commit<D>>::Committed::read(reader)?;
+            <<<Self as EstablishProtocolCommon<SF, D>>::MultisigWallet as LinkedMultisigWallets<D>>::SharedKeyType as Commit<D>>::Committed::read(reader)?;
         self.wallet_mut().set_peer_public_key_commitment(commitment);
         Ok(())
     }
 
+    /// Verify that the merchant's public key matches the previously stored committed value.
     fn verify_merchant_public_key(&self) -> Result<(), EstablishProtocolError> {
         let merchant_pubkey = self.wallet().peer_shared_public_key()?;
         let commitment = self.wallet().peer_public_key_commitment()?;

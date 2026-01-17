@@ -106,18 +106,18 @@ macro_rules! lifecycle_impl {
 
 /// The channel state enum representing all possible lifecycle states.
 ///
-/// The generic parameter `C` specifies the FROST curve used for DLEQ proofs and KES
+/// The generic parameter `SF` specifies the SNARK-friendly curve used for DLEQ proofs and KES
 /// operations in the Establishing state. Use [`DefaultChannelState`] for the standard
 /// BabyJubJub curve.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub enum ChannelState<C = grease_babyjubjub::BabyJubJub>
+pub enum ChannelState<SF = grease_babyjubjub::BabyJubJub>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     New(NewChannelState),
-    Establishing(EstablishingState<C>),
+    Establishing(EstablishingState<SF>),
     Open(EstablishedChannelState),
     Closing(ClosingChannelState),
     Disputing(DisputingChannelState),
@@ -127,20 +127,20 @@ where
 /// Type alias for the default curve type (BabyJubJub).
 pub type DefaultChannelState = ChannelState<grease_babyjubjub::BabyJubJub>;
 
-impl<C> Debug for ChannelState<C>
+impl<SF> Debug for ChannelState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.stage())
     }
 }
 
-impl<C> ChannelState<C>
+impl<SF> ChannelState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     pub fn as_lifecycle(&self) -> &dyn LifeCycle {
         match self {
@@ -162,14 +162,14 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_establishing(self) -> Result<EstablishingState<C>, (Self, LifeCycleError)> {
+    pub fn to_establishing(self) -> Result<EstablishingState<SF>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Establishing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected EstablishingState"))),
         }
     }
 
-    pub fn as_establishing(&self) -> Result<&EstablishingState<C>, LifeCycleError> {
+    pub fn as_establishing(&self) -> Result<&EstablishingState<SF>, LifeCycleError> {
         match self {
             ChannelState::Establishing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected EstablishingState")),
@@ -230,10 +230,10 @@ where
     }
 }
 
-impl<C> LifeCycle for ChannelState<C>
+impl<SF> LifeCycle for ChannelState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn stage(&self) -> LifecycleStage {
         self.as_lifecycle().stage()
@@ -257,7 +257,6 @@ pub mod test {
     use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
     use crate::cryptography::zk_objects::{KesProof, PrivateUpdateOutputs, PublicUpdateOutputs, UpdateProofs};
     use crate::grease_protocol::establish_channel::EstablishProtocolCommon;
-    use ciphersuite::{group::Group, Ciphersuite};
     use crate::monero::data_objects::{ClosingAddresses, TransactionId, TransactionRecord};
     use crate::multisig::MultisigWalletData;
     use crate::payment_channel::ChannelRole;
@@ -267,6 +266,7 @@ pub mod test {
     use crate::state_machine::{ChannelCloseRecord, ChannelSeedBuilder, NewChannelProposal, NewChannelState};
     use crate::XmrScalar;
     use ciphersuite::Ed25519;
+    use ciphersuite::{group::Group, Ciphersuite};
     use k256::elliptic_curve::Field;
     use log::*;
     use monero::Network;

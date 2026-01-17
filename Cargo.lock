@@ -1826,6 +1826,7 @@ name = "e2e"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ciphersuite",
  "cucumber",
  "dotenvy",
  "env_logger",
@@ -2455,6 +2456,7 @@ name = "grease-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ciphersuite",
  "clap",
  "dialoguer",
  "env_logger",
@@ -3295,6 +3297,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "blake2",
+ "chrono",
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group",
@@ -3313,6 +3316,7 @@ dependencies = [
  "rand_core 0.6.4",
  "ron",
  "serde",
+ "serde_json",
  "sha3",
  "subtle",
  "thiserror 2.0.17",

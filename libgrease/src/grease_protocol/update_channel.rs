@@ -4,9 +4,9 @@
 //! new balances, VCOF proofs, and adapter signatures to update the channel state.
 
 use crate::cryptography::adapter_signature::AdaptedSignature;
+use crate::cryptography::dleq::DleqError;
 use crate::cryptography::vcof::{VcofError, VerifiableConsecutiveOnewayFunction};
 use crate::grease_protocol::adapter_signature::{AdapterSignatureError, AdapterSignatureHandler};
-use crate::grease_protocol::error::DleqError;
 use crate::payment_channel::HasRole;
 use async_trait::async_trait;
 use ciphersuite::Ed25519;
@@ -30,8 +30,8 @@ pub struct UpdatePackage {
 
 /// Common functionality shared by both update proposer and proposee.
 #[async_trait]
-pub trait UpdateProtocolCommon<C: FrostCurve>: HasRole + AdapterSignatureHandler + Send + Sync {
-    type VCOF: VerifiableConsecutiveOnewayFunction<C>;
+pub trait UpdateProtocolCommon<SF: FrostCurve>: HasRole + AdapterSignatureHandler + Send + Sync {
+    type VCOF: VerifiableConsecutiveOnewayFunction<SF>;
 
     /// Returns a reference to the VCOF instance.
     fn vcof(&self) -> &Self::VCOF;
@@ -60,8 +60,8 @@ pub trait UpdateProtocolCommon<C: FrostCurve>: HasRole + AdapterSignatureHandler
     async fn verify_vcof_proof(
         &self,
         proof: &[u8],
-        peer_q_prev: &C::G,
-        peer_q_curr: &C::G,
+        peer_q_prev: &SF::G,
+        peer_q_curr: &SF::G,
     ) -> Result<(), UpdateProtocolError>;
 
     /// Verify the peer's adapted signature.
@@ -77,7 +77,7 @@ pub trait UpdateProtocolCommon<C: FrostCurve>: HasRole + AdapterSignatureHandler
 /// The proposer initiates a channel update by specifying a balance delta,
 /// generating necessary cryptographic material, and finalizing after receiving
 /// the peer's response.
-pub trait UpdateProtocolProposer<C: FrostCurve>: UpdateProtocolCommon<C> {
+pub trait UpdateProtocolProposer<SF: FrostCurve>: UpdateProtocolCommon<SF> {
     /// Initiate a channel update with the given balance delta.
     ///
     /// A positive delta transfers funds from customer to merchant,
@@ -112,7 +112,7 @@ pub trait UpdateProtocolProposer<C: FrostCurve>: UpdateProtocolCommon<C> {
 ///
 /// The proposee receives update requests, validates them, and responds
 /// with their own cryptographic material.
-pub trait UpdateProtocolProposee<C: FrostCurve>: UpdateProtocolCommon<C> {
+pub trait UpdateProtocolProposee<SF: FrostCurve>: UpdateProtocolCommon<SF> {
     /// Receive and validate an update request from the proposer.
     fn receive_update_request(&mut self, delta: i64) -> Result<(), UpdateProtocolError>;
 

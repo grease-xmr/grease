@@ -1,9 +1,8 @@
 use crate::XmrScalar;
-use ciphersuite::group::ff::PrimeField;
-use std::time::Duration;
-
 use chrono::{DateTime, TimeZone, Utc};
+use ciphersuite::group::ff::PrimeField;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::time::Duration;
 
 pub fn to_hex<S>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error>
 where

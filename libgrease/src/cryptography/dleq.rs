@@ -1,5 +1,4 @@
 use crate::error::ReadError;
-use crate::grease_protocol::error::DleqError;
 use crate::grease_protocol::utils::write_group_element;
 use blake2::Blake2b512;
 use ciphersuite::group::ff::Field;
@@ -17,6 +16,7 @@ use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use std::io;
 use std::io::{Read, Write};
+use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone)]
@@ -37,19 +37,19 @@ impl Writable for EdSchnorrSignature {
     }
 }
 
-pub type DleqResult<C> = (<Ed25519 as Dleq<C>>::Proof, (XmrScalar, <C as Ciphersuite>::F));
-pub trait Dleq<C: Curve>: Curve {
+pub type DleqResult<SF> = (<Ed25519 as Dleq<SF>>::Proof, (XmrScalar, <SF as Ciphersuite>::F));
+pub trait Dleq<SF: Curve>: Curve {
     type Proof: Clone + Writable;
 
     /// Generate a new set of scalars (x, y) such that they are equivalent on both curves, in a sense that they stem
     /// from the same binary representation. Returns the proof and the scalars (x, y).
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-    ) -> Result<(Self::Proof, (XmrScalar, <C as Ciphersuite>::F)), DleqError>;
+    ) -> Result<(Self::Proof, (XmrScalar, <SF as Ciphersuite>::F)), DleqError>;
 
     /// Verify that the provided proof shows that the discrete log of p1 on Ed25519 is the same as the discrete log
-    /// of p2 on curve C, AND that the prover possesses knowledge of both discrete logs.
-    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<C as Ciphersuite>::G) -> Result<(), DleqError>;
+    /// of p2 on curve SF, AND that the prover possesses knowledge of both discrete logs.
+    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<SF as Ciphersuite>::G) -> Result<(), DleqError>;
 
     /// Read the proof from a reader
     fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError>;
@@ -229,20 +229,20 @@ fn ownership_challenge(nonce_pub: &XmrPoint, public_point: &XmrPoint) -> XmrScal
 }
 
 #[derive(Clone)]
-pub struct DleqProof<C, D>
+pub struct DleqProof<SF, D>
 where
-    C: Curve,
-    D: Dleq<C>,
+    SF: Curve,
+    D: Dleq<SF>,
 {
     pub proof: D::Proof,
     pub xmr_point: XmrPoint,
-    pub foreign_point: <C as Ciphersuite>::G,
+    pub foreign_point: <SF as Ciphersuite>::G,
 }
 
-impl<C, D> std::fmt::Debug for DleqProof<C, D>
+impl<SF, D> std::fmt::Debug for DleqProof<SF, D>
 where
-    C: Curve,
-    D: Dleq<C>,
+    SF: Curve,
+    D: Dleq<SF>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DleqProof")
@@ -252,12 +252,12 @@ where
     }
 }
 
-impl<C, D> DleqProof<C, D>
+impl<SF, D> DleqProof<SF, D>
 where
-    C: Curve,
-    D: Dleq<C>,
+    SF: Curve,
+    D: Dleq<SF>,
 {
-    pub fn new(proof: D::Proof, xmr_point: XmrPoint, foreign_point: <C as Ciphersuite>::G) -> Self {
+    pub fn new(proof: D::Proof, xmr_point: XmrPoint, foreign_point: <SF as Ciphersuite>::G) -> Self {
         Self { proof, xmr_point, foreign_point }
     }
 
@@ -266,33 +266,47 @@ where
     }
 
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
-        let proof =
-            D::read(reader).map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read proof: {}", e)))?;
+        let proof = D::read(reader).map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read proof: {e}")))?;
         let xmr_point = crate::grease_protocol::utils::read_group_element::<Ed25519, R>(reader)
-            .map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read XMR point: {}", e)))?;
-        let foreign_point = crate::grease_protocol::utils::read_group_element::<C, R>(reader)
-            .map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read foreign point: {}", e)))?;
+            .map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read XMR point: {e}")))?;
+        let foreign_point = crate::grease_protocol::utils::read_group_element::<SF, R>(reader)
+            .map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read foreign point: {e}")))?;
         Ok(DleqProof { proof, xmr_point, foreign_point })
     }
 }
 
-impl<C, D> Writable for DleqProof<C, D>
+impl<SF, D> Writable for DleqProof<SF, D>
 where
-    C: Curve,
-    D: Dleq<C>,
+    SF: Curve,
+    D: Dleq<SF>,
 {
     fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         self.proof.write(writer)?;
         write_group_element::<Ed25519, W>(writer, &self.xmr_point)?;
-        write_group_element::<C, W>(writer, &self.foreign_point)?;
+        write_group_element::<SF, W>(writer, &self.foreign_point)?;
         Ok(())
     }
 }
 
+#[derive(Debug, Error)]
+pub enum DleqError {
+    #[error("The provided scalar cannot be represented as a scalar on the Ed25519 curve.")]
+    InvalidEd25519Scalar,
+    #[error("The provided scalar cannot be represented as a field element on the Foreign curve.")]
+    InvalidForeignFieldElement,
+    #[error("The ED25519 scalar cannot be represented on the Foreign curve.")]
+    Ed25519ScalarTooLarge,
+    #[error("An equivalent Foreign and Ed25519 representation could not be found during initial witness generation.")]
+    InitializationFailure,
+    #[error("DLEQ proof verification failed.")]
+    VerificationFailure,
+    #[error("I/O error occurred during reading data.")]
+    ReadError(#[from] std::io::Error),
+}
+
 #[cfg(test)]
 mod test {
-    use crate::cryptography::dleq::Dleq;
-    use crate::grease_protocol::error::DleqError;
+    use crate::cryptography::dleq::{Dleq, DleqError};
     use ciphersuite::group::ff::PrimeFieldBits;
     use ciphersuite::group::GroupEncoding;
     use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};

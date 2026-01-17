@@ -34,14 +34,14 @@ use std::marker::PhantomData;
 /// operations needed during channel establishment including wallet key exchange,
 /// KES client setup, and adapter signature verification.
 ///
-/// The generic parameter `C` specifies the FROST curve used for DLEQ proofs and KES
+/// The generic parameter `SF` specifies the SNARK-friendly curve used for DLEQ proofs and KES
 /// operations. Use [`DefaultEstablishingState`] for the standard BabyJubJub curve.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct EstablishingState<C = grease_babyjubjub::BabyJubJub>
+pub struct EstablishingState<SF = grease_babyjubjub::BabyJubJub>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     pub(crate) metadata: ChannelMetadata,
     pub(crate) multisig_wallet: Option<MultisigWalletData>,
@@ -62,25 +62,25 @@ where
     pub(crate) wallet_keyring: Option<MultisigWalletKeyRing>,
     /// KES secrets and DLEQ proof for adapter signature offset (contains secrets, not cloned).
     #[serde(skip)]
-    pub(crate) kes_secrets: Option<KesSecrets<C>>,
+    pub(crate) kes_secrets: Option<KesSecrets<SF>>,
     /// Peer's DLEQ proof received during establishment (public data).
     #[serde(skip)]
-    pub(crate) peer_dleq_proof: Option<DleqProof<C, Ed25519>>,
+    pub(crate) peer_dleq_proof: Option<DleqProof<SF, Ed25519>>,
     /// Peer's adapted signature received during establishment (public data).
     #[serde(skip)]
     pub(crate) peer_adapted_sig: Option<AdaptedSignature<Ed25519>>,
     /// Phantom data to hold the curve type parameter.
     #[serde(skip)]
-    _curve: PhantomData<C>,
+    _curve: PhantomData<SF>,
 }
 
 /// Type alias for the default curve type (BabyJubJub).
 pub type DefaultEstablishingState = EstablishingState<grease_babyjubjub::BabyJubJub>;
 
-impl<C> Clone for EstablishingState<C>
+impl<SF> Clone for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -98,12 +98,12 @@ where
     }
 }
 
-impl<C> EstablishingState<C>
+impl<SF> EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
-    pub fn to_channel_state(self) -> ChannelState<C> {
+    pub fn to_channel_state(self) -> ChannelState<SF> {
         ChannelState::Establishing(self)
     }
 
@@ -193,31 +193,26 @@ where
     /// Initialize the KES client using the KES public key from metadata.
     /// This is a convenience method that parses the KES public key string from metadata
     /// and calls `initialize_kes_client` from the protocol trait.
-    pub fn init_kes_client_from_metadata<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<(), LifeCycleError>
+    pub fn init_kes_client_from_metadata<R: RngCore + CryptoRng>(&mut self, rng: &mut R) -> Result<(), LifeCycleError>
     where
-        C::G: ciphersuite::group::GroupEncoding<Repr = [u8; 32]>,
+        SF::G: ciphersuite::group::GroupEncoding<Repr = [u8; 32]>,
     {
         use ciphersuite::group::GroupEncoding;
 
         let kes_hex = self.metadata.kes_public_key();
-        let kes_bytes = hex::decode(kes_hex).map_err(|e| {
-            LifeCycleError::InternalError(format!("Failed to decode KES public key hex: {e}"))
-        })?;
-        let kes_bytes_arr: [u8; 32] = kes_bytes.try_into().map_err(|_| {
-            LifeCycleError::InternalError("KES public key must be 32 bytes".to_string())
-        })?;
-        let kes_pubkey_opt = C::G::from_bytes(&kes_bytes_arr);
+        let kes_bytes = hex::decode(kes_hex)
+            .map_err(|e| LifeCycleError::InternalError(format!("Failed to decode KES public key hex: {e}")))?;
+        let kes_bytes_arr: [u8; 32] = kes_bytes
+            .try_into()
+            .map_err(|_| LifeCycleError::InternalError("KES public key must be 32 bytes".to_string()))?;
+        let kes_pubkey_opt = SF::G::from_bytes(&kes_bytes_arr);
         if kes_pubkey_opt.is_none().into() {
             return Err(LifeCycleError::InternalError("Invalid KES public key bytes".to_string()));
         }
         let kes_pubkey = kes_pubkey_opt.unwrap();
 
-        let kes_secrets = KesSecrets::generate(rng, kes_pubkey, self.metadata.role()).map_err(|e| {
-            LifeCycleError::InternalError(format!("Failed to initialize KES client: {e}"))
-        })?;
+        let kes_secrets = KesSecrets::generate(rng, kes_pubkey, self.metadata.role())
+            .map_err(|e| LifeCycleError::InternalError(format!("Failed to initialize KES client: {e}")))?;
         self.kes_secrets = Some(kes_secrets);
         Ok(())
     }
@@ -243,20 +238,20 @@ where
 
 // --- Protocol Trait Implementations ---
 
-impl<C> HasRole for EstablishingState<C>
+impl<SF> HasRole for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }
 }
 
-impl<C> HasPublicKey for EstablishingState<C>
+impl<SF> HasPublicKey for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn public_key(&self) -> Curve25519PublicKey {
         self.wallet_keyring
@@ -266,10 +261,10 @@ where
     }
 }
 
-impl<C> HasSecretKey for EstablishingState<C>
+impl<SF> HasSecretKey for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn secret_key(&self) -> Curve25519Secret {
         self.wallet_keyring
@@ -279,12 +274,12 @@ where
     }
 }
 
-impl<C> PeerInfo<C> for EstablishingState<C>
+impl<SF> PeerInfo<SF> for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
-    fn peer_dleq_proof(&self) -> Option<&DleqProof<C, Ed25519>> {
+    fn peer_dleq_proof(&self) -> Option<&DleqProof<SF, Ed25519>> {
         self.peer_dleq_proof.as_ref()
     }
 
@@ -297,13 +292,13 @@ where
     }
 }
 
-impl<C> EstablishProtocolCommon<C, Blake2b512> for EstablishingState<C>
+impl<SF> EstablishProtocolCommon<SF, Blake2b512> for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     type MultisigWallet = MultisigWalletKeyRing;
-    type KesClient = KesSecrets<C>;
+    type KesClient = KesSecrets<SF>;
 
     fn new<R: RngCore + CryptoRng>(_rng: &mut R, _role: ChannelRole) -> Self {
         panic!("EstablishingState::new should not be called directly. Use From<NewChannelState> instead.")
@@ -312,20 +307,19 @@ where
     fn initialize_kes_client<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-        kes_pubkey: C::G,
+        kes_pubkey: SF::G,
     ) -> Result<(), EstablishProtocolError> {
         let kes_secrets = KesSecrets::generate(rng, kes_pubkey, HasRole::role(self)).map_err(|e| match e {
             KesClientError::InvalidKesPublicKey => EstablishProtocolError::InvalidKesPublicKey,
-            KesClientError::DleqProofGenerationError(e) => EstablishProtocolError::AdapterSigOffsetError(e),
         })?;
         self.kes_secrets = Some(kes_secrets);
         Ok(())
     }
 
     fn kes_client(&self) -> Result<&Self::KesClient, EstablishProtocolError> {
-        self.kes_secrets
-            .as_ref()
-            .ok_or_else(|| EstablishProtocolError::MissingInformation("initialize_kes_client has not been called".into()))
+        self.kes_secrets.as_ref().ok_or_else(|| {
+            EstablishProtocolError::MissingInformation("initialize_kes_client has not been called".into())
+        })
     }
 
     fn wallet(&self) -> &Self::MultisigWallet {
@@ -340,30 +334,30 @@ where
         self.peer_adapted_sig = Some(adapted_signature);
     }
 
-    fn set_peer_dleq_proof(&mut self, dleq_proof: DleqProof<C, Ed25519>) {
+    fn set_peer_dleq_proof(&mut self, dleq_proof: DleqProof<SF, Ed25519>) {
         self.peer_dleq_proof = Some(dleq_proof);
     }
 }
 
-impl<C> EstablishProtocolMerchant<C, Blake2b512> for EstablishingState<C>
+impl<SF> EstablishProtocolMerchant<SF, Blake2b512> for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
 }
 
-impl<C> EstablishProtocolCustomer<C, Blake2b512> for EstablishingState<C>
+impl<SF> EstablishProtocolCustomer<SF, Blake2b512> for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
-    fn read_wallet_commitment<R: std::io::Read + ?Sized>(
+    fn store_wallet_commitment<R: std::io::Read + ?Sized>(
         &mut self,
         reader: &mut R,
     ) -> Result<(), EstablishProtocolError> {
         use crate::grease_protocol::utils::Readable;
-        let commitment = PublicKeyCommitment::read(reader)
-            .map_err(|e| EstablishProtocolError::InvalidCommitment(e.to_string()))?;
+        let commitment =
+            PublicKeyCommitment::read(reader).map_err(|e| EstablishProtocolError::InvalidCommitment(e.to_string()))?;
         self.wallet_mut().set_peer_public_key_commitment(commitment);
         Ok(())
     }
@@ -374,10 +368,10 @@ where
     }
 }
 
-impl<C> From<NewChannelState> for EstablishingState<C>
+impl<SF> From<NewChannelState> for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn from(new_channel_state: NewChannelState) -> Self {
         EstablishingState {
@@ -398,10 +392,10 @@ where
 
 use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
 
-impl<C> LifeCycle for EstablishingState<C>
+impl<SF> LifeCycle for EstablishingState<SF>
 where
-    C: FrostCurve,
-    Ed25519: Dleq<C>,
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
 {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Establishing

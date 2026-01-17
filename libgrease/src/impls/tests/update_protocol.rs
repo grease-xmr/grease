@@ -4,7 +4,7 @@
 
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use crate::cryptography::vcof::{VcofError, VcofProof, VerifiableConsecutiveOnewayFunction, VcofOutput};
+use crate::cryptography::vcof::{VcofError, VcofProof, VcofRecord, VerifiableConsecutiveOnewayFunction};
 use crate::grease_protocol::adapter_signature::AdapterSignatureHandler;
 use crate::grease_protocol::update_channel::{
     UpdatePackage, UpdateProtocolCommon, UpdateProtocolError, UpdateProtocolProposee, UpdateProtocolProposer,
@@ -51,13 +51,13 @@ impl VerifiableConsecutiveOnewayFunction<Ed25519> for MockVcof {
 
     fn compute_next(
         &self,
-        _input: &VcofOutput<Ed25519, Self::Proof>,
+        _input: &VcofRecord<Ed25519, Self::Proof>,
     ) -> Result<<Ed25519 as Ciphersuite>::F, VcofError> {
         // Return a mock scalar
         Ok(<Ed25519 as Ciphersuite>::F::default())
     }
 
-    fn create_proof(&self, _input: &VcofOutput<Ed25519, Self::Proof>) -> Result<Self::Proof, VcofError> {
+    fn create_proof(&self, _input: &VcofRecord<Ed25519, Self::Proof>) -> Result<Self::Proof, VcofError> {
         Ok(MockVcofProof { data: vec![1, 2, 3, 4] })
     }
 }
@@ -480,7 +480,10 @@ fn test_update_count_mismatch() {
     };
 
     let result = proposer.process_response(&bad_package);
-    assert!(matches!(result, Err(UpdateProtocolError::UpdateCountMismatch { expected: 1, actual: 5 })));
+    assert!(matches!(
+        result,
+        Err(UpdateProtocolError::UpdateCountMismatch { expected: 1, actual: 5 })
+    ));
 }
 
 #[test]

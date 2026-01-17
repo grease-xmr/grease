@@ -19,7 +19,6 @@ use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, Publi
 use libgrease::cryptography::zk_objects::{
     generate_txc0_nonces, GenericPoint, KesProof, PublicProof0, PublicUpdateProof, ShardInfo, UpdateProofs,
 };
-use libgrease::XmrScalar;
 use libgrease::grease_protocol::establish_channel::EstablishProtocolCommon;
 use libgrease::grease_protocol::multisig_wallet::SharedPublicKey;
 use libgrease::monero::data_objects::{
@@ -31,6 +30,7 @@ use libgrease::payment_channel::{ChannelRole, UpdateError};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use libgrease::state_machine::{ChannelCloseRecord, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord};
+use libgrease::XmrScalar;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;

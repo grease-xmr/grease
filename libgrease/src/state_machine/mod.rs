@@ -14,7 +14,7 @@ mod commitment_tx;
 
 pub use closed_channel::{ChannelClosedReason, ClosedChannelState};
 pub use closing_channel::{ChannelCloseRecord, ClosingChannelState};
-pub use disputing_channel::{DisputeReason, DisputingChannelState, DEFAULT_DISPUTE_WINDOW_SECS};
+pub use disputing_channel::{DisputeReason, DisputingChannelState, DEFAULT_DISPUTE_WINDOW};
 pub use establishing_channel::{DefaultEstablishingState, EstablishingState};
 pub use events::LifeCycleEvent;
 pub use lifecycle::{DefaultChannelState, LifecycleStage};

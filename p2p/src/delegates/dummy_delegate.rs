@@ -15,8 +15,8 @@ use libgrease::cryptography::zk_objects::{
 };
 use libgrease::monero::data_objects::MultisigSplitSecrets;
 use libgrease::state_machine::error::InvalidProposal;
-use libgrease::XmrScalar;
 use libgrease::Field;
+use libgrease::XmrScalar;
 use log::*;
 
 #[derive(Debug, Clone)]

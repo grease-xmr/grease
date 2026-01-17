@@ -84,7 +84,6 @@ impl EstablishProtocolCommon<BabyJubJub, Blake2b512> for ChannelEstablishData {
     ) -> Result<(), EstablishProtocolError> {
         let kes_secrets = KesSecrets::generate(rng, kes_pubkey, self.role()).map_err(|e| match e {
             KesClientError::InvalidKesPublicKey => EstablishProtocolError::InvalidKesPublicKey,
-            KesClientError::DleqProofGenerationError(e) => EstablishProtocolError::AdapterSigOffsetError(e),
         })?;
         self.kes_secrets = Some(kes_secrets);
         Ok(())
@@ -115,7 +114,7 @@ impl EstablishProtocolCommon<BabyJubJub, Blake2b512> for ChannelEstablishData {
 }
 
 impl EstablishProtocolCustomer<BabyJubJub, Blake2b512> for ChannelEstablishData {
-    fn read_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let commitment =
             PublicKeyCommitment::read(reader).map_err(|e| EstablishProtocolError::InvalidCommitment(e.to_string()))?;
         self.wallet_keyring.set_peer_public_key_commitment(commitment);
@@ -138,17 +137,17 @@ fn setup_new_multisig_wallets(merchant: &mut ChannelEstablishData, customer: &mu
 
     // <--- Customer receives commitment from merchant
     let mut reader = &data_for_customer[..];
-    customer.read_wallet_commitment(&mut reader).expect("Expected merchant commitment");
+    customer.store_wallet_commitment(&mut reader).expect("Expected merchant commitment");
 
     // ---> Customer sends pubkey to merchant
     let data_for_merchant = customer.wallet().shared_public_key().serialize();
     // <--- Merchant receives pubkey from customer
-    merchant.read_peer_shared_public_key(&mut &data_for_merchant[..]).expect("Expected customer shared info");
+    merchant.store_peer_shared_public_key(&mut &data_for_merchant[..]).expect("Expected customer shared info");
 
     // ---> Merchant sends wallet pubkey to customer
     let data_for_customer = merchant.wallet().shared_public_key().serialize();
     // <--- Customer gets merchant's public key.
-    customer.read_peer_shared_public_key(&mut &data_for_customer[..]).expect("Expected merchant shared info");
+    customer.store_peer_shared_public_key(&mut &data_for_customer[..]).expect("Expected merchant shared info");
     // Verify that the received public key matches the commitment
     customer.verify_merchant_public_key().expect("Expected merchant public key verification");
 }
@@ -190,8 +189,9 @@ fn channel_establish_protocol() {
 
     // <--- Merchant receives (adapted_c, DLEQ proof, X_c) from customer
     // Merchant verifies the adapter signature (and DLEQ proof, and Qs match)
-    merchant_protocol.read_peer_adapted_signature(&mut &sig_data[..]).expect("valid sig data");
-    merchant_protocol.read_peer_dleq_proof(&mut &proof_data[..]).expect("valid dleq proof");
+    merchant_protocol.store_peer_adapted_signature(&mut &sig_data[..]).expect("valid sig data");
+    let peer_dleq_proof = DleqProof::<BabyJubJub, Ed25519>::read(&mut &proof_data[..]).expect("valid dleq proof");
+    merchant_protocol.set_peer_dleq_proof(peer_dleq_proof);
     merchant_protocol.initialize_kes_client(&mut rng, kes_pubkey).expect("merchant kes init");
     let kes_client = merchant_protocol.kes_client().unwrap();
     let msg = kes_client.adapter_signature_message(0);
@@ -209,8 +209,9 @@ fn channel_establish_protocol() {
     let encrypted_w0m_data = encrypted_w0m.serialize();
 
     // ---> Send (DLEQ proof, peer_m, kes_m, adapted_m, pubkey_m) to customer.
-    customer_protocol.read_peer_adapted_signature(&mut &sig_data[..]).expect("valid adapter sig");
-    customer_protocol.read_peer_dleq_proof(&mut &proof_data[..]).expect("valid dleq proof");
+    customer_protocol.store_peer_adapted_signature(&mut &sig_data[..]).expect("valid adapter sig");
+    let peer_dleq_proof = DleqProof::<BabyJubJub, Ed25519>::read(&mut &proof_data[..]).expect("valid dleq proof");
+    customer_protocol.set_peer_dleq_proof(peer_dleq_proof);
     // Verify the adapter signature offset
     let kes_client = customer_protocol.kes_client().unwrap();
     let msg = kes_client.adapter_signature_message(0);

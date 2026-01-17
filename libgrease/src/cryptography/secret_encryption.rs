@@ -1,79 +1,65 @@
+use crate::cryptography::ecdh_encrypt::EncryptedScalar;
 use crate::error::ReadError;
-use crate::grease_protocol::utils::{read_field_element, read_group_element, write_field_element, write_group_element};
 use crate::payment_channel::{ChannelRole, HasRole};
-use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
-use modular_frost::curve::Curve;
 use modular_frost::sign::Writable;
 use monero::consensus::{ReadExt, WriteExt};
 use rand_core::{CryptoRng, RngCore};
 use std::fmt::Debug;
 use std::io::Read;
-use std::ops::Mul;
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// An encrypted secret $\Xi$ for a participant in the payment channel.
 ///
 /// `channel_role` indicates the role of the party who created the shard.
+/// Wraps [`EncryptedScalar`] with additional role metadata.
 #[derive(Clone)]
-pub struct EncryptedSecret<C: Curve> {
-    /// The encrypted value of the secret.
-    encrypted_secret: C::F,
-    /// The public nonce used in the encryption.
-    public_nonce: C::G,
+pub struct EncryptedSecret<C: Ciphersuite> {
+    /// The underlying ECDH-encrypted scalar.
+    inner: EncryptedScalar<C>,
     /// The role of the party who created this secret.
     role: ChannelRole,
 }
 
-impl<C: Curve> HasRole for EncryptedSecret<C> {
+impl<C: Ciphersuite> HasRole for EncryptedSecret<C> {
     fn role(&self) -> ChannelRole {
         self.role
     }
 }
 
-impl<C: Curve> EncryptedSecret<C> {
+/// Combines a domain separator with the channel role byte.
+fn role_bound_domain<B: AsRef<[u8]>>(domain: B, role: ChannelRole) -> Vec<u8> {
+    [domain.as_ref(), &[role.as_u8()]].concat()
+}
+
+impl<C: Ciphersuite> EncryptedSecret<C> {
     /// Encrypt a witness shard for `recipient` using ephemeral Diffie-Hellman key exchange.
     pub fn encrypt<R, B>(mut secret: SecretWithRole<C>, recipient: &C::G, rng: &mut R, domain: B) -> Self
     where
         R: RngCore + CryptoRng,
         B: AsRef<[u8]>,
     {
-        let mut nonce = C::random_nonzero_F(rng);
-        let public_nonce = C::generator() * nonce;
-        let shared_point = recipient.mul(&nonce);
-        let shared_secret = <C as Ciphersuite>::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
-        let encrypted_secret = shared_secret + secret.secret;
-        nonce.zeroize();
+        let role = secret.role;
+        let inner = EncryptedScalar::encrypt(&secret.secret, recipient, rng, role_bound_domain(domain, role));
         secret.zeroize();
-        Self { role: secret.role, encrypted_secret, public_nonce }
+        Self { inner, role }
     }
 
-    /// Read an EncryptedShard from something implementing Read.
+    /// Read an EncryptedSecret from something implementing Read.
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
         let role = reader
             .read_u8()
-            .map_err(|e| ReadError::new("EncryptedShard.role", e.to_string()))
+            .map_err(|e| ReadError::new("EncryptedSecret.role", e.to_string()))
             .and_then(ChannelRole::try_from)?;
-        let encrypted_secret =
-            read_field_element::<C, _>(reader).map_err(|e| ReadError::new("EncryptedShard.shard", e.to_string()))?;
-        let public_nonce = read_group_element::<C, _>(reader)
-            .map_err(|e| ReadError::new("EncryptedShard.public_nonce", e.to_string()))?;
-        if public_nonce.is_identity().into() {
-            return Err(ReadError::new(
-                "EncryptedShard.public_nonce",
-                "public nonce cannot be the identity element".to_string(),
-            ));
-        }
-        Ok(Self { encrypted_secret, role, public_nonce })
+        let inner = EncryptedScalar::read(reader)?;
+        Ok(Self { inner, role })
     }
 
     /// Decrypt a secret using the recipient's secret key on the given curve using ephemeral Diffie-Hellman exchange.
     pub fn decrypt<B: AsRef<[u8]>>(&self, secret: &C::F, domain: B) -> SecretWithRole<C> {
-        let shared_point = self.public_nonce * secret;
-        let shared_secret = <C as Ciphersuite>::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
-        let secret = self.encrypted_secret - shared_secret;
-        SecretWithRole { secret, role: self.role }
+        let decrypted = self.inner.decrypt(secret, role_bound_domain(domain, self.role));
+        SecretWithRole { secret: decrypted, role: self.role }
     }
 }
 
@@ -81,18 +67,18 @@ impl<C: Curve> EncryptedSecret<C> {
 /// especially in the context of encrypted secrets for the KES in the payment channel. Storing the role alongside the
 /// secret helps prevent bugs where secrets might be mixed up between parties.
 #[derive(Clone)]
-pub struct SecretWithRole<C: Curve> {
+pub struct SecretWithRole<C: Ciphersuite> {
     secret: C::F,
     role: ChannelRole,
 }
 
-impl<C: Curve> Debug for SecretWithRole<C> {
+impl<C: Ciphersuite> Debug for SecretWithRole<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shard").field("shard", &"[REDACTED]").field("role", &self.role).finish()
     }
 }
 
-impl<C: Curve> SecretWithRole<C> {
+impl<C: Ciphersuite> SecretWithRole<C> {
     pub fn new(secret: C::F, role: ChannelRole) -> Self {
         Self { secret, role }
     }
@@ -102,38 +88,36 @@ impl<C: Curve> SecretWithRole<C> {
     }
 }
 
-impl<C: Curve> ConstantTimeEq for SecretWithRole<C> {
+impl<C: Ciphersuite> ConstantTimeEq for SecretWithRole<C> {
     fn ct_eq(&self, other: &Self) -> subtle::Choice {
         self.secret.ct_eq(&other.secret) & subtle::Choice::from((self.role == other.role) as u8)
     }
 }
 
-impl<C: Curve> Zeroize for SecretWithRole<C> {
+impl<C: Ciphersuite> Zeroize for SecretWithRole<C> {
     fn zeroize(&mut self) {
         self.secret.zeroize();
     }
 }
 
-impl<C: Curve> ZeroizeOnDrop for SecretWithRole<C> {}
+impl<C: Ciphersuite> ZeroizeOnDrop for SecretWithRole<C> {}
 
-impl<C: Curve> Drop for SecretWithRole<C> {
+impl<C: Ciphersuite> Drop for SecretWithRole<C> {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
 
-impl<C: Curve> HasRole for SecretWithRole<C> {
+impl<C: Ciphersuite> HasRole for SecretWithRole<C> {
     fn role(&self) -> ChannelRole {
         self.role
     }
 }
 
-impl<C: Curve> Writable for EncryptedSecret<C> {
+impl<C: Ciphersuite> Writable for EncryptedSecret<C> {
     fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.emit_u8(self.role.as_u8())?;
-        write_field_element::<C, _>(writer, &self.encrypted_secret)?;
-        write_group_element::<C, _>(writer, &self.public_nonce)?;
-        Ok(())
+        self.inner.write(writer)
     }
 }
 

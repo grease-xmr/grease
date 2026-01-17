@@ -61,7 +61,8 @@ impl ProposeProtocolCommon for MerchantProposer {
     }
 
     fn validate_seed_info(&self) -> Result<(), ProposeProtocolError> {
-        let seed = self.seed_info.as_ref().ok_or_else(|| ProposeProtocolError::MissingInformation("seed info".into()))?;
+        let seed =
+            self.seed_info.as_ref().ok_or_else(|| ProposeProtocolError::MissingInformation("seed info".into()))?;
         if seed.initial_balances.total().is_zero() {
             return Err(ProposeProtocolError::BalanceValidationFailed("total balance is zero".into()));
         }
@@ -191,8 +192,9 @@ impl ProposeProtocolProposee for CustomerProposee {
     ) -> Result<NewChannelProposal, ProposeProtocolError> {
         let seed = self.seed_info.as_ref().ok_or(ProposeProtocolError::SeedInfoNotReceived)?;
 
-        let closing_addresses = ClosingAddresses::new(&closing_address.to_string(), &seed.merchant_closing_address.to_string())
-            .map_err(|e| ProposeProtocolError::InvalidProposal(e.to_string()))?;
+        let closing_addresses =
+            ClosingAddresses::new(&closing_address.to_string(), &seed.merchant_closing_address.to_string())
+                .map_err(|e| ProposeProtocolError::InvalidProposal(e.to_string()))?;
 
         let channel_id = ChannelIdMetadata::new(
             seed.merchant_channel_key.clone(),
@@ -391,7 +393,10 @@ fn test_invalid_seed_info_rejected() {
     // Create seed with zero balance
     let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Stagenet)
         .with_kes_public_key("test_kes")
-        .with_initial_balances(Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("0.0").unwrap()))
+        .with_initial_balances(Balances::new(
+            MoneroAmount::from_xmr("0.0").unwrap(),
+            MoneroAmount::from_xmr("0.0").unwrap(),
+        ))
         .with_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
         .with_channel_key(customer.channel_key.clone())
         .with_channel_nonce(12345)

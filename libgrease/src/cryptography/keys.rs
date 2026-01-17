@@ -1,4 +1,4 @@
-use crate::cryptography::common_types::HashCommitment256;
+use crate::cryptography::commit::HashCommitment256;
 use crate::cryptography::zk_objects::GenericScalar;
 use crate::cryptography::Commit;
 use blake2::Blake2b512;

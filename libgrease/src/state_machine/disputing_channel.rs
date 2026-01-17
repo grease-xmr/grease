@@ -9,8 +9,10 @@
 
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
+use crate::cryptography::adapter_signature::SchnorrSignature;
 use crate::cryptography::keys::Curve25519PublicKey;
 use crate::cryptography::zk_objects::KesProof;
+use crate::cryptography::ChannelWitness;
 use crate::grease_protocol::force_close_channel::{
     ClaimChannelRequest, ConsensusCloseRequest, DisputeChannelState as DisputeMessage, DisputeResolution,
     ForceCloseProtocolClaimant, ForceCloseProtocolCommon, ForceCloseProtocolDefendant, ForceCloseProtocolError,
@@ -24,12 +26,14 @@ use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelSta
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::open_channel::UpdateRecord;
 use crate::XmrScalar;
+use ciphersuite::Ciphersuite;
 use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Default dispute window duration in seconds (24 hours).
-pub const DEFAULT_DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60;
+pub const DEFAULT_DISPUTE_WINDOW: Duration = Duration::from_hours(24);
 
 /// State for a channel undergoing force close / dispute resolution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +140,9 @@ impl DisputingChannelState {
     pub fn requirements_met(&self) -> bool {
         matches!(
             self.status,
-            PendingCloseStatus::ForceClosed | PendingCloseStatus::ConsensusClosed | PendingCloseStatus::DisputeSuccessful
+            PendingCloseStatus::ForceClosed
+                | PendingCloseStatus::ConsensusClosed
+                | PendingCloseStatus::DisputeSuccessful
         ) && self.final_tx.is_some()
     }
 
@@ -170,7 +176,7 @@ impl HasRole for DisputingChannelState {
     }
 }
 
-impl ForceCloseProtocolCommon for DisputingChannelState {
+impl<K: Ciphersuite> ForceCloseProtocolCommon<K> for DisputingChannelState {
     fn channel_id(&self) -> ChannelId {
         self.metadata.channel_id().name()
     }
@@ -180,8 +186,8 @@ impl ForceCloseProtocolCommon for DisputingChannelState {
     }
 
     fn peer_public_key(&self) -> &Curve25519PublicKey {
-        // The peer is the other key in sorted_pubkeys
-        let my_key = self.public_key();
+        // The peer is the other key in sorted_pubkeys (use direct field access to avoid ambiguity)
+        let my_key = &self.multisig_wallet.my_public_key;
         if &self.multisig_wallet.sorted_pubkeys[0] == my_key {
             &self.multisig_wallet.sorted_pubkeys[1]
         } else {
@@ -189,15 +195,15 @@ impl ForceCloseProtocolCommon for DisputingChannelState {
         }
     }
 
-    fn dispute_window_secs(&self) -> u64 {
-        DEFAULT_DISPUTE_WINDOW_SECS
+    fn dispute_window(&self) -> Duration {
+        DEFAULT_DISPUTE_WINDOW
     }
 
     fn update_count(&self) -> u64 {
         self.metadata.update_count()
     }
 
-    fn sign_for_kes(&self, _message: &[u8]) -> Result<Vec<u8>, ForceCloseProtocolError> {
+    fn sign_for_kes(&self, _message: &[u8]) -> Result<SchnorrSignature<K>, ForceCloseProtocolError> {
         // Signing requires wallet integration with the secret key.
         // The actual implementation would use self.multisig_wallet.my_spend_key
         Err(ForceCloseProtocolError::SignatureCreationFailed(
@@ -205,7 +211,11 @@ impl ForceCloseProtocolCommon for DisputingChannelState {
         ))
     }
 
-    fn verify_peer_signature(&self, _message: &[u8], _sig: &[u8]) -> Result<(), ForceCloseProtocolError> {
+    fn verify_peer_signature(
+        &self,
+        _message: &[u8],
+        _sig: &SchnorrSignature<K>,
+    ) -> Result<(), ForceCloseProtocolError> {
         // Signature verification against peer_public_key
         // This would use standard Ed25519 verification
         Err(ForceCloseProtocolError::InvalidSignature(
@@ -214,17 +224,22 @@ impl ForceCloseProtocolCommon for DisputingChannelState {
     }
 }
 
-impl ForceCloseProtocolClaimant for DisputingChannelState {
-    fn create_force_close_request(&self) -> Result<ForceCloseRequest, ForceCloseProtocolError> {
-        // Create the request payload
+impl<SF: Ciphersuite, K: Ciphersuite> ForceCloseProtocolClaimant<SF, K> for DisputingChannelState {
+    fn create_force_close_request(&self) -> Result<ForceCloseRequest<K>, ForceCloseProtocolError> {
+        // Create the request payload - use direct field access to avoid trait method ambiguity
         let channel_id = self.metadata.channel_id().name();
-        let claimant = *self.public_key();
-        let defendant = *self.peer_public_key();
-        let update_count_claimed = self.update_count();
+        let claimant = self.multisig_wallet.my_public_key;
+        // The peer is the other key in sorted_pubkeys
+        let defendant = if self.multisig_wallet.sorted_pubkeys[0] == claimant {
+            self.multisig_wallet.sorted_pubkeys[1]
+        } else {
+            self.multisig_wallet.sorted_pubkeys[0]
+        };
+        let update_count_claimed = self.metadata.update_count();
 
         // Sign the request (placeholder - actual signing needs wallet integration)
         let message = format!("{channel_id}:{update_count_claimed}");
-        let signature = self.sign_for_kes(message.as_bytes())?;
+        let signature = <Self as ForceCloseProtocolCommon<K>>::sign_for_kes(self, message.as_bytes())?;
 
         Ok(ForceCloseRequest { channel_id, claimant, defendant, update_count_claimed, signature })
     }
@@ -232,7 +247,7 @@ impl ForceCloseProtocolClaimant for DisputingChannelState {
     fn handle_force_close_response(&mut self, response: ForceCloseResponse) -> Result<(), ForceCloseProtocolError> {
         match response {
             ForceCloseResponse::Accepted { dispute_window_end } => {
-                self.dispute_window_end = Some(dispute_window_end);
+                self.dispute_window_end = Some(dispute_window_end.into());
                 self.status = PendingCloseStatus::Pending;
                 Ok(())
             }
@@ -240,13 +255,11 @@ impl ForceCloseProtocolClaimant for DisputingChannelState {
         }
     }
 
-    fn create_claim_request(&self) -> Result<ClaimChannelRequest, ForceCloseProtocolError> {
+    fn create_claim_request(&self) -> Result<ClaimChannelRequest<K>, ForceCloseProtocolError> {
         // Verify dispute window has passed
         if let Some(end) = self.dispute_window_end {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let now =
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             if now < end {
                 return Err(ForceCloseProtocolError::DisputeWindowActive);
             }
@@ -255,16 +268,16 @@ impl ForceCloseProtocolClaimant for DisputingChannelState {
         }
 
         let channel_id = self.metadata.channel_id().name();
-        let claimant = *self.public_key();
+        let claimant = self.multisig_wallet.my_public_key;
 
         // Sign the claim request
         let message = format!("claim:{channel_id}");
-        let signature = self.sign_for_kes(message.as_bytes())?;
+        let signature = <Self as ForceCloseProtocolCommon<K>>::sign_for_kes(self, message.as_bytes())?;
 
         Ok(ClaimChannelRequest { channel_id, claimant, signature })
     }
 
-    fn process_claimed_offset(&mut self, _encrypted: &[u8]) -> Result<XmrScalar, ForceCloseProtocolError> {
+    fn process_claimed_offset(&mut self, _encrypted: &[u8]) -> Result<ChannelWitness<SF>, ForceCloseProtocolError> {
         // Decrypt the offset using our secret key
         // This requires KES decryption with our channel key
         Err(ForceCloseProtocolError::DecryptionFailed(
@@ -288,7 +301,7 @@ impl ForceCloseProtocolClaimant for DisputingChannelState {
     }
 }
 
-impl ForceCloseProtocolDefendant for DisputingChannelState {
+impl<SF: Ciphersuite, K: Ciphersuite> ForceCloseProtocolDefendant<SF, K> for DisputingChannelState {
     fn receive_force_close_notification(&mut self, notif: PendingChannelClose) -> Result<(), ForceCloseProtocolError> {
         if self.pending_close.is_some() {
             return Err(ForceCloseProtocolError::ForceCloseAlreadyPending);
@@ -302,78 +315,84 @@ impl ForceCloseProtocolDefendant for DisputingChannelState {
         }
 
         self.pending_close = Some(notif.clone());
-        self.dispute_window_end = Some(notif.dispute_window_end);
+        self.dispute_window_end = Some(notif.dispute_window_end.into());
         self.status = PendingCloseStatus::Pending;
         Ok(())
     }
 
     fn has_more_recent_state(&self, claimed_count: u64) -> bool {
-        self.update_count() > claimed_count
+        self.metadata.update_count() > claimed_count
     }
 
-    fn create_consensus_close(&self) -> Result<ConsensusCloseRequest, ForceCloseProtocolError> {
-        use ciphersuite::group::ff::PrimeField;
-
+    fn create_consensus_close(&self) -> Result<ConsensusCloseRequest<SF, K>, ForceCloseProtocolError> {
         let pending = self.pending_close.as_ref().ok_or(ForceCloseProtocolError::NoPendingForceClose)?;
 
         let channel_id = self.metadata.channel_id().name();
         let claimant = pending.claimant;
-        let defendant = *self.public_key();
+        let defendant = self.multisig_wallet.my_public_key;
         let update_count_claimed = pending.update_count_claimed;
 
-        // Encrypt our offset for the KES
+        // Create witness from our offset
         let offset = &self.last_update.my_proofs.private_outputs.witness_i;
-        let encrypted_offset = offset.to_repr().to_vec();
+        let encrypted_offset = crate::cryptography::ChannelWitness::<SF>::try_from(*offset)
+            .map_err(|e| ForceCloseProtocolError::SerializationError(format!("Failed to create witness: {e}")))?;
 
         // Sign the consensus close
         let message = format!("consensus:{channel_id}:{update_count_claimed}");
-        let signature = self.sign_for_kes(message.as_bytes())?;
+        let signature = <Self as ForceCloseProtocolCommon<K>>::sign_for_kes(self, message.as_bytes())?;
 
-        Ok(ConsensusCloseRequest {
-            channel_id,
-            claimant,
-            defendant,
-            update_count_claimed,
-            encrypted_offset,
-            signature,
-        })
+        Ok(
+            ConsensusCloseRequest {
+                channel_id,
+                claimant,
+                defendant,
+                update_count_claimed,
+                encrypted_offset,
+                signature,
+            },
+        )
     }
 
     fn create_dispute(&self) -> Result<DisputeMessage, ForceCloseProtocolError> {
+        use modular_frost::sign::Writable;
         let pending = self.pending_close.as_ref().ok_or(ForceCloseProtocolError::NoPendingForceClose)?;
 
-        // Verify we have a more recent state
-        if !self.has_more_recent_state(pending.update_count_claimed) {
+        // Verify we have a more recent state (use direct field access)
+        let my_update_count = self.metadata.update_count();
+        if my_update_count <= pending.update_count_claimed {
             return Err(ForceCloseProtocolError::UpdateCountTooLow {
                 claimed: pending.update_count_claimed,
-                actual: self.update_count(),
+                actual: my_update_count,
             });
         }
 
         let channel_id = self.metadata.channel_id().name();
         let claimant = pending.claimant;
-        let defendant = *self.public_key();
-        let update_count = self.update_count();
+        let defendant = self.multisig_wallet.my_public_key;
 
         // Serialize the update record as proof
-        let update_record =
-            ron::to_string(&self.last_update).map_err(|e| ForceCloseProtocolError::SerializationError(e.to_string()))?;
+        let update_record = ron::to_string(&self.last_update)
+            .map_err(|e| ForceCloseProtocolError::SerializationError(e.to_string()))?;
 
         // Sign the dispute
-        let message = format!("dispute:{channel_id}:{update_count}");
-        let signature = self.sign_for_kes(message.as_bytes())?;
+        let message = format!("dispute:{channel_id}:{my_update_count}");
+        let signature = <Self as ForceCloseProtocolCommon<K>>::sign_for_kes(self, message.as_bytes())?;
+
+        // Serialize signature to bytes using Writable trait
+        let mut sig_bytes = Vec::new();
+        signature.write(&mut sig_bytes).map_err(|e| ForceCloseProtocolError::SerializationError(e.to_string()))?;
 
         Ok(DisputeMessage {
             channel_id,
             claimant,
             defendant,
-            update_count,
+            update_count: my_update_count,
             update_record: update_record.into_bytes(),
-            signature,
+            signature: sig_bytes,
         })
     }
 
-    fn handle_dispute_resolution(&mut self, resolution: DisputeResolution) -> Result<(), ForceCloseProtocolError> {
+    fn handle_dispute_resolution(&mut self, resolution: DisputeResolution<SF>) -> Result<(), ForceCloseProtocolError> {
         match resolution {
             DisputeResolution::ClaimantWins { encrypted_offset: _ } => {
                 // We lost the dispute - claimant's state was valid
