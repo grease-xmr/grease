@@ -75,10 +75,11 @@ impl Timestamp {
     }
 
     /// Converts this Timestamp to a chrono DateTime<Utc>.
-    pub fn to_datetime(&self) -> DateTime<Utc> {
-        Utc.timestamp_opt(self.0 as i64, 0)
-            .single()
-            .expect("valid timestamp")
+    /// In odd corners cases where the timestamp is invalid (exactly coinciding with a leap-second,
+    /// or out-of-range values), this will return None.
+    pub fn to_datetime(&self) -> Option<DateTime<Utc>> {
+        let t = i64::try_from(self.0).ok()?;
+        Utc.timestamp_opt(self.0 as i64, 0).single()
     }
 }
 
@@ -91,18 +92,6 @@ impl From<u64> for Timestamp {
 impl From<Timestamp> for u64 {
     fn from(ts: Timestamp) -> Self {
         ts.0
-    }
-}
-
-impl<Tz: TimeZone> From<DateTime<Tz>> for Timestamp {
-    fn from(dt: DateTime<Tz>) -> Self {
-        Self(dt.timestamp() as u64)
-    }
-}
-
-impl From<Timestamp> for DateTime<Utc> {
-    fn from(ts: Timestamp) -> Self {
-        ts.to_datetime()
     }
 }
 
@@ -145,11 +134,11 @@ mod tests {
     #[test]
     fn test_to_datetime() {
         let ts = Timestamp::new(0);
-        let dt = ts.to_datetime();
+        let dt = ts.to_datetime().unwrap();
         assert_eq!(dt, Utc.timestamp_opt(0, 0).single().unwrap());
 
         let ts = Timestamp::new(1234567890);
-        let dt = ts.to_datetime();
+        let dt = ts.to_datetime().unwrap();
         assert_eq!(dt.timestamp(), 1234567890);
     }
 
@@ -164,28 +153,6 @@ mod tests {
         let ts = Timestamp::new(200);
         let secs: u64 = ts.into();
         assert_eq!(secs, 200);
-    }
-
-    #[test]
-    fn test_from_datetime_utc() {
-        let dt = Utc.timestamp_opt(1234567890, 0).single().unwrap();
-        let ts: Timestamp = dt.into();
-        assert_eq!(ts.0, 1234567890);
-    }
-
-    #[test]
-    fn test_from_datetime_fixed_offset() {
-        let offset = FixedOffset::east_opt(3600).unwrap();
-        let dt = offset.timestamp_opt(1234567890, 0).single().unwrap();
-        let ts: Timestamp = dt.into();
-        assert_eq!(ts.0, 1234567890);
-    }
-
-    #[test]
-    fn test_into_datetime_utc() {
-        let ts = Timestamp::new(1234567890);
-        let dt: DateTime<Utc> = ts.into();
-        assert_eq!(dt.timestamp(), 1234567890);
     }
 
     #[test]
