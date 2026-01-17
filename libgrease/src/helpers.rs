@@ -79,7 +79,7 @@ impl Timestamp {
     /// or out-of-range values), this will return None.
     pub fn to_datetime(&self) -> Option<DateTime<Utc>> {
         let t = i64::try_from(self.0).ok()?;
-        Utc.timestamp_opt(self.0 as i64, 0).single()
+        Utc.timestamp_opt(t, 0).single()
     }
 }
 
