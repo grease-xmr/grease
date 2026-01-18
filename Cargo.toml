@@ -18,6 +18,7 @@ wallet = { version = "0.1.0", path = "./wallet" }
 circuits = { version = "0.1.0", path = "./circuits" }
 
 anyhow = { version = "1.0.96" }
+async-trait = { version = "0.1" }
 blake2 = {  version = "0.10.6"}
 clap = { version = "4.5.31" }
 chrono = { version = "0.4.41", features = ["serde"] }

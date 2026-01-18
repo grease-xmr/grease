@@ -5,16 +5,17 @@ edition = "2021"
 
 
 [dependencies]
-libgrease = { workspace = true }
+anyhow = { workspace = true }
+ciphersuite = { workspace = true }
 grease-cli = { version = "0.1", path = "../grease_cli" }
 grease-p2p = { workspace = true }
-wallet = { workspace = true }
-
-anyhow = { workspace = true }
+libgrease = { workspace = true }
 log = { workspace = true }
 monero = { workspace = true }
 rand_core = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
+wallet = { workspace = true }
+
 
 [dependencies.monero-simple-request-rpc]
 version = "0.1"

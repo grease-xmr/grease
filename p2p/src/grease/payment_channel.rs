@@ -160,6 +160,7 @@ impl PaymentChannel {
                 LifeCycleEvent::MultiSigWalletCreated(data) => self.on_wallet_created(*data),
                 LifeCycleEvent::FundingTxWatcher(data) => self.on_save_watcher(data),
                 LifeCycleEvent::KesShards(shards) => self.on_kes_shards(*shards),
+                LifeCycleEvent::KesClientInitialized => self.on_kes_client_initialized(),
                 LifeCycleEvent::KesCreated(info) => self.on_kes_created(*info),
                 LifeCycleEvent::FundingTxConfirmed(info) => self.on_funding_confirmed(*info),
                 LifeCycleEvent::MyProof0Generated(proof) => self.on_my_proof0(*proof),
@@ -237,44 +238,59 @@ impl PaymentChannel {
         })
     }
 
-    fn on_my_proof0(&mut self, proof: Proofs0) -> Result<(), LifeCycleError> {
-        self.update_establishing(|mut establishing| {
-            establishing.save_proof0(proof);
-            match establishing.next() {
-                Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after saving witness0 proof");
-                    Ok(established.to_channel_state())
-                }
-                Err((establishing, err)) => {
-                    trace!("⚡️  Staying in establishing state: {err}");
-                    Ok(establishing.to_channel_state())
-                }
+    fn on_my_proof0(&mut self, _proof: Proofs0) -> Result<(), LifeCycleError> {
+        // Proof0 data is no longer stored in the state machine.
+        // The proof is used externally during the establish protocol.
+        self.update_establishing(|establishing| match establishing.next() {
+            Ok(established) => {
+                debug!("⚡️  Transitioned to Established state after saving witness0 proof");
+                Ok(established.to_channel_state())
+            }
+            Err((establishing, err)) => {
+                trace!("⚡️  Staying in establishing state: {err}");
+                Ok(establishing.to_channel_state())
             }
         })
     }
 
-    fn on_peer_proof0(&mut self, peer_proof: PublicProof0) -> Result<(), LifeCycleError> {
-        self.update_establishing(|mut establishing| {
-            establishing.save_peer_proof0(peer_proof);
-            match establishing.next() {
-                Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after receiving peer's proof0");
-                    Ok(established.to_channel_state())
-                }
-                Err((establishing, err)) => {
-                    trace!("⚡️  Staying in establishing state: {err}");
-                    Ok(establishing.to_channel_state())
-                }
+    fn on_peer_proof0(&mut self, _peer_proof: PublicProof0) -> Result<(), LifeCycleError> {
+        // Peer proof0 data is no longer stored in the state machine.
+        // The proof is used externally during the establish protocol.
+        self.update_establishing(|establishing| match establishing.next() {
+            Ok(established) => {
+                debug!("⚡️  Transitioned to Established state after receiving peer's proof0");
+                Ok(established.to_channel_state())
+            }
+            Err((establishing, err)) => {
+                trace!("⚡️  Staying in establishing state: {err}");
+                Ok(establishing.to_channel_state())
             }
         })
     }
 
-    fn on_kes_shards(&mut self, shards: ShardInfo) -> Result<(), LifeCycleError> {
+    fn on_kes_shards(&mut self, _shards: ShardInfo) -> Result<(), LifeCycleError> {
+        // KES shards are no longer stored in the state machine.
+        // The shards are handled externally by the KES client.
+        self.update_establishing(|establishing| match establishing.next() {
+            Ok(established) => {
+                debug!("⚡️  Transitioned to Established state after receiving KES shards");
+                Ok(established.to_channel_state())
+            }
+            Err((establishing, err)) => {
+                trace!("⚡️  Staying in establishing state: {err}");
+                Ok(establishing.to_channel_state())
+            }
+        })
+    }
+
+    fn on_kes_client_initialized(&mut self) -> Result<(), LifeCycleError> {
         self.update_establishing(|mut establishing| {
-            establishing.save_kes_shards(shards);
+            if let Err(e) = establishing.init_kes_client_from_metadata(&mut rand_core::OsRng) {
+                warn!("⚡️  Failed to initialize KES client: {e}");
+            }
             match establishing.next() {
                 Ok(established) => {
-                    debug!("⚡️  Transitioned to Established state after receiving KES shards");
+                    debug!("⚡️  Transitioned to Established state after KES client init");
                     Ok(established.to_channel_state())
                 }
                 Err((establishing, err)) => {
@@ -481,7 +497,8 @@ mod test {
     use libgrease::channel_id::ChannelIdMetadata;
     use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
     use libgrease::cryptography::zk_objects::{
-        GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, ShardInfo, UpdateProofs,
+        Comm0PrivateOutputs, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicProof0,
+        ShardInfo, UpdateProofs,
     };
     use libgrease::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
     use libgrease::multisig::MultisigWalletData;
@@ -490,6 +507,7 @@ mod test {
     use libgrease::state_machine::{
         ChannelCloseRecord, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord,
     };
+    use libgrease::{Field, XmrScalar};
     use libp2p::{Multiaddr, PeerId};
     use monero::{Address, Network};
     use std::str::FromStr;
@@ -502,14 +520,19 @@ mod test {
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
     pub fn new_channel_state() -> NewChannelState {
+        use ciphersuite::group::{Group, GroupEncoding};
+        use grease_babyjubjub::BjjPoint;
         use libgrease::cryptography::keys::PublicKey;
         // All this info is known, or can be scanned in from a QR code etc
         let (_, merchant_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         let (_, customer_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
         let balances = Balances::new(MoneroAmount::default(), MoneroAmount::from(1000));
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("valid addresses");
+        // Generate a valid BabyJubJub point for KES public key
+        let kes_point = BjjPoint::generator();
+        let kes_hex = hex::encode(kes_point.to_bytes());
         let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Mainnet)
-            .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
+            .with_kes_public_key(&kes_hex)
             .with_initial_balances(balances)
             .with_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
             .with_channel_key(merchant_key.clone())
@@ -557,9 +580,20 @@ mod test {
         };
         let event = LifeCycleEvent::KesShards(Box::new(ShardInfo { my_shards, their_shards }));
         channel.handle_event(event).unwrap();
-        let proof0 =
-            Proofs0 { public_outputs: Default::default(), private_outputs: Default::default(), proofs: vec![] };
-        let peer_proof0 = proof0.public_only();
+        // Initialize the KES client (required for state transition)
+        let event = LifeCycleEvent::KesClientInitialized;
+        channel.handle_event(event).unwrap();
+        // Create proof0 with explicit values instead of Default (XmrScalar doesn't impl Default)
+        let proof0 = Proofs0 {
+            public_outputs: Default::default(),
+            private_outputs: Comm0PrivateOutputs {
+                witness_0: XmrScalar::random(&mut rand_core::OsRng),
+                delta_bjj: Default::default(),
+                delta_ed: Default::default(),
+            },
+            proofs: vec![],
+        };
+        let peer_proof0 = PublicProof0::default();
         let event = LifeCycleEvent::MyProof0Generated(Box::new(proof0));
         channel.handle_event(event).unwrap();
         let event = LifeCycleEvent::PeerProof0Received(Box::new(peer_proof0));
@@ -579,7 +613,7 @@ mod test {
             public_outputs: Default::default(),
             private_outputs: PrivateUpdateOutputs {
                 update_count: 1,
-                witness_i: GenericScalar::random(&mut rand_core::OsRng),
+                witness_i: XmrScalar::random(&mut rand_core::OsRng),
                 delta_bjj: Default::default(),
                 delta_ed: Default::default(),
             },
@@ -603,7 +637,7 @@ mod test {
         let close = ChannelCloseRecord {
             final_balance: channel.state().balance(),
             update_count: 1,
-            witness: Default::default(),
+            witness: XmrScalar::random(&mut rand_core::OsRng),
         };
         let event = LifeCycleEvent::CloseChannel(Box::new(close));
         channel.handle_event(event).unwrap();

@@ -2,11 +2,15 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::ChannelMetadata;
+use crate::cryptography::dleq::Dleq;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{
-    ClosedChannelState, ClosingChannelState, EstablishedChannelState, EstablishingState, NewChannelState,
+    ClosedChannelState, ClosingChannelState, DisputingChannelState, EstablishedChannelState, EstablishingState,
+    NewChannelState,
 };
+use ciphersuite::Ed25519;
+use modular_frost::curve::Curve as FrostCurve;
 use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
@@ -100,28 +104,51 @@ macro_rules! lifecycle_impl {
     };
 }
 
+/// The channel state enum representing all possible lifecycle states.
+///
+/// The generic parameter `SF` specifies the SNARK-friendly curve used for DLEQ proofs and KES
+/// operations in the Establishing state. Use [`DefaultChannelState`] for the standard
+/// BabyJubJub curve.
 #[derive(Clone, Serialize, Deserialize)]
-pub enum ChannelState {
+#[serde(bound = "")]
+pub enum ChannelState<SF = grease_babyjubjub::BabyJubJub>
+where
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
+{
     New(NewChannelState),
-    Establishing(EstablishingState),
+    Establishing(EstablishingState<SF>),
     Open(EstablishedChannelState),
     Closing(ClosingChannelState),
+    Disputing(DisputingChannelState),
     Closed(ClosedChannelState),
 }
 
-impl Debug for ChannelState {
+/// Type alias for the default curve type (BabyJubJub).
+pub type DefaultChannelState = ChannelState<grease_babyjubjub::BabyJubJub>;
+
+impl<SF> Debug for ChannelState<SF>
+where
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.stage())
     }
 }
 
-impl ChannelState {
+impl<SF> ChannelState<SF>
+where
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
+{
     pub fn as_lifecycle(&self) -> &dyn LifeCycle {
         match self {
             ChannelState::New(state) => state,
             ChannelState::Establishing(state) => state,
             ChannelState::Open(state) => state,
             ChannelState::Closing(state) => state,
+            ChannelState::Disputing(state) => state,
             ChannelState::Closed(state) => state,
         }
     }
@@ -135,14 +162,14 @@ impl ChannelState {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_establishing(self) -> Result<EstablishingState, (Self, LifeCycleError)> {
+    pub fn to_establishing(self) -> Result<EstablishingState<SF>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Establishing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected EstablishingState"))),
         }
     }
 
-    pub fn as_establishing(&self) -> Result<&EstablishingState, LifeCycleError> {
+    pub fn as_establishing(&self) -> Result<&EstablishingState<SF>, LifeCycleError> {
         match self {
             ChannelState::Establishing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected EstablishingState")),
@@ -179,6 +206,21 @@ impl ChannelState {
         }
     }
 
+    pub fn as_disputing(&self) -> Result<&DisputingChannelState, LifeCycleError> {
+        match self {
+            ChannelState::Disputing(ref state) => Ok(state),
+            _ => Err(LifeCycleError::invalid_state_for("Expected DisputingState")),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn to_disputing(self) -> Result<DisputingChannelState, (Self, LifeCycleError)> {
+        match self {
+            ChannelState::Disputing(state) => Ok(state),
+            _ => Err((self, LifeCycleError::invalid_state_for("Expected DisputingChannelState"))),
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     pub fn to_closed(self) -> Result<ClosedChannelState, (Self, LifeCycleError)> {
         match self {
@@ -188,7 +230,11 @@ impl ChannelState {
     }
 }
 
-impl LifeCycle for ChannelState {
+impl<SF> LifeCycle for ChannelState<SF>
+where
+    SF: FrostCurve,
+    Ed25519: Dleq<SF>,
+{
     fn stage(&self) -> LifecycleStage {
         self.as_lifecycle().stage()
     }
@@ -209,10 +255,9 @@ pub mod test {
     use crate::channel_id::ChannelIdMetadata;
     use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-    use crate::cryptography::zk_objects::{
-        KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicUpdateOutputs, ShardInfo, UpdateProofs,
-    };
-    use crate::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
+    use crate::cryptography::zk_objects::{KesProof, PrivateUpdateOutputs, PublicUpdateOutputs, UpdateProofs};
+    use crate::grease_protocol::establish_channel::EstablishProtocolCommon;
+    use crate::monero::data_objects::{ClosingAddresses, TransactionId, TransactionRecord};
     use crate::multisig::MultisigWalletData;
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
@@ -221,6 +266,7 @@ pub mod test {
     use crate::state_machine::{ChannelCloseRecord, ChannelSeedBuilder, NewChannelProposal, NewChannelState};
     use crate::XmrScalar;
     use ciphersuite::Ed25519;
+    use ciphersuite::{group::Group, Ciphersuite};
     use k256::elliptic_curve::Field;
     use log::*;
     use monero::Network;
@@ -288,20 +334,16 @@ pub mod test {
     }
 
     pub fn establish_channel(mut state: EstablishingState) -> EstablishedChannelState {
+        // Initialize protocol context for the establishment phase
+        state.init_protocol_context(&mut rand_core::OsRng);
+        // Initialize KES client with a test public key (using a placeholder for testing)
+        let kes_pubkey = grease_babyjubjub::BabyJubJub::generator();
+        state.initialize_kes_client(&mut rand_core::OsRng, kes_pubkey).expect("KES init should succeed");
+
         // The multisig wallet protocol is complete.
         let wallet = create_wallet(state.role());
         state.wallet_created(wallet);
-        // The KES shards have been exchanged.
-        let my_shards = MultisigSplitSecrets {
-            kes_shard: PartialEncryptedKey("kes_shard_from_customer".into()),
-            peer_shard: PartialEncryptedKey("merchant_shard".into()),
-        };
-        let their_shards = MultisigSplitSecrets {
-            kes_shard: PartialEncryptedKey("kes_shard_from_merchant".into()),
-            peer_shard: PartialEncryptedKey("customer_shard".into()),
-        };
-        let shards = ShardInfo { my_shards, their_shards };
-        state.save_kes_shards(shards);
+
         // The funding transaction has been created and broadcast.
         let tx = TransactionRecord {
             channel_name: "channel".to_string(),
@@ -310,18 +352,11 @@ pub mod test {
             serialized: b"serialized_funding_tx".to_vec(),
         };
         state.funding_tx_confirmed(tx);
-        let proof0 = Proofs0 {
-            public_outputs: Default::default(),
-            private_outputs: Default::default(),
-            proofs: b"my_proof0".to_vec(),
-        };
-        let peer_proof0 = proof0.public_only();
-        state.save_proof0(proof0);
-        // Received peer's proof0 data
-        state.save_peer_proof0(peer_proof0);
+
         // The KES details have been exchanged.
         let kes_proof = KesProof { proof: "kes_0001".into() };
         state.kes_created(kes_proof);
+
         match state.next() {
             Ok(open) => {
                 assert_eq!(open.stage(), LifecycleStage::Open);

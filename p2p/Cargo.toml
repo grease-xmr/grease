@@ -24,5 +24,7 @@ tokio = { workspace = true, features = ["full"] }
 async-trait = "0.1.89"
 
 [dev-dependencies]
+ciphersuite = { workspace = true }
 env_logger = { workspace = true }
+grease-babyjubjub = { workspace = true }
 tempfile = "3.17.1"

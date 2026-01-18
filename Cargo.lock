@@ -1826,6 +1826,7 @@ name = "e2e"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ciphersuite",
  "cucumber",
  "dotenvy",
  "env_logger",
@@ -2455,6 +2456,7 @@ name = "grease-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ciphersuite",
  "clap",
  "dialoguer",
  "env_logger",
@@ -2480,8 +2482,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "blake2",
+ "ciphersuite",
  "env_logger",
  "futures",
+ "grease-babyjubjub",
  "hex",
  "libgrease",
  "libp2p",
@@ -3291,6 +3295,7 @@ name = "libgrease"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "blake2",
  "chrono",
  "ciphersuite",
@@ -3315,6 +3320,7 @@ dependencies = [
  "sha3",
  "subtle",
  "thiserror 2.0.17",
+ "tokio",
  "zeroize",
 ]
 

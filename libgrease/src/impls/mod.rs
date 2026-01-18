@@ -1,4 +1,4 @@
-mod multisig;
+pub mod multisig;
 
 #[cfg(test)]
 mod tests;

@@ -8,6 +8,7 @@ grease-p2p = { workspace = true }
 libgrease = { workspace = true }
 
 anyhow = { workspace = true }
+ciphersuite = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "unicode"] }
 dialoguer = { version = "0.11.0", default-features = false, features = ["completion", "fuzzy-select", "history", "editor"] }
 env_logger = { workspace = true }

@@ -15,4 +15,5 @@ pub mod channel_metadata;
 pub mod state_machine;
 
 // Re-exports
+pub use ciphersuite::group::ff::Field;
 pub use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};

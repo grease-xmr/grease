@@ -39,12 +39,14 @@ lifecycle_impl!(ClosedChannelState, Closed);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ChannelClosedReason {
-    /// The channel was closed normally
+    /// The channel was closed normally (cooperative close)
     Normal,
     /// The channel was closed due to a timeout
     Timeout(TimeoutReason),
-    /// The channel was closed following the dispute process
-    //Dispute(DisputeResult),
+    /// The channel was force closed via KES after dispute window passed
+    ForceClosed,
+    /// The channel was closed following a successful dispute (defender proved newer state)
+    Disputed,
     /// The channel was never opened because the terms were rejected
     Rejected(RejectNewChannelReason),
 }
@@ -55,6 +57,8 @@ impl PartialEq for ChannelClosedReason {
             (self, other),
             (ChannelClosedReason::Normal, ChannelClosedReason::Normal)
                 | (ChannelClosedReason::Timeout(_), ChannelClosedReason::Timeout(_))
+                | (ChannelClosedReason::ForceClosed, ChannelClosedReason::ForceClosed)
+                | (ChannelClosedReason::Disputed, ChannelClosedReason::Disputed)
                 | (ChannelClosedReason::Rejected(_), ChannelClosedReason::Rejected(_))
         )
     }

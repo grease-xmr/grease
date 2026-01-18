@@ -1,7 +1,6 @@
 use crate::amount::MoneroAmount;
-use crate::cryptography::common_types::HashCommitment256;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
-use crate::cryptography::Commit;
+use crate::cryptography::{Commit, HashCommitment256};
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
 use crate::multisig::sort_pubkeys;
@@ -149,7 +148,7 @@ pub enum MultisigTxError {
     FinalSignError(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SharedPublicKey {
     pub role: ChannelRole,
     pub public_key: Curve25519PublicKey,

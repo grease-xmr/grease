@@ -6,6 +6,7 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use blake2::Blake2b512;
 use rand_core::{CryptoRng, RngCore};
 
+#[derive(Debug, Clone)]
 pub struct MultisigWalletKeyRing {
     pub role: ChannelRole,
     pub partial_spend_key: Curve25519Secret,

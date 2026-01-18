@@ -335,6 +335,11 @@ impl EventLoop {
                     self.handlers.handle_command(cmd, self.swarm.behaviour_mut());
                 }
             }
+            NetworkCommand::ProtocolV2(_cmd) => {
+                // V2 protocol commands are handled by EventLoopV2, not this event loop.
+                // This branch exists to make the enum exhaustive; actual handling is in grease_v2.
+                warn!("ProtocolV2 command received on v1 EventLoop - this is a configuration error");
+            }
             NetworkCommand::ConnectedPeers { sender } => {
                 debug!("Connected peers requested.");
                 let peers = self.swarm.connected_peers().cloned().collect();
@@ -453,6 +458,9 @@ pub enum NetworkCommand {
     Dial { peer_id: PeerId, peer_addr: Multiaddr, sender: oneshot::Sender<Result<(), PeerConnectionError>> },
     /// Protocol-specific command (send request/response).
     Protocol(ProtocolCommand),
+    /// Protocol-specific command for v2 protocols (proposal, establish, update, close).
+    /// Note: This variant is handled by EventLoopV2, not the standard EventLoop.
+    ProtocolV2(crate::behaviour_v2::ProtocolCommandV2),
     /// Request the list of connected peers.
     ConnectedPeers { sender: oneshot::Sender<Vec<PeerId>> },
     /// Shutdown the network event loop.

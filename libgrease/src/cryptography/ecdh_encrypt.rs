@@ -12,8 +12,8 @@ use rand_core::{CryptoRng, RngCore};
 use std::io::Read;
 use zeroize::Zeroize;
 
-/// Domain separator for KES encryption hash function.
-const KES_ENCRYPT_DOMAIN: &[u8] = b"MessageEncrypt";
+/// Default domain separator for KES encryption hash function.
+pub const DEFAULT_ENCRYPT_DOMAIN: &[u8] = b"ECDHMessageEncrypt";
 
 /// An encrypted scalar value using ephemeral ECDH key exchange.
 ///
@@ -35,15 +35,19 @@ impl<C: Ciphersuite> EncryptedScalar<C> {
     /// 1. Generate random nonzero scalar `r`
     /// 2. Compute `R = r * G` (public nonce)
     /// 3. Compute shared secret point `P_s = r * P`
-    /// 4. Compute `s = H2F("MessageEncrypt", P_s)`
+    /// 4. Compute `s = H2F(domain, P_s)`
     /// 5. Compute `chi = m + s`
     /// 6. Zeroize `r`
     /// 7. Return `(R, chi)`
-    pub fn encrypt<R: RngCore + CryptoRng>(message: &C::F, recipient_pubkey: &C::G, rng: &mut R) -> Self {
+    pub fn encrypt<R, D>(message: &C::F, recipient_pubkey: &C::G, rng: &mut R, domain: D) -> Self
+    where
+        R: RngCore + CryptoRng,
+        D: AsRef<[u8]>,
+    {
         let mut r = C::random_nonzero_F(rng);
         let nonce = C::generator() * r;
         let shared_point = *recipient_pubkey * r;
-        let shared_secret = C::hash_to_F(KES_ENCRYPT_DOMAIN, shared_point.to_bytes().as_ref());
+        let shared_secret = C::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
         let chi = *message + shared_secret;
         r.zeroize();
         Self { nonce, chi }
@@ -53,12 +57,12 @@ impl<C: Ciphersuite> EncryptedScalar<C> {
     ///
     /// Implements the `DecryptMessage` algorithm:
     /// 1. Compute shared secret point `P_s = k * R`
-    /// 2. Compute `s = H2F("MessageEncrypt", P_s)`
+    /// 2. Compute `s = H2F(domain, P_s)`
     /// 3. Compute `m = chi - s`
     /// 4. Return `m`
-    pub fn decrypt(&self, recipient_private_key: &C::F) -> C::F {
+    pub fn decrypt<D: AsRef<[u8]>>(&self, recipient_private_key: &C::F, domain: D) -> C::F {
         let shared_point = self.nonce * *recipient_private_key;
-        let shared_secret = C::hash_to_F(KES_ENCRYPT_DOMAIN, shared_point.to_bytes().as_ref());
+        let shared_secret = C::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
         self.chi - shared_secret
     }
 
@@ -103,8 +107,8 @@ mod tests {
         let public_key = Ed25519::generator() * private_key;
         let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
 
-        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng);
-        let decrypted = encrypted.decrypt(&private_key);
+        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
+        let decrypted = encrypted.decrypt(&private_key, DEFAULT_ENCRYPT_DOMAIN);
 
         assert_eq!(message, decrypted);
     }
@@ -116,8 +120,8 @@ mod tests {
         let public_key = BabyJubJub::generator() * private_key;
         let message = <BabyJubJub as Ciphersuite>::F::random(&mut rng);
 
-        let encrypted = EncryptedScalar::<BabyJubJub>::encrypt(&message, &public_key, &mut rng);
-        let decrypted = encrypted.decrypt(&private_key);
+        let encrypted = EncryptedScalar::<BabyJubJub>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
+        let decrypted = encrypted.decrypt(&private_key, DEFAULT_ENCRYPT_DOMAIN);
 
         assert_eq!(message, decrypted);
     }
@@ -130,8 +134,21 @@ mod tests {
         let public_key = Ed25519::generator() * private_key;
         let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
 
-        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng);
-        let decrypted = encrypted.decrypt(&wrong_key);
+        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
+        let decrypted = encrypted.decrypt(&wrong_key, DEFAULT_ENCRYPT_DOMAIN);
+
+        assert_ne!(message, decrypted);
+    }
+
+    #[test]
+    fn decrypt_with_wrong_domain_produces_wrong_result() {
+        let mut rng = rand_core::OsRng;
+        let private_key = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let public_key = Ed25519::generator() * private_key;
+        let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+
+        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, b"domain_a");
+        let decrypted = encrypted.decrypt(&private_key, b"domain_b");
 
         assert_ne!(message, decrypted);
     }
@@ -143,11 +160,11 @@ mod tests {
         let public_key = Ed25519::generator() * private_key;
         let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
 
-        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng);
+        let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
         let serialized = encrypted.serialize();
         let deserialized = EncryptedScalar::<Ed25519>::read(&mut &serialized[..]).unwrap();
 
-        let decrypted = deserialized.decrypt(&private_key);
+        let decrypted = deserialized.decrypt(&private_key, DEFAULT_ENCRYPT_DOMAIN);
         assert_eq!(message, decrypted);
     }
 

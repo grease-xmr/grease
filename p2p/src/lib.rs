@@ -38,9 +38,11 @@
 //! delegated to one [`NetworkServer`].
 
 pub mod behaviour;
+pub mod behaviour_v2;
 pub mod delegates;
 pub mod errors;
 pub mod grease;
+pub mod grease_v2;
 mod identity;
 mod key_manager;
 pub mod p2p_networking;

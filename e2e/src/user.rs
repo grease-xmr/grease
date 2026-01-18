@@ -1,8 +1,8 @@
 use crate::MONEROD_RPC;
+use ciphersuite::{Ciphersuite, Ed25519};
 use grease_cli::config::GlobalOptions;
 use grease_cli::id_management::LocalIdentitySet;
 use grease_p2p::ConversationIdentity;
-use libgrease::cryptography::hashes::{Blake512, HashToScalar};
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use log::*;
 use monero::util::address::Address as MoneroAddressUtil;
@@ -33,10 +33,10 @@ impl User {
     }
 
     pub fn private_view_key(&self) -> Curve25519Secret {
-        let bytes = self.secret_key.as_scalar().as_bytes();
-        let mut hasher = Blake512 {};
-        let s = hasher.hash_to_scalar(bytes);
-        Curve25519Secret::from(s)
+        const DST: &str = "E2ETestUserPrivateViewKey";
+        let scalar = self.secret_key.as_scalar();
+        let k = Ed25519::hash_to_F(DST.as_bytes(), scalar.as_bytes());
+        Curve25519Secret::from(k)
     }
 
     pub async fn wallet(&self) -> MoneroWallet {
