@@ -53,7 +53,7 @@ where
         Ok(result)
     }
 
-    /// Verify that `next` is the valid consecutive output of applying the VCOF to `input` using this proof.
+    /// Verify that `next` is the valid consecutive output of applying the VCOF to `prev`.
     fn verify(
         &self,
         update_count: u64,
@@ -74,7 +74,7 @@ pub enum VcofError {
     DerivationError(String),
 }
 
-/// The output of a Verifiable Consecutive Oneway Function (VCOF) at a given index, along with a proof of correctness.
+/// The inputs and outputs of a Verifiable Consecutive Oneway Function (VCOF) derivation at a given index.
 pub struct VcofProofInput<SF>
 where
     SF: Ciphersuite,
@@ -83,7 +83,7 @@ where
     pub index: u64,
     /// The i-th secret value in the sequence.
     pub prev: Zeroizing<SF::F>,
-    /// The public key corresponding to the current secret value.
+    /// The public key corresponding to the previous secret value.
     pub prev_pub: SF::G,
     /// The (i+1)-th secret value in the sequence.
     pub next: Zeroizing<SF::F>,
