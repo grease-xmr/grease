@@ -4,7 +4,8 @@
 
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use crate::cryptography::vcof::{VcofError, VcofProof, VcofRecord, VerifiableConsecutiveOnewayFunction};
+use crate::cryptography::mocks::MockVCOF;
+use crate::cryptography::vcof::{VcofError, VcofProofResult, VerifiableConsecutiveOnewayFunction};
 use crate::grease_protocol::adapter_signature::AdapterSignatureHandler;
 use crate::grease_protocol::update_channel::{
     UpdatePackage, UpdateProtocolCommon, UpdateProtocolError, UpdateProtocolProposee, UpdateProtocolProposer,
@@ -16,49 +17,23 @@ use ciphersuite::{Ciphersuite, Ed25519};
 use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
 
-/// A mock VCOF implementation for testing
-struct MockVcof;
-
 /// Mock VCOF proof that always verifies
 #[derive(Clone)]
-struct MockVcofProof {
+struct MockVCOFProof {
     data: Vec<u8>,
 }
 
-impl<C: Ciphersuite> VcofProof<C> for MockVcofProof {
-    fn verify(&self, _input: &C::G, _next: &C::G) -> Result<(), VcofError> {
-        // Mock always succeeds
-        Ok(())
-    }
-}
-
-impl Writable for MockVcofProof {
+impl Writable for MockVCOFProof {
     fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_all(&self.data)
     }
 }
 
-impl crate::grease_protocol::utils::Readable for MockVcofProof {
+impl crate::grease_protocol::utils::Readable for MockVCOFProof {
     fn read<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, crate::error::ReadError> {
         let mut data = Vec::new();
-        reader.read_to_end(&mut data).map_err(|e| crate::error::ReadError::new("MockVcofProof", e.to_string()))?;
-        Ok(MockVcofProof { data })
-    }
-}
-
-impl VerifiableConsecutiveOnewayFunction<Ed25519> for MockVcof {
-    type Proof = MockVcofProof;
-
-    fn compute_next(
-        &self,
-        _input: &VcofRecord<Ed25519, Self::Proof>,
-    ) -> Result<<Ed25519 as Ciphersuite>::F, VcofError> {
-        // Return a mock scalar
-        Ok(<Ed25519 as Ciphersuite>::F::default())
-    }
-
-    fn create_proof(&self, _input: &VcofRecord<Ed25519, Self::Proof>) -> Result<Self::Proof, VcofError> {
-        Ok(MockVcofProof { data: vec![1, 2, 3, 4] })
+        reader.read_to_end(&mut data).map_err(|e| crate::error::ReadError::new("MockVCOFProof", e.to_string()))?;
+        Ok(MockVCOFProof { data })
     }
 }
 
@@ -67,7 +42,7 @@ struct TestUpdateProposer {
     role: ChannelRole,
     secret_key: Curve25519Secret,
     public_key: Curve25519PublicKey,
-    vcof: MockVcof,
+    vcof: MockVCOF,
     update_count: u64,
     current_offset: XmrScalar,
     pending_delta: Option<i64>,
@@ -77,11 +52,12 @@ struct TestUpdateProposer {
 impl TestUpdateProposer {
     fn new<R: RngCore + CryptoRng>(rng: &mut R, role: ChannelRole, initial_balance: i64) -> Self {
         let (secret_key, public_key) = Curve25519PublicKey::keypair(rng);
+        let vcof = MockVCOF::new(public_key.as_point());
         Self {
             role,
             secret_key,
             public_key,
-            vcof: MockVcof,
+            vcof,
             update_count: 0,
             current_offset: XmrScalar::default(),
             pending_delta: None,
@@ -112,7 +88,7 @@ impl AdapterSignatureHandler for TestUpdateProposer {
 
 #[async_trait]
 impl UpdateProtocolCommon<Ed25519> for TestUpdateProposer {
-    type VCOF = MockVcof;
+    type VCOF = MockVCOF;
 
     fn vcof(&self) -> &Self::VCOF {
         &self.vcof
@@ -233,7 +209,7 @@ struct TestUpdateProposee {
     role: ChannelRole,
     secret_key: Curve25519Secret,
     public_key: Curve25519PublicKey,
-    vcof: MockVcof,
+    vcof: MockVCOF,
     update_count: u64,
     current_offset: XmrScalar,
     pending_delta: Option<i64>,
@@ -244,11 +220,12 @@ struct TestUpdateProposee {
 impl TestUpdateProposee {
     fn new<R: RngCore + CryptoRng>(rng: &mut R, role: ChannelRole, initial_balance: i64) -> Self {
         let (secret_key, public_key) = Curve25519PublicKey::keypair(rng);
+        let vcof = MockVCOF::new(public_key.as_point());
         Self {
             role,
             secret_key,
             public_key,
-            vcof: MockVcof,
+            vcof,
             update_count: 0,
             current_offset: XmrScalar::default(),
             pending_delta: None,
@@ -280,7 +257,7 @@ impl AdapterSignatureHandler for TestUpdateProposee {
 
 #[async_trait]
 impl UpdateProtocolCommon<Ed25519> for TestUpdateProposee {
-    type VCOF = MockVcof;
+    type VCOF = MockVCOF;
 
     fn vcof(&self) -> &Self::VCOF {
         &self.vcof
