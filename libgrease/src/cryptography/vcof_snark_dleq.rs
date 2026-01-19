@@ -1,5 +1,5 @@
 use crate::cryptography::dleq::Dleq;
-use crate::cryptography::vcof::{VcofError, VcofProof, VcofRecord, VerifiableConsecutiveOnewayFunction};
+use crate::cryptography::vcof::{VcofError, VcofProofInput, VerifiableConsecutiveOnewayFunction};
 use crate::grease_protocol::utils::Readable;
 use ciphersuite::{Ciphersuite, Ed25519};
 use flexible_transcript::SecureDigest;
@@ -16,22 +16,6 @@ where
 {
     dleq: <Ed25519 as Dleq<SF>>::Proof,
     snark: Vec<u8>,
-}
-
-impl<SF> VcofProof<SF> for SnarkDleqProof<SF>
-where
-    SF: Curve,
-    Ed25519: Dleq<SF>,
-{
-    fn verify(&self, input: &SF::G, next: &SF::G) -> Result<(), VcofError> {
-        // Verify the DLEQ proof first
-        error!("DLEQ proof verification not implemented.");
-
-        // Verify the SNARK proof (not implemented here)
-        // You would typically call into your SNARK verification library here
-        error!("SNARK proof verification not implemented.");
-        Ok(())
-    }
 }
 
 impl<SF> Readable for SnarkDleqProof<SF>
@@ -67,13 +51,30 @@ where
     Ed25519: Dleq<SF>,
 {
     type Proof = SnarkDleqProof<SF>;
+    type Context = ();
 
-    fn compute_next(&self, input: &VcofRecord<SF, Self::Proof>) -> Result<SF::F, VcofError> {
-        let i = input.index();
+    fn compute_next(
+        &self,
+        update_count: u64,
+        prev: &SF::F,
+        pub_prev: &SF::G,
+        ctx: &Self::Context,
+    ) -> Result<SF::F, VcofError> {
         todo!()
     }
 
-    fn create_proof(&self, input: &VcofRecord<SF, Self::Proof>) -> Result<Self::Proof, VcofError> {
+    fn create_proof(&self, input: &VcofProofInput<SF>, ctx: &Self::Context) -> Result<Self::Proof, VcofError> {
+        todo!()
+    }
+
+    fn verify(
+        &self,
+        update_count: u64,
+        prev: &SF::G,
+        next: &SF::G,
+        proof: &Self::Proof,
+        ctx: &Self::Context,
+    ) -> Result<(), VcofError> {
         todo!()
     }
 }

@@ -12,6 +12,8 @@ pub mod adapter_signature;
 pub mod dleq;
 pub mod ecdh_encrypt;
 pub mod keys;
+#[cfg(feature = "mocks")]
+pub mod mocks;
 pub mod pok;
 pub mod secret_encryption;
 pub mod vcof;
