@@ -5,7 +5,6 @@
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use crate::cryptography::mocks::MockVCOF;
-use crate::cryptography::vcof::{VcofError, VcofProofResult, VerifiableConsecutiveOnewayFunction};
 use crate::grease_protocol::adapter_signature::AdapterSignatureHandler;
 use crate::grease_protocol::update_channel::{
     UpdatePackage, UpdateProtocolCommon, UpdateProtocolError, UpdateProtocolProposee, UpdateProtocolProposer,
@@ -14,28 +13,8 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use crate::XmrScalar;
 use async_trait::async_trait;
 use ciphersuite::{Ciphersuite, Ed25519};
-use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
 
-/// Mock VCOF proof that always verifies
-#[derive(Clone)]
-struct MockVCOFProof {
-    data: Vec<u8>,
-}
-
-impl Writable for MockVCOFProof {
-    fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&self.data)
-    }
-}
-
-impl crate::grease_protocol::utils::Readable for MockVCOFProof {
-    fn read<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Self, crate::error::ReadError> {
-        let mut data = Vec::new();
-        reader.read_to_end(&mut data).map_err(|e| crate::error::ReadError::new("MockVCOFProof", e.to_string()))?;
-        Ok(MockVCOFProof { data })
-    }
-}
 
 /// Test implementation of UpdateProtocolProposer
 struct TestUpdateProposer {

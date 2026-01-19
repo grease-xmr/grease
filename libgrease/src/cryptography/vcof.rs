@@ -105,7 +105,7 @@ where
     SF: Ciphersuite,
     P: Writable + Readable + Sized,
 {
-    /// Create a new VcofRecord with the given values.
+    /// Create a new `VcofProofResult` with the given values.
     pub fn new(input: VcofProofInput<SF>, proof: P) -> Self {
         Self { input, proof }
     }

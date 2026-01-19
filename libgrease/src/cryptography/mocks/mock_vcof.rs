@@ -3,7 +3,7 @@
 //! This module provides a fast but insecure VCOF implementation that can be used in tests.
 //! It provides verifiability and consecutiveness, but NOT one-wayness.
 
-use crate::cryptography::vcof::{VcofError, VcofProofInput, VcofProofResult, VerifiableConsecutiveOnewayFunction};
+use crate::cryptography::vcof::{VcofError, VcofProofInput, VerifiableConsecutiveOnewayFunction};
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
 use crate::{XmrPoint, XmrScalar};
@@ -79,12 +79,17 @@ impl VerifiableConsecutiveOnewayFunction<Ed25519> for MockVCOF {
         _: &XmrPoint,
         _ctx: &Self::Context,
     ) -> Result<XmrScalar, VcofError> {
+        if update_count == 0 {
+            return Err(VcofError::DerivationError(
+                "update_count must be at least 1".to_string(),
+            ));
+        }
         // Compute next as H(seed_pub || update_count)
         let next = self.witness_i(update_count);
         Ok(next)
     }
 
-    fn create_proof(&self, input: &VcofProofInput<Ed25519>, ctx: &Self::Context) -> Result<Self::Proof, VcofError> {
+    fn create_proof(&self, input: &VcofProofInput<Ed25519>, _: &Self::Context) -> Result<Self::Proof, VcofError> {
         let proof = MockVcofProof { vcof: self.clone(), index: input.index };
         Ok(proof)
     }
