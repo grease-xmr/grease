@@ -283,12 +283,29 @@ mod tests {
 
     #[test]
     fn check_generators() {
-        let gens = generators();
-        // G is (1, sqrt(-16)) per Grumpkin definition
-        let g_affine = gens[0].0.into_affine();
-        assert_eq!(g_affine.x.to_string(), "1");
-        // H is derived from hash_to_curve
-        assert!(gens[1].0.into_affine().is_on_curve());
+        let [g, h] = generators();
+        let g = g.0.into_affine();
+        let h = h.0.into_affine();
+
+        // G is the standard Grumpkin generator: (1, sqrt(-16))
+        assert_eq!(
+            g.x,
+            MontFp!("0x0000000000000000000000000000000000000000000000000000000000000001")
+        );
+        assert_eq!(
+            g.y,
+            MontFp!("0x0000000000000002cf135e7506a45d632d270d45f1181294833fc48d823f272c")
+        );
+
+        // H is derived from hash_to_curve(b"generatorH")
+        assert_eq!(
+            h.x,
+            MontFp!("0x10863a55e0a22bf92ed78688905fa12a12d0028e224456ad72a5bf2fb564288a")
+        );
+        assert_eq!(
+            h.y,
+            MontFp!("0x16a647f6f409cbd85a95b85d986cc95486248ce34b3a6ba0b8cc9656b0fd7ef6")
+        );
     }
 
     #[test]
