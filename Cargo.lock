@@ -2477,6 +2477,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "grease-grumpkin"
+version = "0.1.0"
+dependencies = [
+ "ark-algebra-test-templates",
+ "ark-ec",
+ "ark-ff",
+ "ark-grumpkin",
+ "ark-serialize",
+ "ark-std",
+ "blake2",
+ "ciphersuite",
+ "criterion 0.7.0",
+ "elliptic-curve",
+ "ff-group-tests",
+ "group",
+ "modular-frost",
+ "num-bigint 0.4.6",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "grease-p2p"
 version = "0.1.0"
 dependencies = [
