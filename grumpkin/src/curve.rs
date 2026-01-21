@@ -14,11 +14,12 @@ const HASH_TO_CURVE_DOMAIN: &[u8] = b"Grumpkin_XMD:Blake2b-512_TI_RO";
 /// Grumpkin curve: y^2 = x^3 + B where B = -17
 const B: Fq = MontFp!("-17");
 
-/// Hash arbitrary bytes to a point on the Grumpkin curve using try-and-increment.
+/// Hash arbitrary bytes to a point on the Grumpkin curve using try-and-increment. This function runs in
+/// variable time.
 pub fn hash_to_curve(msg: &[u8]) -> Result<Point, HashToCurveError> {
     let hasher = <FqHasher as HashToField<Fq>>::new(HASH_TO_CURVE_DOMAIN);
-
-    for counter in 0u64.. {
+    const MAX_TRIES: u64 = 256;
+    for counter in 0u64..MAX_TRIES {
         let input = [msg, &counter.to_le_bytes()].concat();
         let x: [Fq; 1] = hasher.hash_to_field(&input);
         let x = x[0];
@@ -33,7 +34,6 @@ pub fn hash_to_curve(msg: &[u8]) -> Result<Point, HashToCurveError> {
             return Ok(Affine::<GrumpkinConfig>::new(x, final_y));
         }
     }
-
     Err(HashToCurveError::MapToCurveError("Failed to find valid point".to_string()))
 }
 
