@@ -47,7 +47,7 @@ fn fq_conditional_select(a: &Fq, b: &Fq, choice: Choice) -> Fq {
     let a_limbs = a.into_bigint().0;
     let b_limbs = b.into_bigint().0;
     let result: [u64; 4] = std::array::from_fn(|i| u64::conditional_select(&a_limbs[i], &b_limbs[i], choice));
-    Fq::from_bigint(ark_ff::BigInt(result)).unwrap()
+    Fq::from_bigint(ark_ff::BigInt(result)).expect("from_bigint failed for a limb-wise selection of valid Fq elements")
 }
 
 impl ConditionallySelectable for GrumpkinPoint {
