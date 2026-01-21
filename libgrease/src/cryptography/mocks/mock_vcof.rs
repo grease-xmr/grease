@@ -80,9 +80,7 @@ impl VerifiableConsecutiveOnewayFunction<Ed25519> for MockVCOF {
         _ctx: &Self::Context,
     ) -> Result<XmrScalar, VcofError> {
         if update_count == 0 {
-            return Err(VcofError::DerivationError(
-                "update_count must be at least 1".to_string(),
-            ));
+            return Err(VcofError::DerivationError("update_count must be at least 1".to_string()));
         }
         // Compute next as H(seed_pub || update_count)
         let next = self.witness_i(update_count);

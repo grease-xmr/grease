@@ -15,7 +15,6 @@ use async_trait::async_trait;
 use ciphersuite::{Ciphersuite, Ed25519};
 use rand_core::{CryptoRng, OsRng, RngCore};
 
-
 /// Test implementation of UpdateProtocolProposer
 struct TestUpdateProposer {
     role: ChannelRole,
