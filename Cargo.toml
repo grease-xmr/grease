@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "babyjubjub",
-    "circuits",
     "e2e",
     "grease_cli",
     "grumpkin",
@@ -17,7 +16,6 @@ grease-grumpkin = { version = "0.1.0", path = "./grumpkin" }
 grease-p2p = { version = "0.1.0", path = "./p2p" }
 libgrease = { version = "0.1.0", path = "./libgrease" }
 wallet = { version = "0.1.0", path = "./wallet" }
-circuits = { version = "0.1.0", path = "./circuits" }
 
 anyhow = { version = "1.0.96" }
 async-trait = { version = "0.1" }
