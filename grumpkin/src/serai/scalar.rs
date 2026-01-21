@@ -194,7 +194,7 @@ impl SeraiPrimeField for Scalar {
     fn to_repr(&self) -> Self::Repr {
         let mut bytes = Self::Repr::default();
         let mut writer = Cursor::new(&mut bytes[..]);
-        self.0.serialize_uncompressed(&mut writer).expect("Serialization failed");
+        self.0.serialize_compressed(&mut writer).expect("Serialization failed");
         bytes
     }
 
