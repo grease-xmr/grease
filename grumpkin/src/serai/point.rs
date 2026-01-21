@@ -44,10 +44,9 @@ fn fq_ct_eq(a: &Fq, b: &Fq) -> Choice {
 /// Returns `a` if `choice == 0`, `b` if `choice == 1`.
 #[inline]
 fn fq_conditional_select(a: &Fq, b: &Fq, choice: Choice) -> Fq {
-    let mask = -(choice.unwrap_u8() as i64) as u64;
     let a_limbs = a.into_bigint().0;
     let b_limbs = b.into_bigint().0;
-    let result: [u64; 4] = std::array::from_fn(|i| a_limbs[i] ^ (mask & (a_limbs[i] ^ b_limbs[i])));
+    let result: [u64; 4] = std::array::from_fn(|i| u64::conditional_select(&a_limbs[i], &b_limbs[i], choice));
     Fq::from_bigint(ark_ff::BigInt(result)).unwrap()
 }
 

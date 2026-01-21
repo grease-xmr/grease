@@ -50,11 +50,9 @@ impl ConstantTimeEq for Scalar {
 
 impl ConditionallySelectable for Scalar {
     fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
-        // Use the bit value directly without branching
-        let mask = -(choice.unwrap_u8() as i64) as u64;
         let mut a_bigint = Zeroizing::new(a.0.into_bigint());
         let mut b_bigint = Zeroizing::new(b.0.into_bigint());
-        let result: [u64; 4] = std::array::from_fn(|i| a_bigint.0[i] ^ (mask & (a_bigint.0[i] ^ b_bigint.0[i])));
+        let result: [u64; 4] = std::array::from_fn(|i| u64::conditional_select(&a_bigint.0[i], &b_bigint.0[i], choice));
         a_bigint.zeroize();
         b_bigint.zeroize();
         Self(Fr::from_bigint(ark_ff::BigInt(result)).unwrap())
