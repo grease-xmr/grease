@@ -4,7 +4,7 @@ use blake2::Blake2b512;
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
-use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};
+use dalek_ff_group::{EdwardsPoint as XmrPoint, EdwardsPoint, Scalar as XmrScalar};
 use digest::{Digest, Update};
 use dleq::cross_group::{ConciseLinearDLEq, Generators};
 use flexible_transcript::{RecommendedTranscript, Transcript};
@@ -239,23 +239,24 @@ impl Dleq<Grumpkin> for Ed25519 {
 }
 
 fn xmr_bjj_generators() -> (Generators<XmrPoint>, Generators<BjjPoint>) {
-    let monero_gen = Generators::new(
-        Ed25519::generator(),
-        str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
-    )
-    .expect("Hardcoded generators for Monero failed to generate");
+    let monero_gen = monero_generators();
     let bjj_gen = grease_babyjubjub::generators();
     let bjj_gen =
         Generators::new(bjj_gen[0], bjj_gen[1]).expect("Hardcoded generators for BabyJubJub failed to generate");
     (monero_gen, bjj_gen)
 }
 
-fn xmr_btc_generators() -> (Generators<XmrPoint>, Generators<ProjectivePoint>) {
+fn monero_generators() -> Generators<EdwardsPoint> {
     let monero_gen = Generators::new(
         Ed25519::generator(),
         str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
     )
-    .expect("Hardcoded generators for Monero failed to generate");
+        .expect("Hardcoded generators for Monero failed to generate");
+    monero_gen
+}
+
+fn xmr_btc_generators() -> (Generators<XmrPoint>, Generators<ProjectivePoint>) {
+    let monero_gen = monero_generators();
     let btc_gen = Generators::new(
         Secp256k1::generator(),
         str_to_g("0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"),
@@ -265,11 +266,7 @@ fn xmr_btc_generators() -> (Generators<XmrPoint>, Generators<ProjectivePoint>) {
 }
 
 fn xmr_grumpkin_generators() -> (Generators<XmrPoint>, Generators<GrumpkinPoint>) {
-    let monero_gen = Generators::new(
-        Ed25519::generator(),
-        str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
-    )
-    .expect("Hardcoded generators for Monero failed to generate");
+    let monero_gen = monero_generators();
     let grumpkin_gen = grease_grumpkin::generators();
     let grumpkin_gen = Generators::new(grumpkin_gen[0], grumpkin_gen[1])
         .expect("Hardcoded generators for Grumpkin failed to generate");
@@ -467,6 +464,7 @@ mod test {
         let y_point = Grumpkin::generator() * y;
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
         proof.write(&mut v).expect("Writing proof to vec cannot fail");
+        assert_eq!(v.len(), 44480);
         println!(
             "proof: {} bytes xmr: {}, grumpkin: {}",
             v.len(),
@@ -476,6 +474,13 @@ mod test {
         assert!(
             <Ed25519 as Dleq<Grumpkin>>::verify_dleq(&proof, &x_point, &y_point).is_ok(),
             "XMR<>Grumpkin DLEQ Proof did not verify"
+        );
+        // Roundtrip: deserialize and re-verify
+        let proof_roundtrip =
+            <Ed25519 as Dleq<Grumpkin>>::read(&mut v.as_slice()).expect("Failed to read proof from serialized bytes");
+        assert!(
+            <Ed25519 as Dleq<Grumpkin>>::verify_dleq(&proof_roundtrip, &x_point, &y_point).is_ok(),
+            "XMR<>Grumpkin DLEQ Proof roundtrip did not verify"
         );
         let x_point = x_point.add(&x_point);
         assert!(matches!(
