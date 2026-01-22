@@ -1,8 +1,8 @@
 //! Implements traits to make Grumpkin scalars compatible with Serai's `CipherSuite`
 
-use crate::Fr;
 use crate::constants::*;
 use ark_ff::{AdditiveGroup, BigInteger, FftField, Field, One, PrimeField, Zero};
+use ark_grumpkin::Fr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::rand::RngCore;

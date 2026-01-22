@@ -1,64 +1,71 @@
-use dep::bignum;
-use dep::bignum::BigNum;
-use dep::bignum::fields::U256::U256;
-use edwards::bjj::BabyJubJubParams;
-use std::hash::poseidon2_permutation;
+use library::{next_witness_wide, vcof_prove_wide, witness_to_pubkey};
+use std::embedded_curve_ops::EmbeddedCurvePoint;
 
-/// Verify COF [given VerifyWitness0() at initialization]
-fn VerifyCOF(
-    T_im1: edwards::Curve<BabyJubJubParams>,
-    T_i: edwards::Curve<BabyJubJubParams>,
-    witness_im1: Field,
-    witness_i: Field,
-) {
-    library::VerifyTi(T_im1, witness_im1);
-    library::VerifyTi(T_i, witness_i);
+/// Main entry point for the VCOF update circuit (Grumpkin variant).
+///
+/// Uses the wide derivation path: wn_next = (H(i,w,0) + H(i,w,1) * 2^254) mod l
+/// This ensures the derived witness is unbiased and valid in both Ed25519 and Grumpkin.
+///
+/// For curves where N_SF < N_ed25519 (e.g., BabyJubJub), use vcof_prove_native instead.
+fn main(i: pub Field, wn_prev: Field, pub_prev: pub EmbeddedCurvePoint, pub_next: pub EmbeddedCurvePoint) {
+    vcof_prove_wide(i, wn_prev, pub_prev, pub_next);
+}
 
-    //Create hash (random oracle) from previous entropy
-    let input: [Field; 4] = [
-        library::HASH_HEADER_CONSTANT_UPDATE_0,
-        witness_im1,
-        library::HASH_HEADER_CONSTANT_UPDATE_1,
-        library::HASH_HEADER_CONSTANT_UPDATE_2,
-    ];
-    let output: [Field; 4] = poseidon2_permutation(input, input.len());
-    let hash = output[0];
-    let hash_bignum: U256 = U256::from(hash);
+// ============================================================================
+// Benchmark Tests (Wide derivation for Grumpkin)
+// ============================================================================
 
-    //Clamp to Baby Jubjub order [251 bit value]
-    let l_bignum: U256 = U256::from(library::BABY_JUBJUB_ORDER);
+/// Benchmark: Single VCOF update with small values
+#[test]
+fn benchmark_vcof_wide_single_update_small() {
+    let i: Field = 1;
+    let wn_prev: Field = 12345;
 
-    let value_bignum = hash_bignum.umod(l_bignum);
-    let mut value_field: Field = bignum::bignum::to_field(value_bignum) as Field;
-    if value_field == 0 {
-        value_field = library::BABY_JUBJUB_ORDER;
+    let pub_prev = witness_to_pubkey(wn_prev);
+    let wn_next = next_witness_wide(i, wn_prev);
+    let pub_next = witness_to_pubkey(wn_next);
+
+    vcof_prove_wide(i, wn_prev, pub_prev, pub_next);
+}
+
+/// Benchmark: Single VCOF update with large 254-bit values
+#[test]
+fn benchmark_vcof_wide_single_update_large() {
+    let wn_prev: Field = 0x2523648240000001ba344d80000000086121000000000013a700000000000012;
+    let i: Field = 999999999;
+
+    let pub_prev = witness_to_pubkey(wn_prev);
+    let wn_next = next_witness_wide(i, wn_prev);
+    let pub_next = witness_to_pubkey(wn_next);
+
+    vcof_prove_wide(i, wn_prev, pub_prev, pub_next);
+}
+
+/// Benchmark: Chain of 5 consecutive VCOF updates
+#[test]
+fn benchmark_vcof_wide_chain_5_updates() {
+    let mut w: Field = 0xabcdef123456789;
+
+    for i in 1..5 {
+        let pub_prev = witness_to_pubkey(w);
+        let w_next = next_witness_wide(i as Field, w);
+        let pub_next = witness_to_pubkey(w_next);
+        vcof_prove_wide(i as Field, w, pub_prev, pub_next);
+        w = w_next;
     }
-
-    assert_eq(value_field, witness_i);
 }
 
-/// Main function for update
-fn main(
-    T_im1: pub edwards::Curve<BabyJubJubParams>,
-    T_i: pub edwards::Curve<BabyJubJubParams>,
-    witness_im1: Field,
-    witness_i: Field,
-    challenge_bytes: pub [u8; 32],
-    blinding_DLEQ: Field,
-    response_div_BabyJubJub: [u8; 32],
-    response_BabyJubJub: [u8; 32],
-    response_div_ed25519: [u8; 32],
-    response_ed25519: [u8; 32],
-) {
-    VerifyCOF(T_im1, T_i, witness_im1, witness_i);
+/// Benchmark: Chain of 10 consecutive VCOF updates
+#[test]
+fn benchmark_vcof_wide_chain_10_updates() {
+    let mut w: Field = 0xfeedface12345678;
 
-    library::VerifyEquivalentModulo(
-        challenge_bytes,
-        blinding_DLEQ,
-        witness_i,
-        response_div_BabyJubJub,
-        response_BabyJubJub,
-        response_div_ed25519,
-        response_ed25519,
-    );
+    for i in 1..10 {
+        let pub_prev = witness_to_pubkey(w);
+        let w_next = next_witness_wide(i as Field, w);
+        let pub_next = witness_to_pubkey(w_next);
+        vcof_prove_wide(i as Field, w, pub_prev, pub_next);
+        w = w_next;
+    }
 }
+

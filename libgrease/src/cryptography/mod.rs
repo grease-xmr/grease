@@ -17,9 +17,10 @@ pub mod mocks;
 pub mod pok;
 pub mod secret_encryption;
 pub mod vcof;
+pub mod vcof_grkn_pos2;
 mod vcof_snark_dleq;
 mod witness;
 pub mod zk_objects;
 
 pub use commit::{Commit, HashCommitment256};
-pub use witness::{ChannelWitness, WitnessError};
+pub use witness::{convert_scalar, ChannelWitness, WitnessError};
