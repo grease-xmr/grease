@@ -9,6 +9,7 @@ use digest::{Digest, Update};
 use dleq::cross_group::{ConciseLinearDLEq, Generators};
 use flexible_transcript::{RecommendedTranscript, Transcript};
 use grease_babyjubjub::{BabyJubJub, BjjPoint};
+use grease_grumpkin::{Grumpkin, GrumpkinPoint};
 use k256::ProjectivePoint;
 use modular_frost::algorithm::SchnorrSignature;
 use modular_frost::curve::Curve;
@@ -155,6 +156,22 @@ impl Writable for DleqMoneroBitcoin {
     }
 }
 
+#[derive(Clone)]
+pub struct DleqMoneroGrumpkin(pub ConciseLinearDLEq<<Ed25519 as Ciphersuite>::G, <Grumpkin as Ciphersuite>::G>);
+
+impl DleqMoneroGrumpkin {
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let proof = ConciseLinearDLEq::<<Ed25519 as Ciphersuite>::G, <Grumpkin as Ciphersuite>::G>::read(reader)?;
+        Ok(DleqMoneroGrumpkin(proof))
+    }
+}
+
+impl Writable for DleqMoneroGrumpkin {
+    fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.0.write(writer)
+    }
+}
+
 impl Dleq<Secp256k1> for Ed25519 {
     type Proof = DleqMoneroBitcoin;
 
@@ -187,6 +204,40 @@ impl Dleq<Secp256k1> for Ed25519 {
     }
 }
 
+impl Dleq<Grumpkin> for Ed25519 {
+    type Proof = DleqMoneroGrumpkin;
+
+    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Grumpkin>, DleqError> {
+        let mut transcript = RecommendedTranscript::new(b"Ed25519/Grumpkin DLEQ");
+        let mut nonce = Zeroizing::new([0u8; 64]);
+        rng.fill_bytes(nonce.as_mut_slice());
+        let digest = Blake2b512::new().chain(&nonce);
+        nonce.zeroize();
+        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_grumpkin_generators(), digest);
+        let xmr = *xmr;
+        let foreign_key = <Grumpkin as Ciphersuite>::F::from(fk.0);
+        Ok((DleqMoneroGrumpkin(proof), (xmr, foreign_key)))
+    }
+
+    fn verify_dleq(proof: &Self::Proof, p1: &XmrPoint, p2: &<Grumpkin as Ciphersuite>::G) -> Result<(), DleqError> {
+        let mut transcript = RecommendedTranscript::new(b"Ed25519/Grumpkin DLEQ");
+        let mut rng = OsRng;
+        let (x_rec, y_rec) = proof
+            .0
+            .verify(&mut rng, &mut transcript, xmr_grumpkin_generators())
+            .map_err(|_| DleqError::VerificationFailure)?;
+        match p1.eq(&x_rec) && p2.eq(&y_rec) {
+            true => Ok(()),
+            false => Err(DleqError::VerificationFailure),
+        }
+    }
+
+    fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError> {
+        let proof = DleqMoneroGrumpkin::read(reader)?;
+        Ok(proof)
+    }
+}
+
 fn xmr_bjj_generators() -> (Generators<XmrPoint>, Generators<BjjPoint>) {
     let monero_gen = Generators::new(
         Ed25519::generator(),
@@ -211,6 +262,18 @@ fn xmr_btc_generators() -> (Generators<XmrPoint>, Generators<ProjectivePoint>) {
     )
     .expect("Hardcoded generators for Bitcoin failed to generate");
     (monero_gen, btc_gen)
+}
+
+fn xmr_grumpkin_generators() -> (Generators<XmrPoint>, Generators<GrumpkinPoint>) {
+    let monero_gen = Generators::new(
+        Ed25519::generator(),
+        str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
+    )
+    .expect("Hardcoded generators for Monero failed to generate");
+    let grumpkin_gen = grease_grumpkin::generators();
+    let grumpkin_gen = Generators::new(grumpkin_gen[0], grumpkin_gen[1])
+        .expect("Hardcoded generators for Grumpkin failed to generate");
+    (monero_gen, grumpkin_gen)
 }
 
 fn str_to_g<G: GroupEncoding>(s: &str) -> G {
@@ -311,6 +374,7 @@ mod test {
     use ciphersuite::group::GroupEncoding;
     use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
     use grease_babyjubjub::BabyJubJub;
+    use grease_grumpkin::Grumpkin;
     use modular_frost::sign::Writable;
     use rand_core::OsRng;
     use std::ops::Add;
@@ -390,6 +454,32 @@ mod test {
         let x_point = x_point.add(&x_point);
         assert!(matches!(
             <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &x_point, &y_point),
+            Err(DleqError::VerificationFailure)
+        ));
+        assert_eq!(x.to_le_bits(), y.to_le_bits());
+    }
+
+    #[test]
+    fn test_equivalence_ed25519_grumpkin() {
+        let mut rng = OsRng;
+        let (proof, (x, y)) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng).unwrap();
+        let x_point = Ed25519::generator() * x;
+        let y_point = Grumpkin::generator() * y;
+        let mut v = Vec::<u8>::with_capacity(64 * 1024);
+        proof.write(&mut v).expect("Writing proof to vec cannot fail");
+        println!(
+            "proof: {} bytes xmr: {}, grumpkin: {}",
+            v.len(),
+            hex::encode(x_point.to_bytes()),
+            hex::encode(y_point.to_bytes())
+        );
+        assert!(
+            <Ed25519 as Dleq<Grumpkin>>::verify_dleq(&proof, &x_point, &y_point).is_ok(),
+            "XMR<>Grumpkin DLEQ Proof did not verify"
+        );
+        let x_point = x_point.add(&x_point);
+        assert!(matches!(
+            <Ed25519 as Dleq<Grumpkin>>::verify_dleq(&proof, &x_point, &y_point),
             Err(DleqError::VerificationFailure)
         ));
         assert_eq!(x.to_le_bits(), y.to_le_bits());
