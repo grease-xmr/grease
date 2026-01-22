@@ -114,7 +114,7 @@ impl EstablishProtocolCommon<BabyJubJub, Blake2b512> for ChannelEstablishData {
 }
 
 impl EstablishProtocolCustomer<BabyJubJub, Blake2b512> for ChannelEstablishData {
-    fn store_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_wallet_commitment<R: Read>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let commitment =
             PublicKeyCommitment::read(reader).map_err(|e| EstablishProtocolError::InvalidCommitment(e.to_string()))?;
         self.wallet_keyring.set_peer_public_key_commitment(commitment);

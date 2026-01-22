@@ -1,11 +1,24 @@
+use crate::{XmrPoint, XmrScalar};
 use ciphersuite::group::ff::{Field, PrimeField};
+use ciphersuite::group::Group;
 use ciphersuite::Ciphersuite;
+use dalek_ff_group::EdwardsPoint;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::marker::PhantomData;
 use thiserror::Error;
+use zeroize::Zeroize;
 
-use crate::XmrScalar;
+/// VCOFs can employ any kind of type as witness, as long as they can deliver an offset scalar.
+pub trait Offset: Clone + Zeroize {
+    type Public: AsXmrPoint;
+    fn offset(&self) -> XmrScalar;
+    fn as_public(&self) -> Self::Public;
+}
+
+pub trait AsXmrPoint {
+    fn as_xmr_point(&self) -> &XmrPoint;
+}
 
 /// Error type for witness operations.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -138,17 +151,33 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
         }
     }
 
-    /// Get the offset scalar as an Ed25519 scalar.
-    pub fn offset(&self) -> XmrScalar {
-        self.offset
-    }
-
     /// Get the offset scalar converted to curve SF's scalar field.
     ///
     /// This is guaranteed to succeed since the witness was constructed to be valid in both fields.
     pub fn as_snark_scalar(&self) -> SF::F {
         convert_scalar::<XmrScalar, SF::F>(&self.offset)
             .expect("ChannelWitness invariant violated: offset should be valid in SF")
+    }
+
+    /// Get the public points corresponding to this witness.
+    pub fn public_points(&self) -> ChannelWitnessPublic<SF> {
+        let xmr_point = EdwardsPoint::generator() * &self.offset;
+        let snark_scalar = self.as_snark_scalar();
+        let snark_point = SF::G::generator() * &snark_scalar;
+        ChannelWitnessPublic { xmr_point, snark_point }
+    }
+}
+
+impl<SF: Ciphersuite> Offset for ChannelWitness<SF> {
+    type Public = ChannelWitnessPublic<SF>;
+
+    /// Get the offset scalar as an Ed25519 scalar.
+    fn offset(&self) -> XmrScalar {
+        self.offset
+    }
+
+    fn as_public(&self) -> Self::Public {
+        self.public_points()
     }
 }
 
@@ -164,6 +193,34 @@ impl<SF: Ciphersuite> TryFrom<XmrScalar> for ChannelWitness<SF> {
         } else {
             Err(WitnessError::InvalidScalar)
         }
+    }
+}
+
+impl<SF: Ciphersuite> Zeroize for ChannelWitness<SF> {
+    fn zeroize(&mut self) {
+        self.offset.zeroize();
+    }
+}
+
+/// The public point counterpart to ChannelWitness. It holds both the Ed25519 point and the SNARK curve point.
+///
+/// The points are *NOT* guaranteed to be equivalent, however. This can only be proved via a corresponding DLEQ proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelWitnessPublic<SF: Ciphersuite> {
+    xmr_point: XmrPoint,
+    snark_point: SF::G,
+}
+
+impl<SF: Ciphersuite> ChannelWitnessPublic<SF> {
+    /// Get the SNARK curve point.
+    pub fn snark_point(&self) -> &SF::G {
+        &self.snark_point
+    }
+}
+
+impl<SF: Ciphersuite> AsXmrPoint for ChannelWitnessPublic<SF> {
+    fn as_xmr_point(&self) -> &XmrPoint {
+        &self.xmr_point
     }
 }
 

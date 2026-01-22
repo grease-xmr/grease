@@ -1,6 +1,8 @@
 use dep::bignum;
+use dep::bignum::bignum::BigNum;
 use dep::bignum::fields::U512::U512;
 use dep::poseidon2;
+use std::ops::Mul;
 use std::embedded_curve_ops::{EmbeddedCurvePoint, EmbeddedCurveScalar, fixed_base_scalar_mul};
 
 // Ed25519 scalar field order (l)
@@ -8,18 +10,36 @@ use std::embedded_curve_ops::{EmbeddedCurvePoint, EmbeddedCurveScalar, fixed_bas
 global ED25519_ORDER: Field =
     0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed;
 
-// 2^254 as a U512 constant for wide multiplication
+/// Computes the Ed25519 scalar field order from its mathematical definition.
+/// l = 2^252 + 27742317777372353535851937790883648493
+pub fn compute_ed25519_order() -> Field {
+    // 2^252 (1 followed by 63 hex zeros = 252 bits)
+    let two_pow_252: Field = 0x1000000000000000000000000000000000000000000000000000000000000000;
+    // The "small" cofactor: 27742317777372353535851937790883648493
+    let cofactor: Field = 0x14def9dea2f79cd65812631a5cf5d3ed;
+    two_pow_252 + cofactor
+}
+
+// 2^254 as U512 limbs for wide multiplication
 // Used in next_witness_wide to combine two hash outputs
-global SHIFT_2_254_LIMBS: [u64; 8] = [
-    0x0000000000000000, // limb 0 (lowest)
-    0x0000000000000000, // limb 1
-    0x0000000000000000, // limb 2
-    0x4000000000000000, // limb 3 (2^254 = 0x40 << 248 in LE u64 limbs)
-    0x0000000000000000, // limb 4
-    0x0000000000000000, // limb 5
-    0x0000000000000000, // limb 6
-    0x0000000000000000, // limb 7 (highest)
+// U512 uses [u128; 5] in little-endian order with 120-bit limbs
+// 2^254 = 2^(2*120 + 14), so it goes in limb 2 at 2^14 = 16384
+global SHIFT_2_254_LIMBS: [u128; 5] = [
+    0,     // limb 0 (bits 0-119)
+    0,     // limb 1 (bits 120-239)
+    16384, // limb 2 (bits 240-359): 2^14
+    0,     // limb 3 (bits 360-479)
+    0,     // limb 4 (bits 480+)
 ];
+
+/// Asserts that a field value is a valid Ed25519 scalar field element.
+/// i.e. that 0 < value < l (Ed25519 order).
+pub fn assert_valid_ed25519_scalar(value: Field) {
+    assert(value != 0, "Scalar must be non-zero");
+    // Use Noir's built-in lt check for BN254 field elements
+    // This constrains value < ED25519_ORDER, i.e., 0 < value < l
+    std::field::bn254::assert_lt(value, ED25519_ORDER);
+}
 
 /// Derives the next witness value using a single Poseidon2 hash.
 ///
@@ -52,26 +72,99 @@ pub fn next_witness_native(i: Field, w: Field) -> Field {
 ///
 /// # Bias
 /// Statistical distance from uniform is ~2^(-254), cryptographically negligible.
+///
 pub fn next_witness_wide(i: Field, w: Field) -> Field {
     // Two Poseidon2 hashes with domain separation for ~508 bits of entropy
     let h0 = poseidon2::bn254::hash_3([i, w, 0]);
     let h1 = poseidon2::bn254::hash_3([i, w, 1]);
 
-    // Convert to U512 for wide arithmetic
+    // Batch all BigNum operations in unconstrained to avoid ACIR/Brillig subgraph warnings.
+    // The computation is: result = (h0 + h1 * 2^254) mod ED25519_ORDER
+    // Safety: The unconstrained computation is verified by `verify_wide_mod_reduction`
+    // which proves the modular reduction equation holds.
+    let (result, quotient) = unsafe { compute_wide_mod_with_quotient(h0, h1) };
+
+    // Constrain the result by verifying the modular reduction equation:
+    // h0 + h1 * 2^254 = quotient * ED25519_ORDER + result
+    // This proves result is the correct remainder, not just any value < ED25519_ORDER.
+    verify_wide_mod_reduction(h0, h1, quotient, result);
+
+    result
+}
+
+/// Unconstrained helper that computes (h0 + h1 * 2^254) mod ED25519_ORDER
+/// and returns both the result and the quotient for verification.
+unconstrained fn compute_wide_mod_with_quotient(h0: Field, h1: Field) -> (Field, U512) {
     let h0_wide: U512 = U512::from(h0);
     let h1_wide: U512 = U512::from(h1);
-    let shift: U512 = U512 { limbs: SHIFT_2_254_LIMBS };
+    let shift: U512 = U512::from_limbs(SHIFT_2_254_LIMBS);
     let ed25519_order: U512 = U512::from(ED25519_ORDER);
 
-    // Compute wide = h0 + h1 * 2^254
     let h1_shifted: U512 = h1_wide.mul(shift);
     let wide: U512 = h0_wide + h1_shifted;
 
-    // Reduce mod Ed25519 order
-    let reduced: U512 = wide.umod(ed25519_order);
+    // Get both quotient and remainder using udiv_mod
+    let (quotient, reduced): (U512, U512) = wide.udiv_mod(ed25519_order);
 
-    // Convert back to Field (safe since reduced < ED25519_ORDER < BN254_ORDER)
-    bignum::bignum::to_field(reduced)
+    let result: Field = bignum::bignum::to_field(reduced);
+    (result, quotient)
+}
+
+// Constants for limb-to-Field reconstruction
+// U512 uses 120-bit limbs in little-endian order
+global TWO_POW_120: Field = 0x1000000000000000000000000000000; // 2^120
+
+/// Converts a Field to U512 limbs in unconstrained code.
+unconstrained fn field_to_u512_limbs(f: Field) -> [u128; 5] {
+    let u: U512 = U512::from(f);
+    u.get_limbs()
+}
+
+/// Converts a Field to U512 using unconstrained limb computation + constrained validation.
+/// This avoids the internal Brillig validation in U512::from that causes subgraph warnings.
+fn field_to_u512_constrained(f: Field) -> U512 {
+    // Safety: Limbs are validated by reconstructing the Field and checking equality below.
+    let limbs = unsafe { field_to_u512_limbs(f) };
+    let u: U512 = U512::from_limbs(limbs);
+
+    // Validate the conversion by reconstructing Field from limbs
+    // For BN254 fields (< 2^254), only limbs 0, 1, 2 are used; limbs 3, 4 must be 0
+    assert(limbs[3] == 0, "Limb 3 must be 0 for BN254 field");
+    assert(limbs[4] == 0, "Limb 4 must be 0 for BN254 field");
+
+    // Reconstruct: f = l0 + l1 * 2^120 + l2 * 2^240
+    let l0: Field = limbs[0] as Field;
+    let l1: Field = limbs[1] as Field;
+    let l2: Field = limbs[2] as Field;
+    let reconstructed: Field = l0 + l1 * TWO_POW_120 + l2 * TWO_POW_120 * TWO_POW_120;
+    assert(reconstructed == f, "Field to U512 conversion mismatch");
+
+    u
+}
+
+/// Constrains that: h0 + h1 * 2^254 = quotient * ED25519_ORDER + result
+/// This verifies the modular reduction was computed correctly.
+fn verify_wide_mod_reduction(h0: Field, h1: Field, quotient: U512, result: Field) {
+    // Convert inputs to U512 using the warning-free conversion
+    let h0_wide: U512 = field_to_u512_constrained(h0);
+    let h1_wide: U512 = field_to_u512_constrained(h1);
+    let shift: U512 = U512::from_limbs(SHIFT_2_254_LIMBS);
+    let ed25519_order: U512 = field_to_u512_constrained(ED25519_ORDER);
+    let result_wide: U512 = field_to_u512_constrained(result);
+
+    // Compute left side: h0 + h1 * 2^254
+    let h1_shifted: U512 = h1_wide.mul(shift);
+    let lhs: U512 = h0_wide + h1_shifted;
+
+    // Compute right side: quotient * ED25519_ORDER + result
+    let q_times_order: U512 = quotient.mul(ed25519_order);
+    let rhs: U512 = q_times_order + result_wide;
+
+    // Verify equality
+    assert(lhs == rhs, "Wide mod reduction verification failed");
+
+    // Verify result < ED25519_ORDER (proves it's the canonical remainder)
+    std::field::bn254::assert_lt(result, ED25519_ORDER);
 }
 
 /// VCOF prove circuit using native (single hash) derivation.
@@ -99,22 +192,22 @@ pub fn next_witness_wide(i: Field, w: Field) -> Field {
 /// - Zero rejection: Zero witnesses are rejected to prevent identity point attacks
 pub fn vcof_prove_native(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint, pub_next: EmbeddedCurvePoint) {
     // Reject zero witness to prevent identity point attacks
-    assert(wn_prev != 0);
-    assert(i != 0);
+    assert(wn_prev != 0, "Previous witness must be non-zero");
+    assert(i != 0, "Index must be non-zero");
 
     // Verify pub_prev = wn_prev * G (proves knowledge of wn_prev)
     let computed_prev = fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(wn_prev));
-    assert(computed_prev == pub_prev);
+    assert(computed_prev == pub_prev, "pub_prev does not match wn_prev * G");
 
     // Compute wn_next = H(i || wn_prev) using native single-hash derivation
     let wn_next = next_witness_native(i, wn_prev);
 
     // Reject zero derived witness (defensive - extremely unlikely from Poseidon2)
-    assert(wn_next != 0);
+    assert(wn_next != 0, "Derived witness must be non-zero");
 
     // Verify pub_next = wn_next * G
     let computed_next = fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(wn_next));
-    assert(computed_next == pub_next);
+    assert(computed_next == pub_next, "pub_next does not match wn_next * G");
 }
 
 /// VCOF prove circuit using wide (double hash + reduction) derivation.
@@ -133,7 +226,7 @@ pub fn vcof_prove_native(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint,
 /// - `pub_next`: Public key for the next witness (wn_next * G on Grumpkin)
 ///
 /// # Private Inputs (witnesses)
-/// - `wn_prev`: The previous witness value (must be non-zero)
+/// - `wn_prev`: The previous witness value (must be valid Ed25519 scalar: 0 < wn_prev < l)
 ///
 /// # Security
 /// - Consecutiveness: wn_next is derived deterministically from wn_prev
@@ -141,24 +234,30 @@ pub fn vcof_prove_native(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint,
 /// - Verifiability: Public keys commit to witness values via discrete log
 /// - Zero rejection: Zero witnesses are rejected to prevent identity point attacks
 /// - Unbiased: Statistical distance from uniform is ~2^(-254)
+/// - Range checked: wn_prev must be a valid Ed25519 scalar
 pub fn vcof_prove_wide(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint, pub_next: EmbeddedCurvePoint) {
-    // Reject zero witness to prevent identity point attacks
-    assert(wn_prev != 0);
-    assert(i != 0);
+    // Validate wn_prev is a valid Ed25519 scalar (0 < wn_prev < l)
+    // This is critical for Grumpkin where Field can hold values > Ed25519 order
+    assert_valid_ed25519_scalar(wn_prev);
+    println("wn_prev validated as valid Ed25519 scalar");
+    // Reject zero index
+    assert(i != 0, "Index must be non-zero");
 
     // Verify pub_prev = wn_prev * G (proves knowledge of wn_prev)
     let computed_prev = fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(wn_prev));
-    assert(computed_prev == pub_prev);
+    println(f"P_i = wi.G: {computed_prev}");
+    assert(computed_prev == pub_prev, "pub_prev does not match wn_prev * G");
 
     // Compute wn_next using wide derivation with Ed25519 order reduction
     let wn_next = next_witness_wide(i, wn_prev);
 
     // Reject zero derived witness (defensive - extremely unlikely from Poseidon2)
-    assert(wn_next != 0);
-
+    assert(wn_next != 0, "Derived witness must be non-zero");
+    println(f"wn_next: {wn_next}");
     // Verify pub_next = wn_next * G
     let computed_next = fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(wn_next));
-    assert(computed_next == pub_next);
+    println(f"P_next = w_next.G: {computed_next}");
+    assert(computed_next == pub_next, "pub_next does not match wn_next * G");
 }
 
 // ============================================================================
@@ -168,6 +267,31 @@ pub fn vcof_prove_wide(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint, p
 /// Helper function to compute public key from witness value (w * G)
 pub fn witness_to_pubkey(w: Field) -> EmbeddedCurvePoint {
     fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(w))
+}
+
+// ============================================================================
+// Tests for Ed25519 order constant
+// ============================================================================
+
+/// Test: Verify ED25519_ORDER constant matches computed value from definition
+/// l = 2^252 + 27742317777372353535851937790883648493
+#[test]
+fn test_ed25519_order_matches_computed() {
+    let computed = compute_ed25519_order();
+    assert(computed == ED25519_ORDER, "ED25519_ORDER constant doesn't match computed value");
+}
+
+/// Test: Verify ED25519_ORDER hex matches the known decimal representation
+/// The decimal value is: 7237005577332262213973186563042994240857116359379907606001950938285454250989
+#[test]
+fn test_ed25519_order_known_value() {
+    // Verify against the well-known hex representation
+    let expected: Field = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed;
+    assert(ED25519_ORDER == expected, "ED25519_ORDER doesn't match expected hex value");
+
+    // Verify the computed value also matches
+    let computed = compute_ed25519_order();
+    assert(computed == expected, "Computed Ed25519 order doesn't match expected hex value");
 }
 
 // ============================================================================
@@ -314,9 +438,8 @@ fn test_next_witness_wide_within_ed25519_order() {
 
     let result = next_witness_wide(i, w);
 
-    // Result should be < ED25519_ORDER
-    // We can't directly compare with assert_lt on Field, but we can verify
-    // it's non-zero and the reduction worked
+    // Result should be < ED25519_ORDER (verified by assert_lt in next_witness_wide)
+    // Also verify it's non-zero
     assert(result != 0);
 }
 
@@ -419,6 +542,34 @@ fn test_vcof_prove_wide_rejects_swapped_pubkeys() {
     let pub_next = witness_to_pubkey(wn_next);
 
     vcof_prove_wide(i, wn_prev, pub_next, pub_prev);
+}
+
+/// Test: vcof_prove_wide rejects witness >= Ed25519 order
+#[test(should_fail)]
+fn test_vcof_prove_wide_rejects_witness_above_ed25519_order() {
+    let i = 1;
+    // ED25519_ORDER is the maximum valid value + 1, so using it should fail
+    let wn_prev: Field = ED25519_ORDER;
+
+    let pub_prev = witness_to_pubkey(wn_prev);
+    let wn_next = next_witness_wide(i, wn_prev);
+    let pub_next = witness_to_pubkey(wn_next);
+
+    vcof_prove_wide(i, wn_prev, pub_prev, pub_next);
+}
+
+/// Test: vcof_prove_wide accepts witness at Ed25519 order - 1
+#[test]
+fn test_vcof_prove_wide_accepts_max_valid_witness() {
+    let i = 1;
+    // ED25519_ORDER - 1 is the maximum valid scalar
+    let wn_prev: Field = ED25519_ORDER - 1;
+
+    let pub_prev = witness_to_pubkey(wn_prev);
+    let wn_next = next_witness_wide(i, wn_prev);
+    let pub_next = witness_to_pubkey(wn_next);
+
+    vcof_prove_wide(i, wn_prev, pub_prev, pub_next);
 }
 
 // ============================================================================

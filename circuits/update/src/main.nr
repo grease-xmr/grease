@@ -28,10 +28,12 @@ fn benchmark_vcof_wide_single_update_small() {
     vcof_prove_wide(i, wn_prev, pub_prev, pub_next);
 }
 
-/// Benchmark: Single VCOF update with large 254-bit values
+/// Benchmark: Single VCOF update with large values (near Ed25519 order)
 #[test]
 fn benchmark_vcof_wide_single_update_large() {
-    let wn_prev: Field = 0x2523648240000001ba344d80000000086121000000000013a700000000000012;
+    // Use a large value that's still < ED25519_ORDER (which is ~2^252)
+    // This is 2^252 - 1 = 0x0FFF... (63 F's)
+    let wn_prev: Field = 0x0FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
     let i: Field = 999999999;
 
     let pub_prev = witness_to_pubkey(wn_prev);

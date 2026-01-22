@@ -1,13 +1,27 @@
+use crate::cryptography::witness::{AsXmrPoint, Offset};
 use crate::grease_protocol::utils::Readable;
-use ciphersuite::Ciphersuite;
 use modular_frost::sign::Writable;
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::Zeroize;
 
-pub trait VerifiableConsecutiveOnewayFunction<SF>
-where
-    SF: Ciphersuite,
-{
+pub trait VcofPrivateData: Zeroize {
+    type W: Offset;
+    fn from_parts(prev: Self::W, next: Self::W) -> Self;
+    fn prev(&self) -> &Self::W;
+    fn next(&self) -> &Self::W;
+}
+
+pub trait VcofPublicData {
+    type G: AsXmrPoint;
+    fn from_parts(prev: Self::G, next: Self::G) -> Self;
+    fn prev(&self) -> &Self::G;
+    fn next(&self) -> &Self::G;
+}
+
+pub trait VerifiableConsecutiveOnewayFunction {
+    type Witness: Offset;
+    type PrivateData: VcofPrivateData<W = Self::Witness>;
+    type PublicData: VcofPublicData<G = <Self::Witness as Offset>::Public>;
     type Proof: Writable + Readable;
     type Context;
 
@@ -17,15 +31,20 @@ where
     fn compute_next(
         &self,
         update_count: u64,
-        prev: &SF::F,
-        pub_prev: &SF::G,
+        prev: &Self::Witness,
         ctx: &Self::Context,
-    ) -> Result<SF::F, VcofError>;
+    ) -> Result<Self::Witness, ProvingError>;
 
     /// Create a proof that `next` is the valid consecutive output of applying the VCOF to `input`.
     ///
     /// Don't call this method directly; use `next` instead to get both the next item and its proof.
-    fn create_proof(&self, input: &VcofProofInput<SF>, ctx: &Self::Context) -> Result<Self::Proof, VcofError>;
+    fn create_proof(
+        &self,
+        index: u64,
+        private_input: &Self::PrivateData,
+        public_input: &Self::PublicData,
+        ctx: &Self::Context,
+    ) -> Result<Self::Proof, ProvingError>;
 
     /// Calculate the next item in the VCOF sequence along with a proof of correctness.
     ///
@@ -34,79 +53,78 @@ where
     /// Otherwise, you need to implement [`compute_next`] and [`create_proof`] accordingly.
     fn next(
         &self,
-        update_count: u64,
-        prev: &SF::F,
-        prev_pub: &SF::G,
+        index: u64,
+        prev_witness: &Self::Witness,
         ctx: &Self::Context,
-    ) -> Result<VcofProofResult<SF, Self::Proof>, VcofError> {
-        let next = Zeroizing::new(self.compute_next(update_count, prev, prev_pub, ctx)?);
-        let next_pub = SF::generator() * *next;
-        let input = VcofProofInput {
-            index: update_count,
-            prev: Zeroizing::new(prev.clone()),
-            prev_pub: prev_pub.clone(),
-            next,
-            next_pub,
-        };
-        let proof = self.create_proof(&input, ctx)?;
-        let result = VcofProofResult::new(input, proof);
-        Ok(result)
+    ) -> Result<(Self::Proof, Self::PublicData), ProvingError> {
+        if index == 0 {
+            let err = ProvingError::DerivationError("update_count must be at least 1".to_string());
+            return Err(err);
+        }
+        let next_witness = self.compute_next(index, prev_witness, ctx)?;
+        let next_public = next_witness.as_public();
+        let mut private_input = <Self::PrivateData as VcofPrivateData>::from_parts(prev_witness.clone(), next_witness);
+        let prev_public = prev_witness.as_public();
+        let public_input = <Self::PublicData as VcofPublicData>::from_parts(prev_public, next_public);
+        let proof = self.create_proof(index, &private_input, &public_input, ctx).map_err(|e| e.into())?;
+        private_input.zeroize();
+        Ok((proof, public_input))
     }
 
     /// Verify that `next` is the valid consecutive output of applying the VCOF to `prev`.
     fn verify(
         &self,
         update_count: u64,
-        prev: &SF::G,
-        next: &SF::G,
+        public_input: &Self::PublicData,
         proof: &Self::Proof,
         ctx: &Self::Context,
-    ) -> Result<(), VcofError>;
+    ) -> Result<(), InvalidProof>;
+}
+
+pub trait NextWitness: Default {
+    type W: Offset;
+    type Err: std::error::Error;
+    fn next_witness(&self, update_count: u64, prev: &Self::W) -> Result<Self::W, Self::Err>;
 }
 
 #[derive(Debug, Clone, Error)]
-pub enum VcofError {
-    #[error("The proof provided is invalid.")]
-    InvalidProof,
+pub enum ProvingError {
     #[error("Error during VCOF proof generation: {0}")]
     ProvingError(String),
     #[error("Could not derive the next item in the VCOF sequence: {0}")]
     DerivationError(String),
+    #[error("Error during VCOF initialization: {0}")]
+    InitializationError(String),
 }
 
-/// The inputs and outputs of a Verifiable Consecutive Oneway Function (VCOF) derivation at a given index.
-pub struct VcofProofInput<SF>
-where
-    SF: Ciphersuite,
-{
-    /// The index of the next record in the VCOF sequence.
-    pub index: u64,
-    /// The i-th secret value in the sequence.
-    pub prev: Zeroizing<SF::F>,
-    /// The public key corresponding to the previous secret value.
-    pub prev_pub: SF::G,
-    /// The (i+1)-th secret value in the sequence.
-    pub next: Zeroizing<SF::F>,
-    /// The public key corresponding to the next secret value.
-    pub next_pub: SF::G,
+impl ProvingError {
+    pub fn derive_err(msg: impl Into<String>) -> Self {
+        ProvingError::DerivationError(msg.into())
+    }
+
+    pub fn prove_err(msg: impl Into<String>) -> Self {
+        ProvingError::ProvingError(msg.into())
+    }
+
+    pub fn init_err(msg: impl Into<String>) -> Self {
+        ProvingError::InitializationError(msg.into())
+    }
 }
 
-pub struct VcofProofResult<SF, P>
-where
-    SF: Ciphersuite,
-    P: Writable + Readable + Sized,
-{
-    pub input: VcofProofInput<SF>,
-    pub proof: P,
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+#[error("Invalid proof for update count {update_count}")]
+pub struct InvalidProof {
+    update_count: u64,
 }
 
-impl<SF, P> VcofProofResult<SF, P>
-where
-    SF: Ciphersuite,
-    P: Writable + Readable + Sized,
-{
-    /// Create a new `VcofProofResult` with the given values.
-    pub fn new(input: VcofProofInput<SF>, proof: P) -> Self {
-        Self { input, proof }
+impl InvalidProof {
+    pub fn new(update_count: u64) -> Self {
+        Self { update_count }
+    }
+}
+
+impl From<u64> for InvalidProof {
+    fn from(update_count: u64) -> Self {
+        Self::new(update_count)
     }
 }

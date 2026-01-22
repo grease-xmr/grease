@@ -3,7 +3,11 @@
 //! This module provides a fast but insecure VCOF implementation that can be used in tests.
 //! It provides verifiability and consecutiveness, but NOT one-wayness.
 
-use crate::cryptography::vcof::{VcofError, VcofProofInput, VerifiableConsecutiveOnewayFunction};
+use crate::cryptography::vcof::{
+    InvalidProof, ProvingError, VcofPrivateData, VcofPublicData, VerifiableConsecutiveOnewayFunction,
+};
+use crate::cryptography::witness::{AsXmrPoint, ChannelWitnessPublic};
+use crate::cryptography::ChannelWitness;
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
 use crate::{XmrPoint, XmrScalar};
@@ -12,7 +16,7 @@ use ciphersuite::{Ciphersuite, Ed25519};
 use modular_frost::sign::Writable;
 use monero::consensus::ReadExt;
 use std::io::{Read, Write};
-use zeroize::Zeroizing;
+use zeroize::Zeroize;
 
 /// A mock VCOF implementation for testing.
 ///
@@ -42,6 +46,50 @@ impl MockVCOF {
     }
 }
 
+#[derive(Clone, Debug, Zeroize)]
+pub struct MockVcofPrivateData {
+    pub prev: ChannelWitness<Ed25519>,
+    pub next: ChannelWitness<Ed25519>,
+}
+
+impl VcofPrivateData for MockVcofPrivateData {
+    type W = ChannelWitness<Ed25519>;
+
+    fn from_parts(prev: Self::W, next: Self::W) -> Self {
+        Self { prev, next }
+    }
+
+    fn prev(&self) -> &Self::W {
+        &self.prev
+    }
+
+    fn next(&self) -> &Self::W {
+        &self.next
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MockVcofPublicData {
+    pub prev: ChannelWitnessPublic<Ed25519>,
+    pub next: ChannelWitnessPublic<Ed25519>,
+}
+
+impl VcofPublicData for MockVcofPublicData {
+    type G = ChannelWitnessPublic<Ed25519>;
+
+    fn from_parts(prev: Self::G, next: Self::G) -> Self {
+        Self { prev, next }
+    }
+
+    fn prev(&self) -> &Self::G {
+        &self.prev
+    }
+
+    fn next(&self) -> &Self::G {
+        &self.next
+    }
+}
+
 /// Proof for MockVCOF that stores the seed public key and index used for derivation.
 ///
 /// Verification recomputes `H(seed_pub | index)` and checks that `G * result == next_pub`.
@@ -68,63 +116,70 @@ impl Readable for MockVcofProof {
     }
 }
 
-impl VerifiableConsecutiveOnewayFunction<Ed25519> for MockVCOF {
+impl VerifiableConsecutiveOnewayFunction for MockVCOF {
+    type Witness = ChannelWitness<Ed25519>;
+    type PrivateData = MockVcofPrivateData;
+    type PublicData = MockVcofPublicData;
     type Proof = MockVcofProof;
     type Context = ();
 
     fn compute_next(
         &self,
         update_count: u64,
-        _: &XmrScalar,
-        _: &XmrPoint,
+        _: &ChannelWitness<Ed25519>,
         _ctx: &Self::Context,
-    ) -> Result<XmrScalar, VcofError> {
-        if update_count == 0 {
-            return Err(VcofError::DerivationError("update_count must be at least 1".to_string()));
-        }
+    ) -> Result<ChannelWitness<Ed25519>, ProvingError> {
         // Compute next as H(seed_pub || update_count)
         let next = self.witness_i(update_count);
+        let next = ChannelWitness::try_from_snark_scalar(next).unwrap();
         Ok(next)
     }
 
-    fn create_proof(&self, input: &VcofProofInput<Ed25519>, _: &Self::Context) -> Result<Self::Proof, VcofError> {
-        let proof = MockVcofProof { vcof: self.clone(), index: input.index };
+    fn create_proof(
+        &self,
+        index: u64,
+        _: &Self::PrivateData,
+        _: &Self::PublicData,
+        _: &Self::Context,
+    ) -> Result<Self::Proof, ProvingError> {
+        let proof = MockVcofProof { vcof: self.clone(), index };
         Ok(proof)
     }
 
     fn verify(
         &self,
         update_count: u64,
-        prev: &XmrPoint,
-        next: &XmrPoint,
+        public: &Self::PublicData,
         proof: &Self::Proof,
-        _: &(),
-    ) -> Result<(), VcofError> {
+        _: &Self::Context,
+    ) -> Result<(), InvalidProof> {
         if update_count < 1 {
-            return Err(VcofError::InvalidProof);
+            return Err(update_count.into());
         }
 
         if proof.index != update_count {
-            return Err(VcofError::InvalidProof);
+            return Err(update_count.into());
         }
 
+        let prev = public.prev().as_xmr_point();
         if update_count == 1 {
             if *prev != self.seed_pub {
-                return Err(VcofError::InvalidProof);
+                return Err(update_count.into());
             }
         } else {
             let expected_prev = self.witness_i(update_count - 1);
             let expected_prev_pub = Ed25519::generator() * expected_prev;
 
             if expected_prev_pub != *prev {
-                return Err(VcofError::InvalidProof);
+                return Err(update_count.into());
             }
         }
         let expected_next = self.witness_i(update_count);
         let expected_next_pub = Ed25519::generator() * expected_next;
 
+        let next = public.next().as_xmr_point();
         if expected_next_pub != *next {
-            return Err(VcofError::InvalidProof);
+            return Err(update_count.into());
         }
         Ok(())
     }
@@ -133,46 +188,45 @@ impl VerifiableConsecutiveOnewayFunction<Ed25519> for MockVCOF {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Field;
-    use rand_core::OsRng;
+    use crate::cryptography::witness::Offset;
+    use crate::cryptography::ChannelWitness;
 
     #[test]
     fn test_mock_vcof_consecutiveness() {
         // Create initial seed
-        let seed = Zeroizing::new(XmrScalar::random(&mut OsRng));
-        let pub0 = Ed25519::generator() * *seed;
-        // Create initial record and VCOF instance
+        let seed = ChannelWitness::random();
+        let pub0 = Ed25519::generator() * seed.offset();
 
-        let vcof = MockVCOF::new(pub0.clone());
+        let vcof = MockVCOF::new(pub0);
 
-        let p1 = vcof.next(1, &seed, &pub0, &()).unwrap();
-        // Advance to next record
-        assert_eq!(p1.input.index, 1);
+        let (proof1, pub1) = vcof.next(1, &seed, &()).unwrap();
+        // Verify first transition
+        vcof.verify(1, &pub1, &proof1, &()).unwrap();
 
-        vcof.verify(1, &p1.input.prev_pub, &p1.input.next_pub, &p1.proof, &()).unwrap();
+        // Compute the witness for index 1 to use as prev for next call
+        let witness1 = ChannelWitness::try_from_snark_scalar(vcof.witness_i(1)).unwrap();
 
         // Advance again
-        let p2 = vcof.next(2, &p1.input.next, &p1.input.next_pub, &()).unwrap();
-        assert_eq!(p2.input.index, 2);
-        assert_eq!(p2.input.prev_pub, p1.input.next_pub);
-        vcof.verify(2, &p2.input.prev_pub, &p2.input.next_pub, &p2.proof, &()).unwrap();
+        let (proof2, pub2) = vcof.next(2, &witness1, &()).unwrap();
+        assert_eq!(*pub2.prev(), *pub1.next());
+        vcof.verify(2, &pub2, &proof2, &()).unwrap();
     }
 
     #[test]
     fn test_mock_vcof_invalid_proof() {
-        let seed = Zeroizing::new(XmrScalar::random(&mut OsRng));
-        let pub0 = Ed25519::generator() * *seed;
+        let seed = ChannelWitness::random();
+        let pub0 = Ed25519::generator() * seed.offset();
         let vcof = MockVCOF::new(pub0);
 
-        let p1 = vcof.next(1, &seed, &pub0, &()).unwrap();
+        let (proof1, pub1) = vcof.next(1, &seed, &()).unwrap();
 
         // Create a proof with wrong index
         let bad_proof = MockVcofProof { vcof: vcof.clone(), index: 999 };
-        let result = vcof.verify(1, &p1.input.prev_pub, &p1.input.next_pub, &bad_proof, &());
-        assert!(matches!(result, Err(VcofError::InvalidProof)));
+        let result = vcof.verify(1, &pub1, &bad_proof, &());
+        assert_eq!(result, Err(InvalidProof::new(1)));
 
         // Verify with wrong update_count
-        let result = vcof.verify(2, &p1.input.prev_pub, &p1.input.next_pub, &p1.proof, &());
-        assert!(matches!(result, Err(VcofError::InvalidProof)));
+        let result = vcof.verify(2, &pub1, &proof1, &());
+        assert_eq!(result, Err(InvalidProof::new(2)));
     }
 }

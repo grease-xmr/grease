@@ -102,7 +102,7 @@ where
     fn wallet_mut(&mut self) -> &mut Self::MultisigWallet;
 
     /// Read the peer's shared public key (includes role) from the given reader and store it.
-    fn store_peer_shared_public_key<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_peer_shared_public_key<R: Read>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let shared_pubkey = <Self::MultisigWallet as LinkedMultisigWallets<D>>::SharedKeyType::read(reader)?;
         if shared_pubkey.role() == self.role() {
             return Err(EstablishProtocolError::InvalidDataFromPeer(format!(
@@ -116,7 +116,7 @@ where
     }
 
     /// Read the peer's adapted signature from the given reader and store it.
-    fn store_peer_adapted_signature<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_peer_adapted_signature<R: Read>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let adapted_signature = AdaptedSignature::<Ed25519>::read(reader)?;
         self.set_peer_adapted_signature(adapted_signature);
         Ok(())
@@ -148,7 +148,7 @@ where
     Ed25519: Dleq<SF>,
 {
     /// Read the peer's public key commitment from the given reader and store it.
-    fn store_wallet_commitment<R: Read + ?Sized>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
+    fn store_wallet_commitment<R: Read>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         let commitment =
             <<<Self as EstablishProtocolCommon<SF, D>>::MultisigWallet as LinkedMultisigWallets<D>>::SharedKeyType as Commit<D>>::Committed::read(reader)?;
         self.wallet_mut().set_peer_public_key_commitment(commitment);

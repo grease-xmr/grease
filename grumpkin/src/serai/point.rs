@@ -1,6 +1,6 @@
 use crate::{Fq, Grumpkin, Point, ProjectivePoint, Scalar, hash_to_curve};
 use ark_ec::{CurveGroup, PrimeGroup};
-use ark_ff::{AdditiveGroup, Field, PrimeField, Zero};
+use ark_ff::{AdditiveGroup, BigInteger, Field, PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::UniformRand;
 use ark_std::rand::RngCore;
@@ -15,6 +15,30 @@ use zeroize::Zeroize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Zeroize)]
 pub struct GrumpkinPoint(ProjectivePoint);
+
+impl GrumpkinPoint {
+    /// Returns the underlying ProjectivePoint
+    pub fn to_projective(&self) -> ProjectivePoint {
+        self.0
+    }
+
+    /// Returns the (x, y) coordinates as big-endian hex strings.
+    ///
+    /// Converts the projective point to affine form, extracts the x and y
+    /// coordinates, and returns them as 32-byte big-endian hex strings.
+    ///
+    /// # Returns
+    ///
+    /// A tuple `(x_hex, y_hex)` where each string is a 64-character hex
+    /// representation of the coordinate in big-endian format.
+    pub fn as_coordinates_be(&self) -> (String, String) {
+        use crate::ArkPrimeField;
+        let affine: Point = self.0.into_affine();
+        let x_bytes = affine.x.into_bigint().to_bytes_be();
+        let y_bytes = affine.y.into_bigint().to_bytes_be();
+        (hex::encode(x_bytes), hex::encode(y_bytes))
+    }
+}
 
 impl From<ProjectivePoint> for GrumpkinPoint {
     fn from(value: ProjectivePoint) -> Self {
@@ -933,5 +957,101 @@ mod tests {
 
         assert_eq!(forward, reverse, "MSM sum order should not matter");
         assert_eq!(forward, pairwise, "MSM associativity failed");
+    }
+
+    // ==================== as_coordinates_be tests ====================
+
+    #[test]
+    fn as_coordinates_be_generator() {
+        // Test with the standard Grumpkin generator
+        let g = GrumpkinPoint::generator();
+        let (x_hex, y_hex) = g.as_coordinates_be();
+
+        // G.x = 1 (big-endian 32-byte hex)
+        assert_eq!(
+            x_hex, "0000000000000000000000000000000000000000000000000000000000000001",
+            "Generator x-coordinate mismatch"
+        );
+
+        // G.y = sqrt(-16) = 0x0000000000000002cf135e7506a45d632d270d45f1181294833fc48d823f272c
+        assert_eq!(
+            y_hex, "0000000000000002cf135e7506a45d632d270d45f1181294833fc48d823f272c",
+            "Generator y-coordinate mismatch"
+        );
+    }
+
+    #[test]
+    fn as_coordinates_be_identity() {
+        // Identity point has x=0, y=0 in projective (but affine form is special)
+        let id = GrumpkinPoint::identity();
+        let (x_hex, y_hex) = id.as_coordinates_be();
+
+        // Both should be 64-char hex strings
+        assert_eq!(x_hex.len(), 64, "Identity x-coordinate hex should be 64 chars");
+        assert_eq!(y_hex.len(), 64, "Identity y-coordinate hex should be 64 chars");
+    }
+
+    #[test]
+    fn as_coordinates_be_roundtrip() {
+        // Parse hex back and verify we get the same point
+        let mut rng = ark_std::test_rng();
+
+        for _ in 0..100 {
+            let p = GrumpkinPoint::random(&mut rng);
+            let (x_hex, y_hex) = p.as_coordinates_be();
+
+            // Parse hex back to bytes (big-endian)
+            let x_bytes: Vec<u8> = hex::decode(&x_hex).expect("x_hex should be valid hex");
+            let y_bytes: Vec<u8> = hex::decode(&y_hex).expect("y_hex should be valid hex");
+
+            // Convert back to Fq (need to convert from big-endian)
+            let x_fq = Fq::from_be_bytes_mod_order(&x_bytes);
+            let y_fq = Fq::from_be_bytes_mod_order(&y_bytes);
+
+            // Reconstruct point and verify equality
+            let reconstructed = point_from_xy(x_fq, y_fq);
+            assert_eq!(p, reconstructed, "Roundtrip failed for random point");
+        }
+    }
+
+    #[test]
+    fn as_coordinates_be_known_point() {
+        // Test with a known test vector point
+        let p = point_from_xy(
+            MontFp!("0x1cccccb80012e70dd67726216a7d958066d2df2ab126eab550c9e57cc02eaf88"),
+            MontFp!("0x0a5809d7d9f66ae7e22107f71bbe8f6f1d980eb0254903eeb17e46255a5758bb"),
+        );
+
+        let (x_hex, y_hex) = p.as_coordinates_be();
+
+        assert_eq!(
+            x_hex, "1cccccb80012e70dd67726216a7d958066d2df2ab126eab550c9e57cc02eaf88",
+            "Known point x-coordinate mismatch"
+        );
+        assert_eq!(
+            y_hex, "0a5809d7d9f66ae7e22107f71bbe8f6f1d980eb0254903eeb17e46255a5758bb",
+            "Known point y-coordinate mismatch"
+        );
+    }
+
+    #[test]
+    fn as_coordinates_be_scalar_mul() {
+        // Verify that scalar multiplication produces consistent coordinates
+        let g = GrumpkinPoint::generator();
+        let scalar = Scalar::from(42u64);
+        let p = g * scalar;
+
+        let (x_hex, y_hex) = p.as_coordinates_be();
+
+        // Verify hex is valid and has correct length
+        assert_eq!(x_hex.len(), 64);
+        assert_eq!(y_hex.len(), 64);
+
+        // Compute same point again and verify coordinates match
+        let p2 = g * scalar;
+        let (x_hex2, y_hex2) = p2.as_coordinates_be();
+
+        assert_eq!(x_hex, x_hex2, "Scalar mul should be deterministic (x)");
+        assert_eq!(y_hex, y_hex2, "Scalar mul should be deterministic (y)");
     }
 }

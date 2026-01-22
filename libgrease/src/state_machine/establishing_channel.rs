@@ -351,10 +351,7 @@ where
     SF: FrostCurve,
     Ed25519: Dleq<SF>,
 {
-    fn store_wallet_commitment<R: std::io::Read + ?Sized>(
-        &mut self,
-        reader: &mut R,
-    ) -> Result<(), EstablishProtocolError> {
+    fn store_wallet_commitment<R: std::io::Read>(&mut self, reader: &mut R) -> Result<(), EstablishProtocolError> {
         use crate::grease_protocol::utils::Readable;
         let commitment =
             PublicKeyCommitment::read(reader).map_err(|e| EstablishProtocolError::InvalidCommitment(e.to_string()))?;

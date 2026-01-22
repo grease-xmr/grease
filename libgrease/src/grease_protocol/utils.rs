@@ -8,7 +8,7 @@ use monero::consensus::{ReadExt, WriteExt};
 use std::io::{self, Read, Write};
 
 pub trait Readable: Sized {
-    fn read<R: Read + ?Sized>(reader: &mut R) -> Result<Self, ReadError>;
+    fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError>;
 }
 
 pub fn write_group_element<C: Ciphersuite, W: Write>(w: &mut W, element: &C::G) -> io::Result<()> {

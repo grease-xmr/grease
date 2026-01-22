@@ -4,6 +4,7 @@ mod curve;
 #[cfg(feature = "serai")]
 pub mod serai;
 
+pub use ark_ff::{BigInteger, PrimeField as ArkPrimeField};
 pub use ark_grumpkin::{Affine as Point, Fq, Fr, GrumpkinConfig, Projective as ProjectivePoint};
 pub use curve::*;
 
