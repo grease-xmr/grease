@@ -72,9 +72,9 @@ impl<SF: Ciphersuite> Debug for ChannelWitness<SF> {
 impl<SF: Ciphersuite> Serialize for ChannelWitness<SF> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut bytes = self.offset.to_repr();
-        let result = crate::helpers::to_hex(bytes.as_ref(), serializer)?;
+        let result = crate::helpers::to_hex(bytes.as_ref(), serializer);
         bytes.zeroize();
-        Ok(result)
+        result
     }
 }
 
