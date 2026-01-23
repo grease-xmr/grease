@@ -85,6 +85,22 @@ where
     Ok(scalar)
 }
 
+/// Serialize a Zeroizing<XmrScalar> as a hex string.
+pub fn zeroizing_scalar_to_hex<S>(scalar: &zeroize::Zeroizing<XmrScalar>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    xmr_scalar_to_hex(scalar, s)
+}
+
+/// Deserialize a Zeroizing<XmrScalar> from a hex string.
+pub fn zeroizing_scalar_from_hex<'de, D>(de: D) -> Result<zeroize::Zeroizing<XmrScalar>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    xmr_scalar_from_hex(de).map(zeroize::Zeroizing::new)
+}
+
 /// A UTC Unix timestamp representing seconds since January 1, 1970.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

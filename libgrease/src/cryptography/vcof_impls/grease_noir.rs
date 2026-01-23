@@ -41,8 +41,7 @@ use crate::cryptography::witness::ChannelWitnessPublic;
 ///
 /// Used to verify circuit integrity and ensure the correct circuit version is loaded.
 /// Should be updated whenever the circuit is recompiled.
-//pub const CHECKSUM_UPDATE: &str = "d7c7752942b745dc0f408ecd781d1983a67df0a7e602cfa64e08a33323bc5144c2424ae9d7a3e3d8b3d84b53758c0eede204623ca404b91eb8e7ec30fed6874d";
-pub const CHECKSUM_UPDATE: &str = "8b1f86e5a15b5dbd2a49d8986ffb0681ca58b52d51eadee1f67a553ebd32ff428273925a0a8d21d94621309ce13d68b18638ec7ab266c34074db517efad6840f";
+pub const CHECKSUM_UPDATE: &str = "d7c7752942b745dc0f408ecd781d1983a67df0a7e602cfa64e08a33323bc5144c2424ae9d7a3e3d8b3d84b53758c0eede204623ca404b91eb8e7ec30fed6874d";
 
 /// Embedded JSON artifact for the `GreaseUpdate` Noir circuit.
 ///

@@ -43,9 +43,13 @@ pub fn assert_valid_ed25519_scalar(value: Field) {
 
 /// Derives the next witness value using a single Poseidon2 hash.
 ///
-/// Use this function for SNARK curves where N_SF < N_ed25519 (e.g., BabyJubJub).
-/// The result is automatically valid in both the SNARK field and Ed25519's scalar field
+/// This function is for SNARK fields where N_SF < N_ed25519 (scalar field order smaller
+/// than Ed25519's ~2^253). The result is automatically valid in Ed25519's scalar field
 /// since any value < N_SF is also < N_ed25519.
+///
+/// **Note:** This Noir library runs on BN254/Grumpkin where Field > Ed25519 order.
+/// For this deployment, use `next_witness_wide` instead. This function is provided
+/// for completeness and potential future backends with smaller fields.
 ///
 /// # Arguments
 /// * `i` - The update index
@@ -59,9 +63,12 @@ pub fn next_witness_native(i: Field, w: Field) -> Field {
 
 /// Derives the next witness value using wide Poseidon2 output reduced mod Ed25519 order.
 ///
-/// Use this function for SNARK curves where N_SF > N_ed25519 (e.g., Grumpkin).
+/// Use this function for SNARK fields where N_SF >= N_ed25519 (scalar field order equal to
+/// or larger than Ed25519's ~2^253). This includes BN254/Grumpkin (~2^254).
 /// Combines two Poseidon2 hash outputs (~508 bits) and reduces mod Ed25519 order
 /// to produce an unbiased result valid in both fields.
+///
+/// **This is the correct function for this Noir deployment (BN254/Grumpkin).**
 ///
 /// # Arguments
 /// * `i` - The update index
@@ -169,8 +176,12 @@ fn verify_wide_mod_reduction(h0: Field, h1: Field, quotient: U512, result: Field
 
 /// VCOF prove circuit using native (single hash) derivation.
 ///
-/// Use this for SNARK curves where N_SF < N_ed25519 (e.g., BabyJubJub).
-/// For Grumpkin, use `vcof_prove_wide` instead.
+/// This function is for SNARK fields where N_SF < N_ed25519 (scalar field order smaller
+/// than Ed25519's ~2^253).
+///
+/// **Note:** This Noir library runs on BN254/Grumpkin where Field > Ed25519 order.
+/// For this deployment, use `vcof_prove_wide` instead. This function is provided
+/// for completeness and potential future backends with smaller fields.
 ///
 /// Implements VcofProve from the Grease protocol specification. Proves that:
 /// 1. The prover knows wn_prev corresponding to pub_prev
@@ -179,8 +190,8 @@ fn verify_wide_mod_reduction(h0: Field, h1: Field, quotient: U512, result: Field
 ///
 /// # Public Inputs
 /// - `i`: The update index (caller must ensure `i <= u64::MAX`)
-/// - `pub_prev`: Public key for the previous witness (wn_prev * G on Grumpkin)
-/// - `pub_next`: Public key for the next witness (wn_next * G on Grumpkin)
+/// - `pub_prev`: Public key for the previous witness (wn_prev * G on embedded curve)
+/// - `pub_next`: Public key for the next witness (wn_next * G on embedded curve)
 ///
 /// # Private Inputs (witnesses)
 /// - `wn_prev`: The previous witness value (must be non-zero)
@@ -212,8 +223,11 @@ pub fn vcof_prove_native(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint,
 
 /// VCOF prove circuit using wide (double hash + reduction) derivation.
 ///
-/// Use this for SNARK curves where N_SF > N_ed25519 (e.g., Grumpkin).
+/// Use this for SNARK fields where N_SF >= N_ed25519 (scalar field order equal to or larger
+/// than Ed25519's ~2^253). This includes BN254/Grumpkin (~2^254).
 /// This ensures the derived witness is unbiased and valid in both Ed25519 and the SNARK field.
+///
+/// **This is the correct function for this Noir deployment (BN254/Grumpkin).**
 ///
 /// Implements VcofProve from the Grease protocol specification. Proves that:
 /// 1. The prover knows wn_prev corresponding to pub_prev
@@ -239,13 +253,11 @@ pub fn vcof_prove_wide(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint, p
     // Validate wn_prev is a valid Ed25519 scalar (0 < wn_prev < l)
     // This is critical for Grumpkin where Field can hold values > Ed25519 order
     assert_valid_ed25519_scalar(wn_prev);
-    println("wn_prev validated as valid Ed25519 scalar");
     // Reject zero index
     assert(i != 0, "Index must be non-zero");
 
     // Verify pub_prev = wn_prev * G (proves knowledge of wn_prev)
     let computed_prev = fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(wn_prev));
-    println(f"P_i = wi.G: {computed_prev}");
     assert(computed_prev == pub_prev, "pub_prev does not match wn_prev * G");
 
     // Compute wn_next using wide derivation with Ed25519 order reduction
@@ -253,10 +265,8 @@ pub fn vcof_prove_wide(i: Field, wn_prev: Field, pub_prev: EmbeddedCurvePoint, p
 
     // Reject zero derived witness (defensive - extremely unlikely from Poseidon2)
     assert(wn_next != 0, "Derived witness must be non-zero");
-    println(f"wn_next: {wn_next}");
     // Verify pub_next = wn_next * G
     let computed_next = fixed_base_scalar_mul(EmbeddedCurveScalar::from_field(wn_next));
-    println(f"P_next = w_next.G: {computed_next}");
     assert(computed_next == pub_next, "pub_next does not match wn_next * G");
 }
 
@@ -596,7 +606,7 @@ fn test_native_and_wide_produce_different_results() {
 // Test Vector Generation
 // ============================================================================
 
-/// Generates a single test vector using native derivation (for BabyJubJub-like curves).
+/// Generates a single test vector using native derivation (for smaller SNARK fields).
 fn generate_single_vector_native(i: Field, wn_prev: Field) {
     let pub_prev = witness_to_pubkey(wn_prev);
     let wn_next = next_witness_native(i, wn_prev);
@@ -617,7 +627,7 @@ fn generate_single_vector_native(i: Field, wn_prev: Field) {
     println("VECTOR|END");
 }
 
-/// Generates a single test vector using wide derivation (for Grumpkin-like curves).
+/// Generates a single test vector using wide derivation (for BN254/Grumpkin).
 fn generate_single_vector_wide(i: Field, wn_prev: Field) {
     let pub_prev = witness_to_pubkey(wn_prev);
     let wn_next = next_witness_wide(i, wn_prev);
@@ -638,11 +648,12 @@ fn generate_single_vector_wide(i: Field, wn_prev: Field) {
     println("VECTOR|END");
 }
 
-/// VECTOR GENERATOR - Native derivation for BabyJubJub-like curves (N_SF < N_ed25519)
+/// VECTOR GENERATOR - Native derivation for smaller SNARK fields (N_SF < N_ed25519)
 /// Run with: nargo test generate_test_vectors_native --show-output
+/// Note: Native derivation is not appropriate for BN254/Grumpkin deployment.
 #[test]
 fn generate_test_vectors_native() {
-    println("=== BEGIN TEST VECTORS (NATIVE - BabyJubJub) ===");
+    println("=== BEGIN TEST VECTORS (NATIVE) ===");
     println("HEADER,i,wn_prev,wn_next,pub_prev_x,pub_prev_y,pub_next_x,pub_next_y");
 
     let seeds: [Field; 10] = [
@@ -669,11 +680,12 @@ fn generate_test_vectors_native() {
     println("=== END TEST VECTORS (NATIVE) ===");
 }
 
-/// VECTOR GENERATOR - Wide derivation for Grumpkin-like curves (N_SF > N_ed25519)
+/// VECTOR GENERATOR - Wide derivation for larger SNARK fields (N_SF >= N_ed25519)
 /// Run with: nargo test generate_test_vectors_wide --show-output
+/// This is the correct derivation for BN254/Grumpkin deployment.
 #[test]
 fn generate_test_vectors_wide() {
-    println("=== BEGIN TEST VECTORS (WIDE - Grumpkin) ===");
+    println("=== BEGIN TEST VECTORS (WIDE - BN254/Grumpkin) ===");
     println("HEADER,i,wn_prev,wn_next,pub_prev_x,pub_prev_y,pub_next_x,pub_next_y");
 
     let seeds: [Field; 10] = [
@@ -700,10 +712,11 @@ fn generate_test_vectors_wide() {
     println("=== END TEST VECTORS (WIDE) ===");
 }
 
-/// VECTOR GENERATOR - Chain test vectors using native derivation (BabyJubJub)
+/// VECTOR GENERATOR - Chain test vectors using native derivation (smaller SNARK fields)
+/// Note: Native derivation is not appropriate for BN254/Grumpkin deployment.
 #[test]
 fn generate_chain_test_vectors_native() {
-    println("=== BEGIN CHAIN TEST VECTORS (NATIVE - BabyJubJub) ===");
+    println("=== BEGIN CHAIN TEST VECTORS (NATIVE) ===");
     println("HEADER,i,wn_prev,wn_next,pub_prev_x,pub_prev_y,pub_next_x,pub_next_y");
 
     let mut w: Field = 0xabcdef123456789;
@@ -716,10 +729,11 @@ fn generate_chain_test_vectors_native() {
     println("=== END CHAIN TEST VECTORS (NATIVE) ===");
 }
 
-/// VECTOR GENERATOR - Chain test vectors using wide derivation (Grumpkin)
+/// VECTOR GENERATOR - Chain test vectors using wide derivation (BN254/Grumpkin)
+/// This is the correct derivation for BN254/Grumpkin deployment.
 #[test]
 fn generate_chain_test_vectors_wide() {
-    println("=== BEGIN CHAIN TEST VECTORS (WIDE - Grumpkin) ===");
+    println("=== BEGIN CHAIN TEST VECTORS (WIDE - BN254/Grumpkin) ===");
     println("HEADER,i,wn_prev,wn_next,pub_prev_x,pub_prev_y,pub_next_x,pub_next_y");
 
     let mut w: Field = 0xabcdef123456789;

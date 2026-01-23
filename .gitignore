@@ -22,6 +22,10 @@ venv.bak/
 # test artifacts
 /libgrease/test_data/
 circuits/node_modules/
+
+# circuits build artifacts (keep compiled JSON artifacts)
+circuits/target/
+!circuits/target/*.json
 demo_wallet.bin
 e2e/data
 grease-proofs/

@@ -512,6 +512,7 @@ mod test {
     use monero::{Address, Network};
     use std::str::FromStr;
     use wallet::multisig_wallet::AdaptSig;
+    use wallet::Zeroizing;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
     const ALICE_ADDRESS: &str =
@@ -637,7 +638,7 @@ mod test {
         let close = ChannelCloseRecord {
             final_balance: channel.state().balance(),
             update_count: 1,
-            witness: XmrScalar::random(&mut rand_core::OsRng),
+            witness: Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng)),
         };
         let event = LifeCycleEvent::CloseChannel(Box::new(close));
         channel.handle_event(event).unwrap();
