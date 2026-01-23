@@ -24,7 +24,7 @@ use std::sync::LazyLock;
 
 use acir_field::{AcirField, FieldElement};
 use ciphersuite::group::ff::PrimeField;
-use grease_grumpkin::{ArkPrimeField, BigInteger, Grumpkin, Point, Scalar};
+use grease_grumpkin::{ArkPrimeField, BigInteger, Grumpkin, Point};
 use zkuh_rs::noir_api::artifacts::load_artifact_from_string;
 use zkuh_rs::noir_api::{InputError, Inputs, PointInput, ProgramArtifact};
 

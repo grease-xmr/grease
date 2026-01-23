@@ -1,11 +1,9 @@
 use crate::error::ReadError;
 use crate::grease_protocol::utils::write_group_element;
-use blake2::Blake2b512;
-use ciphersuite::group::ff::Field;
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
 use dalek_ff_group::{EdwardsPoint as XmrPoint, EdwardsPoint, Scalar as XmrScalar};
-use digest::{Digest, Update};
+use digest::Digest;
 use dleq::cross_group::{ConciseLinearDLEq, Generators};
 use flexible_transcript::{RecommendedTranscript, Transcript};
 use grease_babyjubjub::{BabyJubJub, BjjPoint};

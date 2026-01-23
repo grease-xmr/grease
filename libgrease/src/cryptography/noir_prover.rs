@@ -68,7 +68,7 @@ impl<'p, C: InputConverter> NoirProver<'p, C> {
         let mut verifier = self.verifier.clone();
         let inputs = self.input_converter.to_inputs(i, None, public_in)?;
         let proof = bytes_to_uint256(proof)
-            .map_err(|e| NoirProverError::VerifierError(format!("Corrupted or SNARK proof. {e}")))?;
+            .map_err(|e| NoirProverError::VerifierError(format!("Corrupted or invalid SNARK proof. {e}")))?;
         let abi = &self.artifact.abi;
         let public_inputs = inputs
             .public_inputs(abi)

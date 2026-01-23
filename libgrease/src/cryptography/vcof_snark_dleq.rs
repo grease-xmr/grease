@@ -120,12 +120,12 @@ where
         index: u64,
         private_input: &Self::PrivateData,
         public_input: &Self::PublicData,
-        ctx: &Self::Context,
+        _ctx: &Self::Context,
     ) -> Result<Self::Proof, ProvingError> {
         // generate the DLEQ proof
         let mut rng = OsRng;
         let secret = *private_input.next().offset();
-        let (dleq, (x, y)) = <Ed25519 as Dleq<SF>>::generate_dleq(&mut rng, secret)
+        let (dleq, (_x, _y)) = <Ed25519 as Dleq<SF>>::generate_dleq(&mut rng, secret)
             .map_err(|e| ProvingError::prove_err(format!("DLEQ generation error: {}", e)))?;
         // generate the ZK-SNARK proof
         let snark = self
@@ -207,7 +207,7 @@ impl<SF: Ciphersuite> VcofPublicData for SnarkDleqPublicData<SF> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cryptography::vcof::NextWitness;
+    use crate::cryptography::vcof::{NextWitness, VcofPublicData};
     use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
     use crate::cryptography::vcof_impls::PoseidonGrumpkinWitness;
     use crate::cryptography::vcof_impls::{NoirUpdateCircuit, CHECKSUM_UPDATE};
@@ -264,7 +264,7 @@ mod tests {
         info!("SNARK proof size: {} bytes", proof.snark.len());
         info!("VCOF proof generated successfully!");
 
-        let (c1x, c1y) = public_data.next.snark_point().as_coordinates_be();
+        let (c1x, c1y) = public_data.next().snark_point().as_coordinates_be();
         assert_eq!(c1x, p1x, "public_data.next x coordinate mismatch");
         assert_eq!(c1y, p1y, "public_data.next y coordinate mismatch");
 
