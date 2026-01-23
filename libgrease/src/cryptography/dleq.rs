@@ -251,7 +251,7 @@ fn monero_generators() -> Generators<EdwardsPoint> {
         Ed25519::generator(),
         str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
     )
-    .expect("Hardcoded generators for Monero failed to generate");
+        .expect("Hardcoded generators for Monero failed to generate");
     monero_gen
 }
 
