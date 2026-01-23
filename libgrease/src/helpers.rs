@@ -1,7 +1,6 @@
-use crate::{XmrPoint, XmrScalar};
+use crate::XmrScalar;
 use chrono::{DateTime, TimeZone, Utc};
 use ciphersuite::group::ff::PrimeField;
-use ciphersuite::group::GroupEncoding;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 

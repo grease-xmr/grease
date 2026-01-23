@@ -20,7 +20,7 @@ pub trait AdapterSignatureHandler: HasRole {
     fn adapter_signature_offset(&self) -> &XmrScalar;
 
     /// Return the message to be signed for the `update_count`-th adapter signature.
-    fn adapter_signature_message(&self, update_count: u64) -> String {
+    fn adapter_signature_message(&self, _update_count: u64) -> String {
         todo!("Implement adapter signature message generation")
     }
 

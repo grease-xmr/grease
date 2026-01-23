@@ -23,9 +23,9 @@ where
     /// After a successful call to this function, the DLEQ proof, the equivalent points on both curves, and the
     /// respective secrets (discrete logs) will be available via the getter methods.
     fn generate<R: RngCore + CryptoRng>(
-        rng: &mut R,
-        kes_pubkey: SF::G,
-        role: ChannelRole,
+        _rng: &mut R,
+        _kes_pubkey: SF::G,
+        _role: ChannelRole,
     ) -> Result<Self, KesClientError> {
         todo!("Delegate DLEQ proof generation to VCOF implementation");
     }

@@ -24,7 +24,7 @@ use std::sync::LazyLock;
 
 use acir_field::{AcirField, FieldElement};
 use ciphersuite::group::ff::PrimeField;
-use grease_grumpkin::{ArkPrimeField, BigInteger, Grumpkin, Point, Scalar};
+use grease_grumpkin::{ArkPrimeField, BigInteger, Grumpkin, Point};
 use zkuh_rs::noir_api::artifacts::load_artifact_from_string;
 use zkuh_rs::noir_api::{InputError, Inputs, PointInput, ProgramArtifact};
 
@@ -150,17 +150,25 @@ impl InputConverter for NoirUpdateCircuit {
     /// # Errors
     ///
     /// Returns [`InputError`] if point conversion fails (e.g., invalid coordinates).
-    fn to_inputs(&self, index: u64, private: &Self::Private, public: &Self::Public) -> Result<Inputs, InputError> {
-        let wn_prev = scalar_to_be_bytes(private.prev().as_snark_scalar());
+    fn to_inputs(
+        &self,
+        index: u64,
+        private: Option<&Self::Private>,
+        public: &Self::Public,
+    ) -> Result<Inputs, InputError> {
         let pub_prev = grumpkin_pt_to_point_input(public.prev());
         let pub_next = grumpkin_pt_to_point_input(public.next());
-        let inputs = Inputs::new()
+        let mut inputs = Inputs::new()
             .add_field("i", index)
-            .add_field("wn_prev", wn_prev)
             .add("pub_prev", pub_prev)
             .map_err(|(_, e)| e)?
             .add("pub_next", pub_next)
             .map_err(|(_, e)| e)?;
+        // Private inputs, if supplied
+        if let Some(prv) = private {
+            let wn_prev = scalar_to_be_bytes(prv.prev().as_snark_scalar());
+            inputs = inputs.add_field("wn_prev", wn_prev);
+        }
         Ok(inputs)
     }
 }

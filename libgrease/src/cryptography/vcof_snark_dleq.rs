@@ -4,12 +4,14 @@ use crate::cryptography::vcof::{
     InvalidProof, NextWitness, ProvingError, VcofPrivateData, VcofPublicData, VerifiableConsecutiveOnewayFunction,
 };
 use crate::cryptography::vcof_impls::{NoirUpdateCircuit, PoseidonGrumpkinWitness};
-use crate::cryptography::witness::ChannelWitnessPublic;
+use crate::cryptography::witness::{AsXmrPoint, ChannelWitnessPublic, Offset};
 use crate::cryptography::ChannelWitness;
 use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
 use ciphersuite::{Ciphersuite, Ed25519};
+use digest::Mac;
 use grease_grumpkin::Grumpkin;
+use log::warn;
 use modular_frost::curve::Curve;
 use modular_frost::sign::Writable;
 use monero::consensus::{ReadExt, WriteExt};
@@ -65,8 +67,8 @@ where
 
 /// A Verifiable Consecutive Oneway Function (VCOF) implementation using SNARKs the KeyUpdate function with a DLEQ
 /// proof to prove equivalence between the SNARK-friendly curve (SF) and Ed25519.
-pub struct SnarkDleqVcofProver<'p, SF, V, C: InputConverter> {
-    next_witness: V,
+pub struct SnarkDleqVcofProver<'p, SF, F, C: InputConverter> {
+    next_witness: F,
     noir_prover: NoirProver<'p, C>,
     _snark_curve: PhantomData<SF>,
 }
@@ -118,11 +120,12 @@ where
         index: u64,
         private_input: &Self::PrivateData,
         public_input: &Self::PublicData,
-        ctx: &Self::Context,
+        _ctx: &Self::Context,
     ) -> Result<Self::Proof, ProvingError> {
         // generate the DLEQ proof
         let mut rng = OsRng;
-        let (dleq, (x, y)) = <Ed25519 as Dleq<SF>>::generate_dleq(&mut rng)
+        let secret = *private_input.next().offset();
+        let (dleq, (_x, _y)) = <Ed25519 as Dleq<SF>>::generate_dleq(&mut rng, secret)
             .map_err(|e| ProvingError::prove_err(format!("DLEQ generation error: {}", e)))?;
         // generate the ZK-SNARK proof
         let snark = self
@@ -135,14 +138,26 @@ where
 
     fn verify(
         &self,
-        update_count: u64,
-        public_input: &Self::PublicData,
+        i: u64,
+        public_in: &Self::PublicData,
         proof: &Self::Proof,
-        _ctx: &Self::Context,
+        _: &Self::Context,
     ) -> Result<(), InvalidProof> {
         // Verify the DLEQ proof
+        let dleq_proof = &proof.dleq;
+        let ed_point = public_in.next().as_xmr_point();
+        let snark_point = public_in.next().snark_point();
+        Ed25519::verify_dleq(dleq_proof, ed_point, snark_point).map_err(|e| {
+            warn!("DLEQ verification failed: {e}");
+            InvalidProof::new(i)
+        })?;
         // Verify the SNARK proof
-        todo!("Implement VCOF verification")
+        let snark_proof = &proof.snark;
+        self.noir_prover.verify(i, public_in, snark_proof).map_err(|e| {
+            warn!("SNARK verification failed: {e}");
+            InvalidProof::new(i)
+        })?;
+        Ok(())
     }
 }
 
@@ -192,7 +207,9 @@ impl<SF: Ciphersuite> VcofPublicData for SnarkDleqPublicData<SF> {
 
 #[cfg(test)]
 mod tests {
+    use crate::cryptography::vcof::{NextWitness, VcofPublicData};
     use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
+    use crate::cryptography::vcof_impls::PoseidonGrumpkinWitness;
     use crate::cryptography::vcof_impls::{NoirUpdateCircuit, CHECKSUM_UPDATE};
     use crate::cryptography::vcof_snark_dleq::GP2VcofProver;
     use crate::cryptography::witness::{AsXmrPoint, Offset};
@@ -200,43 +217,23 @@ mod tests {
     use crate::helpers::xmr_scalar_as_be_hex;
     use ciphersuite::group::GroupEncoding;
     use grease_grumpkin::Grumpkin;
+    use grease_grumpkin::{ArkPrimeField, BigInteger};
     use log::info;
 
     #[test]
-    fn test_grease_update_circuit() {
-        use grease_grumpkin::{ArkPrimeField, BigInteger};
-
+    fn update_circuit_noir_matches_rust_implementation() {
         env_logger::try_init().ok();
-
         // Load the circuit artifact
         let circuit = NoirUpdateCircuit::new().expect("Failed to load NoirUpdateCircuit artifact");
         let prover =
             GP2VcofProver::new(CHECKSUM_UPDATE, circuit.artifact(), &circuit).expect("Failed to create NoirProver");
-
-        // Use the known scalar from Prover.toml (big-endian hex), reversed to little-endian:
-        // wn_prev = "0x004ed0099c91f5472632e7c5ff692f3ef438a3a4d2c1a08f025e931bb708d983"
-        // Expected pub_prev:
-        //   x = "0x07052091e5e2778b8da8fba45ac11ee22daeee1c4d0ff93ba741b1e4349a6eff"
-        //   y = "0x0a6bfe2e7a9c55b01e4c3dd29a93aabb1b68e21d449ebf184010ddd087e2068e"
+        // Use the known data from Prover.toml (big-endian hex)
         let scalar_be = hex::decode("004ed0099c91f5472632e7c5ff692f3ef438a3a4d2c1a08f025e931bb708d983").unwrap();
-        let mut scalar_le = scalar_be.clone();
-        scalar_le.reverse();
-        let w0 = ChannelWitness::<Grumpkin>::try_from_le_bytes(&scalar_le.try_into().unwrap())
+        let w0 = ChannelWitness::<Grumpkin>::try_from_be_bytes(&scalar_be.try_into().unwrap())
             .expect("Failed to create witness from Prover.toml scalar");
         let w0_public = w0.public_points();
-
-        // Log the scalar
-        let snark_scalar = w0.as_snark_scalar();
-        let scalar_be_computed = snark_scalar.0.into_bigint().to_bytes_be();
-        info!("wn_prev (BE hex): 0x{}", hex::encode(&scalar_be_computed));
-
         // Log the public points for the transition
-        info!("(w0) Ed25519: {}", xmr_scalar_as_be_hex(&w0.offset()));
-        info!("(S0) Ed25519: {}", hex::encode(w0_public.as_xmr_point().compress().0));
         let (x, y) = w0_public.snark_point().as_coordinates_be();
-        info!("pub_prev.x (BE hex): 0x{x}");
-        info!("pub_prev.y (BE hex): 0x{y}");
-
         // Verify point coordinates match Prover.toml
         assert_eq!(
             x, "07052091e5e2778b8da8fba45ac11ee22daeee1c4d0ff93ba741b1e4349a6eff",
@@ -248,22 +245,18 @@ mod tests {
         );
 
         // Compute next witness manually to verify
-        use crate::cryptography::vcof::NextWitness;
-        use crate::cryptography::vcof_impls::PoseidonGrumpkinWitness;
         let next_witness_fn = PoseidonGrumpkinWitness;
         let w1 = next_witness_fn.next_witness(1, &w0).expect("Failed to compute next witness");
         let w1_public = w1.public_points();
-        let w1_scalar = w1.as_snark_scalar();
-        let w1_scalar_be = w1_scalar.0.into_bigint().to_bytes_be();
-        info!("wn_next (BE hex): 0x{}", hex::encode(&w1_scalar_be));
-        let (x1, y1) = w1_public.snark_point().as_coordinates_be();
-        info!("pub_next.x (BE hex): 0x{x1}");
-        info!("pub_next.y (BE hex): 0x{y1}");
 
-        // Expected from Prover.toml:
-        // wn_next = 0x024f1d193ceff6131819b6da4b541b8d29fcef2d8981eba79116d075240d8c58
-        // pub_next.x = 0x04e0f6f4f79db6fc119fc681e9d9319760e9f30ad963e499601e3b10bc876013
-        // pub_next.y = 0x1d7570ee391669cd88727a40aaa528d8b0aee3cf2918e888fb0a2fed72a72626
+        let w1_hex = xmr_scalar_as_be_hex(w1.offset());
+        assert_eq!(
+            w1_hex, "024f1d193ceff6131819b6da4b541b8d29fcef2d8981eba79116d075240d8c58",
+            "w1 mismatch"
+        );
+        let (p1x, p1y) = w1_public.snark_point().as_coordinates_be();
+        assert_eq!(p1x, "04e0f6f4f79db6fc119fc681e9d9319760e9f30ad963e499601e3b10bc876013");
+        assert_eq!(p1y, "1d7570ee391669cd88727a40aaa528d8b0aee3cf2918e888fb0a2fed72a72626");
 
         // Generate a proof for the transition from w0 to w1 (update_count = 1)
         let (proof, public_data) = prover.next(1, &w0, &()).expect("Failed to generate proof");
@@ -271,8 +264,11 @@ mod tests {
         info!("SNARK proof size: {} bytes", proof.snark.len());
         info!("VCOF proof generated successfully!");
 
-        // TODO: Verification is not yet implemented
-        // let result = prover.verify(1, &public_data, &proof, &());
-        // assert!(result.is_ok(), "Proof verification failed: {:?}", result);
+        let (c1x, c1y) = public_data.next().snark_point().as_coordinates_be();
+        assert_eq!(c1x, p1x, "public_data.next x coordinate mismatch");
+        assert_eq!(c1y, p1y, "public_data.next y coordinate mismatch");
+
+        prover.verify(1, &public_data, &proof, &()).expect("proof to verify");
+        assert!(prover.verify(2, &public_data, &proof, &()).is_err());
     }
 }
