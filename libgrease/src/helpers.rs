@@ -1,6 +1,7 @@
-use crate::XmrScalar;
+use crate::{XmrPoint, XmrScalar};
 use chrono::{DateTime, TimeZone, Utc};
 use ciphersuite::group::ff::PrimeField;
+use ciphersuite::group::GroupEncoding;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 
@@ -47,6 +48,19 @@ where
     hex::decode_to_slice(hex_str, &mut result)
         .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
     Ok(result)
+}
+
+/// Convert an XmrScalar (Ed25519 scalar) to a hex string.
+pub fn xmr_scalar_as_hex(s: &XmrScalar) -> String {
+    hex::encode(s.to_repr())
+}
+
+/// Convert an XmrScalar (Ed25519 scalar) to a BIG-endian hex string.
+/// This output can be used in Prover.toml files for Noir circuits.
+pub fn xmr_scalar_as_be_hex(s: &XmrScalar) -> String {
+    let mut bytes = s.to_repr();
+    bytes.reverse();
+    hex::encode(bytes)
 }
 
 /// Serialize an XmrScalar (Ed25519 scalar) as a hex string.

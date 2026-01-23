@@ -6,7 +6,6 @@ use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::monero::data_objects::{TransactionId, TransactionRecord};
 use libgrease::monero::watcher::MonitorTransactions;
 use log::*;
-use monero_rpc::Rpc;
 use std::fmt::Debug;
 use std::time::Duration;
 

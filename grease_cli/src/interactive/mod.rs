@@ -26,7 +26,6 @@ use libgrease::state_machine::ChannelSeedBuilder;
 use log::*;
 use menus::*;
 use monero::{Address, Network};
-use rand::{Rng, RngCore};
 
 pub type MoneroNetworkServer = GreaseClient<DummyDelegate>;
 pub const RPC_ADDRESS: &str = "http://localhost:25070";
@@ -282,7 +281,6 @@ impl InteractiveApp {
         oob_info: OutOfBandMerchantInfo,
         my_closing_address: Address,
     ) -> Result<NewChannelMessage, anyhow::Error> {
-        use libgrease::cryptography::keys::{Curve25519PublicKey, PublicKey};
         use rand_core::{OsRng, RngCore};
 
         let my_contact_info = self.identity.contact_info();

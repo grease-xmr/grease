@@ -5,7 +5,7 @@
 
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::dleq::DleqError;
-use crate::cryptography::vcof::{VcofError, VerifiableConsecutiveOnewayFunction};
+use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
 use crate::grease_protocol::adapter_signature::{AdapterSignatureError, AdapterSignatureHandler};
 use crate::payment_channel::HasRole;
 use async_trait::async_trait;
@@ -31,7 +31,7 @@ pub struct UpdatePackage {
 /// Common functionality shared by both update proposer and proposee.
 #[async_trait]
 pub trait UpdateProtocolCommon<SF: FrostCurve>: HasRole + AdapterSignatureHandler + Send + Sync {
-    type VCOF: VerifiableConsecutiveOnewayFunction<SF>;
+    type VCOF: VerifiableConsecutiveOnewayFunction;
 
     /// Returns a reference to the VCOF instance.
     fn vcof(&self) -> &Self::VCOF;
@@ -153,9 +153,6 @@ pub enum UpdateProtocolError {
 
     #[error("Adapter signature error: {0}")]
     SignatureError(#[from] AdapterSignatureError),
-
-    #[error("VCOF error: {0}")]
-    VcofError(#[from] VcofError),
 
     #[error("Insufficient balance: {0}")]
     InsufficientBalance(String),

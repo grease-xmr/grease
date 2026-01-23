@@ -30,7 +30,6 @@ use libgrease::payment_channel::{ChannelRole, UpdateError};
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use libgrease::state_machine::{ChannelCloseRecord, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord};
-use libgrease::XmrScalar;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;

@@ -83,7 +83,7 @@ impl Dleq<Ed25519> for Ed25519 {
         }
     }
 
-    fn read<R: Read + ?Sized>(reader: &mut R) -> Result<Self::Proof, DleqError> {
+    fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError> {
         let proof = EdSchnorrSignature::read(reader)?;
         Ok(proof)
     }
