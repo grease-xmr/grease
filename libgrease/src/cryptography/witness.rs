@@ -126,6 +126,17 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
         Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
     }
 
+    /// Try to create a ChannelWitness from big-endian bytes.
+    ///
+    /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and SF.
+    pub fn try_from_be_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError> {
+        let mut bytes = *bytes;
+        bytes.reverse();
+        let result = Self::try_from_le_bytes(&bytes);
+        bytes.zeroize();
+        result
+    }
+
     /// Convert the witness offset to little-endian bytes.
     ///
     /// ## Security Note: Callers *must* call `zeroize()` on the returned byte array when done.

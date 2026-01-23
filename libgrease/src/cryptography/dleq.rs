@@ -46,6 +46,7 @@ pub trait Dleq<SF: Curve>: Curve {
     /// from the same binary representation. Returns the proof and the scalars (x, y).
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
+        secret: XmrScalar,
     ) -> Result<(Self::Proof, (XmrScalar, <SF as Ciphersuite>::F)), DleqError>;
 
     /// Verify that the provided proof shows that the discrete log of p1 on Ed25519 is the same as the discrete log
@@ -59,8 +60,7 @@ pub trait Dleq<SF: Curve>: Curve {
 impl Dleq<Ed25519> for Ed25519 {
     type Proof = EdSchnorrSignature;
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Ed25519>, DleqError> {
-        let secret = XmrScalar::random(&mut *rng);
+    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R, secret: XmrScalar) -> Result<DleqResult<Ed25519>, DleqError> {
         let nonce = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut *rng);
         let nonce_pub = Ed25519::generator() * nonce;
         let public_point = Ed25519::generator() * secret;
@@ -108,13 +108,14 @@ impl Writable for DleqMoneroBjj {
 impl Dleq<BabyJubJub> for Ed25519 {
     type Proof = DleqMoneroBjj;
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<BabyJubJub>, DleqError> {
+    fn generate_dleq<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        secret: XmrScalar,
+    ) -> Result<DleqResult<BabyJubJub>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
-        let mut nonce = Zeroizing::new([0u8; 64]);
-        rng.fill_bytes(nonce.as_mut_slice());
-        let digest = Blake2b512::new().chain(&nonce);
-        nonce.zeroize();
-        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_bjj_generators(), digest);
+        let (proof, (xmr, fk)) =
+            ConciseLinearDLEq::prove_without_bias(rng, &mut transcript, xmr_bjj_generators(), Zeroizing::new(secret))
+                .ok_or(DleqError::Ed25519ScalarTooLarge)?;
         // Unwraps one layer of Zeroizing:
         let xmr = *xmr;
         let foreign_key = <BabyJubJub as Ciphersuite>::F::from(fk.0);
@@ -175,13 +176,14 @@ impl Writable for DleqMoneroGrumpkin {
 impl Dleq<Secp256k1> for Ed25519 {
     type Proof = DleqMoneroBitcoin;
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Secp256k1>, DleqError> {
+    fn generate_dleq<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        secret: XmrScalar,
+    ) -> Result<DleqResult<Secp256k1>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
-        let mut nonce = Zeroizing::new([0u8; 64]);
-        rng.fill_bytes(nonce.as_mut_slice());
-        let digest = Blake2b512::new().chain(&nonce);
-        nonce.zeroize();
-        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_btc_generators(), digest);
+        let (proof, (xmr, fk)) =
+            ConciseLinearDLEq::prove_without_bias(rng, &mut transcript, xmr_btc_generators(), Zeroizing::new(secret))
+                .ok_or(DleqError::Ed25519ScalarTooLarge)?;
         Ok((DleqMoneroBitcoin(proof), (*xmr, *fk)))
     }
 
@@ -207,13 +209,19 @@ impl Dleq<Secp256k1> for Ed25519 {
 impl Dleq<Grumpkin> for Ed25519 {
     type Proof = DleqMoneroGrumpkin;
 
-    fn generate_dleq<R: RngCore + CryptoRng>(rng: &mut R) -> Result<DleqResult<Grumpkin>, DleqError> {
+    fn generate_dleq<R: RngCore + CryptoRng>(
+        rng: &mut R,
+        secret: XmrScalar,
+    ) -> Result<DleqResult<Grumpkin>, DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Grumpkin DLEQ");
-        let mut nonce = Zeroizing::new([0u8; 64]);
-        rng.fill_bytes(nonce.as_mut_slice());
-        let digest = Blake2b512::new().chain(&nonce);
-        nonce.zeroize();
-        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove(rng, &mut transcript, xmr_grumpkin_generators(), digest);
+
+        let (proof, (xmr, fk)) = ConciseLinearDLEq::prove_without_bias(
+            rng,
+            &mut transcript,
+            xmr_grumpkin_generators(),
+            Zeroizing::new(secret),
+        )
+        .ok_or(DleqError::Ed25519ScalarTooLarge)?;
         let xmr = *xmr;
         let foreign_key = <Grumpkin as Ciphersuite>::F::from(fk.0);
         Ok((DleqMoneroGrumpkin(proof), (xmr, foreign_key)))
@@ -367,19 +375,25 @@ pub enum DleqError {
 #[cfg(test)]
 mod test {
     use crate::cryptography::dleq::{Dleq, DleqError};
+    use crate::XmrScalar;
     use ciphersuite::group::ff::PrimeFieldBits;
     use ciphersuite::group::GroupEncoding;
     use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
     use grease_babyjubjub::BabyJubJub;
     use grease_grumpkin::Grumpkin;
+    use modular_frost::curve::Field;
     use modular_frost::sign::Writable;
     use rand_core::OsRng;
     use std::ops::Add;
+    use crate::cryptography::ChannelWitness;
+    use crate::cryptography::witness::Offset;
 
     #[test]
     fn test_equivalence_ed25519_ed25519() {
         let mut rng = OsRng;
-        let (proof, (x, y)) = <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng).unwrap();
+        let secret = XmrScalar::random(&mut rng);
+        let (proof, (x, y)) = <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng, secret).unwrap();
+        assert_eq!(secret, x);
         let x_point = Ed25519::generator() * x;
         let y_point = Ed25519::generator() * y;
         println!("x: {}, y: {}", hex::encode(x_point.to_bytes()), hex::encode(y_point.to_bytes()));
@@ -405,7 +419,9 @@ mod test {
     #[test]
     fn test_equivalence_ed25519_secp256k() {
         let mut rng = OsRng;
-        let (proof, (x, y)) = <Ed25519 as Dleq<Secp256k1>>::generate_dleq(&mut rng).unwrap();
+        let secret = XmrScalar::random(&mut rng);
+        let (proof, (x, y)) = <Ed25519 as Dleq<Secp256k1>>::generate_dleq(&mut rng, secret).unwrap();
+        assert_eq!(secret, x);
         let x_point = Ed25519::generator() * x;
         let y_point = Secp256k1::generator() * y;
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
@@ -432,7 +448,10 @@ mod test {
     #[test]
     fn test_equivalence_ed25519_babyjubjub() {
         let mut rng = OsRng;
-        let (proof, (x, y)) = <Ed25519 as Dleq<BabyJubJub>>::generate_dleq(&mut rng).unwrap();
+        // Select a witness that's in BabyJubJub's range
+        let secret = ChannelWitness::<BabyJubJub>::random();
+        let (proof, (x, y)) = <Ed25519 as Dleq<BabyJubJub>>::generate_dleq(&mut rng, *secret.offset()).unwrap();
+        assert_eq!(*secret.offset(), x);
         let x_point = Ed25519::generator() * x;
         let y_point = BabyJubJub::generator() * y;
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
@@ -459,7 +478,9 @@ mod test {
     #[test]
     fn test_equivalence_ed25519_grumpkin() {
         let mut rng = OsRng;
-        let (proof, (x, y)) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng).unwrap();
+        let secret = XmrScalar::random(&mut rng);
+        let (proof, (x, y)) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, secret).unwrap();
+        assert_eq!(secret, x);
         let x_point = Ed25519::generator() * x;
         let y_point = Grumpkin::generator() * y;
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
