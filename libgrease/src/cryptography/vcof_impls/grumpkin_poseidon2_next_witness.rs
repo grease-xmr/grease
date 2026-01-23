@@ -645,11 +645,11 @@ mod tests {
     fn can_derive_chain_of_witnesses() {
         // Test that we can derive a chain of witnesses
         let mut current = ChannelWitness::<Grumpkin>::random();
-        let mut witnesses = vec![current];
+        let mut witnesses = vec![current.clone()];
 
         for i in 1..=100 {
             current = next_witness_wide(i, &current).expect("Chain derivation should succeed");
-            witnesses.push(current);
+            witnesses.push(current.clone());
         }
 
         // All witnesses should be unique
@@ -671,17 +671,17 @@ mod tests {
         let initial = ChannelWitness::<Grumpkin>::random();
 
         // Derive chain twice
-        let mut chain1 = vec![initial];
-        let mut chain2 = vec![initial];
+        let mut chain1 = vec![initial.clone()];
+        let mut chain2 = vec![initial.clone()];
 
-        let mut current1 = initial;
+        let mut current1 = initial.clone();
         let mut current2 = initial;
 
         for i in 1..=10 {
             current1 = next_witness_wide(i, &current1).expect("Should succeed");
             current2 = next_witness_wide(i, &current2).expect("Should succeed");
-            chain1.push(current1);
-            chain2.push(current2);
+            chain1.push(current1.clone());
+            chain2.push(current2.clone());
         }
 
         for (i, (w1, w2)) in chain1.iter().zip(chain2.iter()).enumerate() {

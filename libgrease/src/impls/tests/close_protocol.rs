@@ -54,7 +54,7 @@ impl CloseProtocolCommon<BabyJubJub> for TestCloseInitiator {
     }
 
     fn current_offset(&self) -> ChannelWitness<BabyJubJub> {
-        self.current_offset
+        self.current_offset.clone()
     }
 
     fn verify_offset(
@@ -71,7 +71,7 @@ impl CloseProtocolInitiator<BabyJubJub> for TestCloseInitiator {
     fn create_close_request(&self) -> Result<RequestChannelClose<BabyJubJub>, CloseProtocolError> {
         Ok(RequestChannelClose {
             channel_id: self.channel_id.clone(),
-            offset: self.current_offset,
+            offset: self.current_offset.clone(),
             update_count: self.update_count,
         })
     }
@@ -143,7 +143,7 @@ impl CloseProtocolCommon<BabyJubJub> for TestCloseResponder {
     }
 
     fn current_offset(&self) -> ChannelWitness<BabyJubJub> {
-        self.current_offset
+        self.current_offset.clone()
     }
 
     fn verify_offset(
@@ -192,7 +192,7 @@ impl CloseProtocolResponder<BabyJubJub> for TestCloseResponder {
     }
 
     fn create_success_response(&self, txid: Option<TransactionId>) -> ChannelCloseSuccess<BabyJubJub> {
-        ChannelCloseSuccess { channel_id: self.channel_id.clone(), offset: self.current_offset, txid }
+        ChannelCloseSuccess { channel_id: self.channel_id.clone(), offset: self.current_offset.clone(), txid }
     }
 
     fn create_failure_response(&self, reason: CloseFailureReason) -> RequestCloseFailed {

@@ -25,6 +25,7 @@ use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use zeroize::Zeroizing;
 
 /// Container struct carrying all the information needed to record a payment channel update.
 #[derive(Clone, Serialize, Deserialize)]
@@ -131,7 +132,7 @@ impl EstablishedChannelState {
         ChannelCloseRecord {
             final_balance: self.metadata.balances(),
             update_count: self.metadata.update_count(),
-            witness: *self.current_witness(),
+            witness: Zeroizing::new(*self.current_witness()),
         }
     }
 

@@ -112,7 +112,7 @@ where
     }
 
     /// The KES secrets only hold ω0 and cannot support updates.
-    fn update_signature_offset(&mut self, _: XmrScalar) {
+    fn update_signature_offset(&mut self, _: &XmrScalar) {
         panic!("KES client signature offset cannot be updated after initialization.");
     }
 

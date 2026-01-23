@@ -14,6 +14,7 @@ use crate::XmrScalar;
 use async_trait::async_trait;
 use ciphersuite::{Ciphersuite, Ed25519};
 use rand_core::{CryptoRng, OsRng, RngCore};
+use zeroize::Zeroize;
 
 /// Test implementation of UpdateProtocolProposer
 struct TestUpdateProposer {
@@ -52,11 +53,13 @@ impl HasRole for TestUpdateProposer {
 
 impl AdapterSignatureHandler for TestUpdateProposer {
     fn initialize_signature_offset(&mut self) {
+        self.current_offset.zeroize();
         self.current_offset = XmrScalar::default();
     }
 
-    fn update_signature_offset(&mut self, offset: XmrScalar) {
-        self.current_offset = offset;
+    fn update_signature_offset(&mut self, offset: &XmrScalar) {
+        self.current_offset.zeroize();
+        self.current_offset = *offset;
     }
 
     fn adapter_signature_offset(&self) -> &XmrScalar {
@@ -221,11 +224,13 @@ impl HasRole for TestUpdateProposee {
 
 impl AdapterSignatureHandler for TestUpdateProposee {
     fn initialize_signature_offset(&mut self) {
+        self.current_offset.zeroize();
         self.current_offset = XmrScalar::default();
     }
 
-    fn update_signature_offset(&mut self, offset: XmrScalar) {
-        self.current_offset = offset;
+    fn update_signature_offset(&mut self, offset: &XmrScalar) {
+        self.current_offset.zeroize();
+        self.current_offset = *offset;
     }
 
     fn adapter_signature_offset(&self) -> &XmrScalar {

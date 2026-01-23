@@ -11,7 +11,10 @@ pub trait AdapterSignatureHandler: HasRole {
     fn initialize_signature_offset(&mut self);
 
     /// Update the adapter signature offset.
-    fn update_signature_offset(&mut self, offset: XmrScalar);
+    ///
+    /// Implementations that need to store the offset should clone it and then
+    /// call `zeroize()` on their copy when it's no longer needed.
+    fn update_signature_offset(&mut self, offset: &XmrScalar);
 
     /// Return the current adapter signature offset.
     fn adapter_signature_offset(&self) -> &XmrScalar;

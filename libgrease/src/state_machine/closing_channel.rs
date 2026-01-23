@@ -19,16 +19,17 @@ use ciphersuite::Ciphersuite;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelCloseRecord {
     pub final_balance: Balances,
     pub update_count: u64,
     #[serde(
-        serialize_with = "crate::helpers::xmr_scalar_to_hex",
-        deserialize_with = "crate::helpers::xmr_scalar_from_hex"
+        serialize_with = "crate::helpers::zeroizing_scalar_to_hex",
+        deserialize_with = "crate::helpers::zeroizing_scalar_from_hex"
     )]
-    pub witness: XmrScalar,
+    pub witness: Zeroizing<XmrScalar>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,10 +39,10 @@ pub struct ClosingChannelState {
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     #[serde(
-        serialize_with = "crate::helpers::xmr_scalar_to_hex",
-        deserialize_with = "crate::helpers::xmr_scalar_from_hex"
+        serialize_with = "crate::helpers::zeroizing_scalar_to_hex",
+        deserialize_with = "crate::helpers::zeroizing_scalar_from_hex"
     )]
-    pub(crate) peer_witness: XmrScalar,
+    pub(crate) peer_witness: Zeroizing<XmrScalar>,
     pub(crate) kes_proof: KesProof,
     pub(crate) last_update: UpdateRecord,
     pub(crate) final_tx: Option<TransactionId>,
@@ -76,7 +77,7 @@ impl ClosingChannelState {
     }
 
     pub fn peer_witness(&self) -> &XmrScalar {
-        &self.peer_witness
+        &*self.peer_witness
     }
 
     pub fn reason(&self) -> &ChannelClosedReason {
@@ -142,7 +143,7 @@ impl<SF: Ciphersuite> CloseProtocolCommon<SF> for ClosingChannelState {
     fn current_offset(&self) -> ChannelWitness<SF> {
         // Convert XmrScalar to ChannelWitness<SF>
         // This should succeed since the witness was validated at channel establishment
-        ChannelWitness::<SF>::try_from(self.last_update.my_proofs.private_outputs.witness_i)
+        ChannelWitness::<SF>::try_from(self.last_update.my_proofs.private_outputs.witness_i.clone())
             .expect("witness_i should be valid in SF since channel was established")
     }
 

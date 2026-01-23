@@ -1354,7 +1354,7 @@ where
         let merchant_close_info = client.send_close_request(peer, channel_id.as_str(), close_info).await?;
         info!("🔚️  Received closing transaction info for channel {channel_id} from peer. Verifying its authenticity.");
         // Validate the response - in particular, the witness_i should match the T_i that we have on record.
-        let peer_witness = merchant_close_info.witness;
+        let peer_witness = merchant_close_info.witness.clone();
         self.delegate.verify_peer_witness(&peer_witness, &commitment, &metadata).await?;
 
         // Happy, so close the channel.
