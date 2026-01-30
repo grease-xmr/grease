@@ -852,7 +852,7 @@ mod security_tests {
     ///
     /// Previously, the deserializer would read a u64 length and immediately allocate
     /// that many bytes, allowing DoS attacks. Now it validates the length against
-    /// MAX_SNARK_PROOF_SIZE (1MB) before allocating.
+    /// MAX_SNARK_PROOF_SIZE before allocating.
     #[test]
     fn dos_protection_rejects_enormous_snark_length() {
         let circuit = NoirUpdateCircuit::new().unwrap();
