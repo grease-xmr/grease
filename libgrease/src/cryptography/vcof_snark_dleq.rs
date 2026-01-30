@@ -9,7 +9,6 @@ use crate::cryptography::ChannelWitness;
 use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
 use ciphersuite::{Ciphersuite, Ed25519};
-use digest::Mac;
 use grease_grumpkin::Grumpkin;
 use log::warn;
 use modular_frost::curve::Curve;
@@ -207,17 +206,16 @@ impl<SF: Ciphersuite> VcofPublicData for SnarkDleqPublicData<SF> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cryptography::vcof::{NextWitness, VcofPublicData};
     use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
+    use crate::cryptography::vcof::{NextWitness, VcofPublicData};
     use crate::cryptography::vcof_impls::PoseidonGrumpkinWitness;
     use crate::cryptography::vcof_impls::{NoirUpdateCircuit, CHECKSUM_UPDATE};
     use crate::cryptography::vcof_snark_dleq::GP2VcofProver;
-    use crate::cryptography::witness::{AsXmrPoint, Offset};
+    use crate::cryptography::witness::Offset;
     use crate::cryptography::ChannelWitness;
     use crate::helpers::xmr_scalar_as_be_hex;
-    use ciphersuite::group::GroupEncoding;
+    use grease_grumpkin::ArkPrimeField;
     use grease_grumpkin::Grumpkin;
-    use grease_grumpkin::{ArkPrimeField, BigInteger};
     use log::info;
 
     #[test]
@@ -270,5 +268,816 @@ mod tests {
 
         prover.verify(1, &public_data, &proof, &()).expect("proof to verify");
         assert!(prover.verify(2, &public_data, &proof, &()).is_err());
+    }
+}
+
+/// Security test suite for GP2VcofProver
+///
+/// These tests attempt to break the VCOF proving system by:
+/// - Fooling verifiers with proofs where prover doesn't know the witness
+/// - Creating valid proofs that fail verification
+/// - Generating proofs for non-consecutive witnesses
+/// - Finding inputs that cause panics
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use crate::cryptography::dleq::Dleq;
+    use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
+    use crate::cryptography::vcof::{ProvingError, VcofPrivateData, VcofPublicData};
+    use crate::cryptography::vcof_impls::{NoirUpdateCircuit, CHECKSUM_UPDATE};
+    use crate::cryptography::witness::Offset;
+    use crate::cryptography::ChannelWitness;
+    use crate::grease_protocol::utils::Readable;
+    use ciphersuite::Ed25519;
+    use grease_grumpkin::Grumpkin;
+    use modular_frost::sign::Writable;
+    use rand_core::{OsRng, RngCore};
+    use std::io::Cursor;
+
+    /// Helper to create a prover for testing
+    fn create_prover<'a>(circuit: &'a NoirUpdateCircuit) -> GP2VcofProver<'a> {
+        GP2VcofProver::new(CHECKSUM_UPDATE, circuit.artifact(), circuit).expect("Failed to create prover")
+    }
+
+    // ==================================================================================
+    // SECTION 1: Attempt to fool verifier without knowing the witness
+    // ==================================================================================
+
+    /// Attack: Try to create a proof for a witness we don't know by using a different witness
+    /// and hoping the DLEQ/SNARK proofs somehow pass.
+    #[test]
+    fn attack_proof_with_wrong_witness_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        // The "victim" has witness w0 and publishes P0 = w0 * G
+        let w0_victim = ChannelWitness::<Grumpkin>::random();
+        let w1_victim = prover.compute_next(1, &w0_victim, &()).unwrap();
+
+        // Attacker has a different witness w0_attacker
+        let w0_attacker = ChannelWitness::<Grumpkin>::random();
+        let w1_attacker = prover.compute_next(1, &w0_attacker, &()).unwrap();
+
+        // Attacker generates a legitimate proof for their own transition
+        let (proof_attacker, _) = prover.next(1, &w0_attacker, &()).unwrap();
+
+        // Attacker tries to use their proof with the victim's public points
+        let fake_public_data = SnarkDleqPublicData::from_parts(w0_victim.public_points(), w1_victim.public_points());
+
+        // This MUST fail - the DLEQ proof is for a different scalar
+        let result = prover.verify(1, &fake_public_data, &proof_attacker, &());
+        assert!(result.is_err(), "Verifier should reject proof for wrong public points");
+    }
+
+    /// Attack: Generate a DLEQ proof for one scalar but try to use it with different public points
+    #[test]
+    fn attack_dleq_proof_for_different_scalar_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Create a completely different set of public points
+        let w0_fake = ChannelWitness::<Grumpkin>::random();
+        let w1_fake = prover.compute_next(1, &w0_fake, &()).unwrap();
+
+        let fake_public_data = SnarkDleqPublicData::from_parts(w0_fake.public_points(), w1_fake.public_points());
+
+        // The DLEQ proof was generated for a different scalar, so this must fail
+        let result = prover.verify(1, &fake_public_data, &proof, &());
+        assert!(result.is_err(), "DLEQ proof for different scalar must fail");
+    }
+
+    /// Attack: Try to create a valid SNARK proof without knowing the private witness
+    /// by passing only public inputs to create_proof
+    #[test]
+    fn attack_snark_without_private_witness_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+
+        // Create public data from w0 -> w1
+        let public_data = SnarkDleqPublicData::from_parts(w0.public_points(), w1.public_points());
+
+        // But use a WRONG private witness (attacker doesn't know w0)
+        let w0_wrong = ChannelWitness::<Grumpkin>::random();
+        let w1_wrong = prover.compute_next(1, &w0_wrong, &()).unwrap();
+        let private_data = SnarkDleqPrivateData::from_parts(w0_wrong.clone(), w1_wrong);
+
+        // Attempt to create a proof with mismatched private/public data
+        // The SNARK should fail because the private witness doesn't match the public points
+        let result = prover.create_proof(1, &private_data, &public_data, &());
+        assert!(
+            result.is_err(),
+            "SNARK proof with mismatched private/public data should fail during proving"
+        );
+    }
+
+    // ==================================================================================
+    // SECTION 2: Attempt to generate valid proofs that fail verification
+    // ==================================================================================
+
+    /// Test: Ensure a legitimately generated proof always verifies
+    #[test]
+    fn valid_proof_always_verifies() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        // Generate multiple random proofs and verify they all pass
+        for _ in 0..5 {
+            let w0 = ChannelWitness::<Grumpkin>::random();
+            let (proof, public_data) = prover.next(1, &w0, &()).expect("Proof generation should succeed");
+            let result = prover.verify(1, &public_data, &proof, &());
+            assert!(result.is_ok(), "Valid proof should always verify: {:?}", result.err());
+        }
+    }
+
+    /// Test: Chain of proofs all verify correctly
+    #[test]
+    fn chain_of_proofs_all_verify() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let mut current = ChannelWitness::<Grumpkin>::random();
+        for i in 1..=5u64 {
+            let (proof, public_data) = prover.next(i, &current, &()).expect("Proof generation should succeed");
+            let result = prover.verify(i, &public_data, &proof, &());
+            assert!(result.is_ok(), "Chain proof {i} should verify");
+            current = prover.compute_next(i, &current, &()).unwrap();
+        }
+    }
+
+    // ==================================================================================
+    // SECTION 3: Attempt to generate proofs for non-consecutive witnesses (j != i+1)
+    // ==================================================================================
+
+    /// Attack: Try to skip a step in the chain (w0 -> w2 instead of w0 -> w1)
+    #[test]
+    fn attack_skip_step_in_chain_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+        let w2 = prover.compute_next(2, &w1, &()).unwrap();
+
+        // Try to create public data for w0 -> w2 (skipping w1)
+        let fake_public_data = SnarkDleqPublicData::from_parts(w0.public_points(), w2.public_points());
+
+        // Create private data for w0 -> w2
+        let fake_private_data = SnarkDleqPrivateData::from_parts(w0.clone(), w2.clone());
+
+        // The SNARK circuit should reject this because H(1, w0) != w2
+        let result = prover.create_proof(1, &fake_private_data, &fake_public_data, &());
+        assert!(result.is_err(), "Should not be able to prove w0 -> w2 directly");
+        let result = prover.create_proof(2, &fake_private_data, &fake_public_data, &());
+        assert!(result.is_err(), "Should not be able to prove w0 -> w2 directly");
+    }
+
+    /// Attack: Try to go backwards in the chain (w1 -> w0)
+    #[test]
+    fn attack_reverse_direction_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+
+        // Try to prove w1 -> w0 (backwards)
+        let fake_public_data = SnarkDleqPublicData::from_parts(w1.public_points(), w0.public_points());
+        let fake_private_data = SnarkDleqPrivateData::from_parts(w1.clone(), w0.clone());
+
+        // The SNARK should fail because H(1, w1) != w0
+        let result = prover.create_proof(1, &fake_private_data, &fake_public_data, &());
+        assert!(result.is_err(), "Should not be able to prove reverse direction");
+    }
+
+    /// Attack: Use the correct witnesses but wrong index
+    #[test]
+    fn attack_wrong_index_should_fail_verification() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, public_data) = prover.next(1, &w0, &()).expect("Proof generation should succeed");
+
+        // Verify with wrong indices
+        for wrong_index in [0u64, 2, 3, 100, u64::MAX] {
+            let result = prover.verify(wrong_index, &public_data, &proof, &());
+            assert!(result.is_err(), "Verification with wrong index {wrong_index} should fail");
+        }
+    }
+
+    /// Attack: Try to use a valid proof from index=1 for index=2
+    #[test]
+    fn attack_proof_reuse_at_different_index_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+        let w2 = prover.compute_next(2, &w1, &()).unwrap();
+
+        // Generate proof for index=1 transition
+        let (proof_1, _) = prover.next(1, &w0, &()).unwrap();
+
+        // Try to use proof_1 with index=2's public data
+        let public_data_2 = SnarkDleqPublicData::from_parts(w1.public_points(), w2.public_points());
+
+        let result = prover.verify(2, &public_data_2, &proof_1, &());
+        assert!(result.is_err(), "Proof for index=1 should not work at index=2");
+    }
+
+    /// Attack: Create a valid transition for i=2 but claim it's for i=1
+    #[test]
+    fn attack_mislabel_index_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+
+        // Generate proof for i=2 transition (from w1)
+        let (proof_2, public_data_2) = prover.next(2, &w1, &()).unwrap();
+
+        // Try to verify at i=1 (wrong index)
+        let result = prover.verify(1, &public_data_2, &proof_2, &());
+        assert!(result.is_err(), "Proof for i=2 should not verify at i=1");
+    }
+
+    /// Test: A valid proof verifies at exactly one index value
+    ///
+    /// Generate a proof for a random index in [100, 150] and verify it only
+    /// passes verification at that exact index, not at any other index in a
+    /// wide range around it.
+    #[test]
+    fn proof_valid_for_unique_index_only() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        // Pick a random index in [100, 150]
+        let target_index = 100 + (OsRng.next_u64() % 51); // 100 to 150 inclusive
+
+        // Build chain up to target_index
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let mut current = w0.clone();
+        for i in 1..target_index {
+            current = prover.compute_next(i, &current, &()).unwrap();
+        }
+        let w_prev = current.clone();
+
+        // Generate proof at target_index
+        let (proof, public_data) = prover.next(target_index, &w_prev, &()).expect("Proof should generate");
+
+        // Verify proof works at correct index
+        let correct_result = prover.verify(target_index, &public_data, &proof, &());
+        assert!(correct_result.is_ok(), "Proof should verify at correct index {target_index}");
+
+        // Scan a range of indices to find if any other index accepts this proof
+        let mut valid_indices = vec![];
+        for test_index in 75..=175 {
+            let result = prover.verify(test_index, &public_data, &proof, &());
+            if result.is_ok() {
+                valid_indices.push(test_index);
+            }
+        }
+
+        // Only the target index should accept this proof
+        assert_eq!(
+            valid_indices.len(),
+            1,
+            "Proof should only verify at exactly one index, found valid at: {:?}",
+            valid_indices
+        );
+        assert_eq!(
+            valid_indices[0], target_index,
+            "The only valid index should be the target index {target_index}"
+        );
+    }
+
+    // ==================================================================================
+    // SECTION 4: Test for non-consecutive witness proofs (arbitrary j)
+    // ==================================================================================
+
+    /// Attack: Try to create a proof from w_i to w_{i+k} for k > 1
+    #[test]
+    fn attack_skip_multiple_steps_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let mut current = w0.clone();
+
+        // Compute a chain: w0 -> w1 -> w2 -> w3 -> w4 -> w5
+        let mut chain = vec![w0.clone()];
+        for i in 1..=5 {
+            current = prover.compute_next(i, &current, &()).unwrap();
+            chain.push(current.clone());
+        }
+
+        // Try to prove w0 -> w_k for various k > 1
+        for k in 2..=5 {
+            let fake_public_data = SnarkDleqPublicData::from_parts(chain[0].public_points(), chain[k].public_points());
+            let fake_private_data = SnarkDleqPrivateData::from_parts(chain[0].clone(), chain[k].clone());
+
+            let result = prover.create_proof(1, &fake_private_data, &fake_public_data, &());
+            assert!(result.is_err(), "Should not prove skip from w0 to w{k}");
+        }
+    }
+
+    /// Attack: Try to prove w_i -> w_j where j < i (backwards jump)
+    #[test]
+    fn attack_backwards_jump_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let mut current = w0.clone();
+
+        let mut chain = vec![w0.clone()];
+        for i in 1..=5 {
+            current = prover.compute_next(i, &current, &()).unwrap();
+            chain.push(current.clone());
+        }
+
+        for i in 1..=5 {
+            // Try to prove wi -> w0
+            let fake_public_data = SnarkDleqPublicData::from_parts(chain[i].public_points(), chain[0].public_points());
+            let fake_private_data = SnarkDleqPrivateData::from_parts(chain[i].clone(), chain[0].clone());
+
+            let result = prover.create_proof(6, &fake_private_data, &fake_public_data, &());
+            assert!(result.is_err(), "Should not prove backwards jump from w{i} to w0");
+        }
+    }
+
+    // ==================================================================================
+    // SECTION 5: Proof manipulation attacks
+    // ==================================================================================
+
+    /// Attack: Modify the SNARK portion of a valid proof
+    #[test]
+    fn attack_corrupted_snark_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (mut proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Corrupt some bytes in the SNARK
+        if !proof.snark.is_empty() {
+            proof.snark[0] ^= 0xFF;
+            let mid = proof.snark.len() / 2;
+            proof.snark[mid] ^= 0x42;
+        }
+
+        let result = prover.verify(1, &public_data, &proof, &());
+        assert!(result.is_err(), "Corrupted SNARK should fail verification");
+    }
+
+    /// Attack: Swap DLEQ from one proof with SNARK from another
+    #[test]
+    fn attack_mixed_proof_components_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0_a = ChannelWitness::<Grumpkin>::random();
+        let w0_b = ChannelWitness::<Grumpkin>::random();
+
+        let (proof_a, public_data_a) = prover.next(1, &w0_a, &()).unwrap();
+        let (proof_b, _) = prover.next(1, &w0_b, &()).unwrap();
+
+        // Create a Frankenstein proof: DLEQ from A, SNARK from B
+        let mixed_proof = SnarkDleqProof { dleq: proof_a.dleq.clone(), snark: proof_b.snark.clone() };
+
+        let result = prover.verify(1, &public_data_a, &mixed_proof, &());
+        assert!(result.is_err(), "Mixed proof components should fail");
+
+        // Also try the reverse: DLEQ from B, SNARK from A
+        let mixed_proof_2 = SnarkDleqProof { dleq: proof_b.dleq.clone(), snark: proof_a.snark.clone() };
+
+        let result = prover.verify(1, &public_data_a, &mixed_proof_2, &());
+        assert!(result.is_err(), "Reversed mixed proof should fail");
+    }
+
+    /// Attack: Use a valid SNARK with a forged DLEQ for a different point
+    #[test]
+    fn attack_valid_snark_with_dleq_for_different_point_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (valid_proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Generate a DLEQ proof for a completely different secret
+        let other_secret = ChannelWitness::<Grumpkin>::random();
+        let mut rng = OsRng;
+        let (forged_dleq, _) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, *other_secret.offset())
+            .expect("DLEQ generation should succeed");
+
+        // Combine forged DLEQ with valid SNARK
+        let forged_proof = SnarkDleqProof { dleq: forged_dleq, snark: valid_proof.snark.clone() };
+
+        let result = prover.verify(1, &public_data, &forged_proof, &());
+        assert!(result.is_err(), "Valid SNARK with forged DLEQ should fail");
+    }
+
+    // ==================================================================================
+    // SECTION 6: Edge cases and boundary conditions
+    // ==================================================================================
+
+    /// Test: Index = 0 should be rejected
+    #[test]
+    fn index_zero_should_be_rejected() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let result = prover.next(0, &w0, &());
+
+        assert!(result.is_err(), "Index 0 should be rejected");
+        if let Err(e) = result {
+            match e {
+                ProvingError::DerivationError(msg) => {
+                    assert!(msg.contains("at least 1"), "Error should mention index constraint");
+                }
+                _ => panic!("Expected DerivationError, got {:?}", e),
+            }
+        }
+    }
+
+    /// Test: Large index values work correctly
+    #[test]
+    fn large_index_values_work() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+
+        // Test with various large indices
+        for &index in &[1000u64, 1_000_000, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
+            let result = prover.compute_next(index, &w0, &());
+            assert!(result.is_ok(), "Large index {index} should work for compute_next");
+        }
+    }
+
+    /// Test: Proof generation and verification with u64::MAX index
+    #[test]
+    fn max_u64_index_works() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let result = prover.next(u64::MAX, &w0, &());
+
+        // Should succeed in generating a proof
+        assert!(result.is_ok(), "u64::MAX index should work: {:?}", result.err());
+
+        let (proof, public_data) = result.unwrap();
+        let verify_result = prover.verify(u64::MAX, &public_data, &proof, &());
+        assert!(verify_result.is_ok(), "Verification at u64::MAX should succeed");
+    }
+
+    // ==================================================================================
+    // SECTION 7: Serialization and deserialization attacks
+    // ==================================================================================
+
+    /// Test: Proof serialization roundtrip
+    #[test]
+    fn proof_serialization_roundtrip() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Serialize
+        let mut serialized = Vec::new();
+        proof.write(&mut serialized).expect("Serialization should succeed");
+
+        // Deserialize
+        let mut cursor = Cursor::new(&serialized);
+        let deserialized = SnarkDleqProof::<Grumpkin>::read(&mut cursor).expect("Deserialization should succeed");
+
+        // Verify the deserialized proof works
+        let result = prover.verify(1, &public_data, &deserialized, &());
+        assert!(result.is_ok(), "Deserialized proof should verify");
+    }
+
+    /// Attack: Truncated proof data
+    #[test]
+    fn attack_truncated_proof_should_fail_to_deserialize() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        let mut serialized = Vec::new();
+        proof.write(&mut serialized).expect("Serialization should succeed");
+
+        // Try various truncation points
+        for truncate_at in [1, 10, 50, serialized.len() / 2, serialized.len() - 1] {
+            let truncated = &serialized[..truncate_at];
+            let mut cursor = Cursor::new(truncated);
+            let result = SnarkDleqProof::<Grumpkin>::read(&mut cursor);
+            assert!(
+                result.is_err(),
+                "Truncated proof at {truncate_at} bytes should fail to deserialize"
+            );
+        }
+    }
+
+    /// Attack: Random garbage as proof data
+    #[test]
+    fn attack_random_garbage_proof_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (_, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Generate random bytes of various sizes
+        use rand_core::RngCore;
+        for size in [100, 1000, 10000, 50000] {
+            let mut garbage = vec![0u8; size];
+            OsRng.fill_bytes(&mut garbage);
+
+            let mut cursor = Cursor::new(&garbage);
+            if let Ok(garbage_proof) = SnarkDleqProof::<Grumpkin>::read(&mut cursor) {
+                // Even if parsing succeeds, verification should fail
+                let result = prover.verify(1, &public_data, &garbage_proof, &());
+                assert!(result.is_err(), "Random garbage proof should not verify");
+            }
+            // If parsing fails, that's also fine
+        }
+    }
+
+    /// Attack: Zero-length SNARK in proof
+    #[test]
+    fn attack_empty_snark_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (valid_proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Create a proof with empty SNARK
+        let empty_snark_proof = SnarkDleqProof { dleq: valid_proof.dleq.clone(), snark: vec![] };
+
+        let result = prover.verify(1, &public_data, &empty_snark_proof, &());
+        assert!(result.is_err(), "Empty SNARK should fail verification");
+    }
+
+    // ==================================================================================
+    // SECTION 8: Public data manipulation attacks
+    // ==================================================================================
+
+    /// Attack: Use legitimate proof with modified public prev point
+    #[test]
+    fn attack_modified_prev_point_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        // Compute the correct next witness
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+
+        // Use a different prev point
+        let w0_fake = ChannelWitness::<Grumpkin>::random();
+        let modified_public_data = SnarkDleqPublicData::from_parts(
+            w0_fake.public_points(), // Wrong prev
+            w1.public_points(),      // Correct next
+        );
+
+        let result = prover.verify(1, &modified_public_data, &proof, &());
+        assert!(result.is_err(), "Modified prev point should fail");
+    }
+
+    /// Attack: Use legitimate proof with modified public next point
+    #[test]
+    fn attack_modified_next_point_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        // Use a different next point
+        let w1_fake = ChannelWitness::<Grumpkin>::random();
+        let modified_public_data = SnarkDleqPublicData::from_parts(
+            w0.public_points(),      // Correct prev
+            w1_fake.public_points(), // Wrong next
+        );
+
+        let result = prover.verify(1, &modified_public_data, &proof, &());
+        assert!(result.is_err(), "Modified next point should fail");
+    }
+
+    /// Attack: Swap prev and next points
+    #[test]
+    fn attack_swapped_prev_next_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // Swap prev and next
+        let swapped_public_data = SnarkDleqPublicData::from_parts(
+            public_data.next().clone(), // next as prev
+            public_data.prev().clone(), // prev as next
+        );
+
+        let result = prover.verify(1, &swapped_public_data, &proof, &());
+        assert!(result.is_err(), "Swapped prev/next should fail");
+    }
+
+    // ==================================================================================
+    // SECTION 9: DLEQ-SNARK binding tests
+    // ==================================================================================
+
+    /// Test that DLEQ binds to the correct Ed25519 point
+    #[test]
+    fn dleq_binds_to_correct_ed25519_point() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
+
+        // The DLEQ should be for the next witness, not the prev witness
+        // This is verified by checking that verification passes with correct data
+        let result = prover.verify(1, &public_data, &proof, &());
+        assert!(result.is_ok(), "DLEQ should bind to next witness");
+    }
+
+    /// Attack: Generate DLEQ for prev witness instead of next
+    #[test]
+    fn attack_dleq_for_prev_instead_of_next_should_fail() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w1 = prover.compute_next(1, &w0, &()).unwrap();
+
+        // Generate DLEQ for w0 (prev) instead of w1 (next)
+        let mut rng = OsRng;
+        let (wrong_dleq, _) =
+            <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, *w0.offset()).expect("DLEQ should generate");
+
+        // Get the valid SNARK from a real proof
+        let public_data = SnarkDleqPublicData::from_parts(w0.public_points(), w1.public_points());
+
+        // Generate a full proof first to get the SNARK
+        let (valid_proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        // Create proof with DLEQ for wrong (prev) witness
+        let wrong_proof = SnarkDleqProof { dleq: wrong_dleq, snark: valid_proof.snark.clone() };
+
+        let result = prover.verify(1, &public_data, &wrong_proof, &());
+        assert!(result.is_err(), "DLEQ for prev witness should fail verification");
+    }
+
+    // ==================================================================================
+    // SECTION 10: Identity and special value tests
+    // ==================================================================================
+
+    /// Test: Witness derived from small scalar values
+    #[test]
+    fn small_scalar_witnesses_work() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        // Test with some small scalar values
+        for i in 1u64..=10 {
+            if let Ok(w0) = ChannelWitness::<Grumpkin>::try_from_snark_scalar(grease_grumpkin::Scalar::from(i)) {
+                let result = prover.next(1, &w0, &());
+                assert!(result.is_ok(), "Small scalar witness {i} should work: {:?}", result.err());
+
+                let (proof, public_data) = result.unwrap();
+                let verify_result = prover.verify(1, &public_data, &proof, &());
+                assert!(verify_result.is_ok(), "Small scalar witness {i} proof should verify");
+            }
+        }
+    }
+
+    /// Test: Consecutive proofs from same initial witness but different indices all unique
+    #[test]
+    fn different_indices_produce_different_outputs() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+
+        let w1_idx1 = prover.compute_next(1, &w0, &()).unwrap();
+        let w1_idx2 = prover.compute_next(2, &w0, &()).unwrap();
+        let w1_idx3 = prover.compute_next(3, &w0, &()).unwrap();
+
+        // All should be different
+        assert_ne!(w1_idx1.public_points().snark_point(), w1_idx2.public_points().snark_point());
+        assert_ne!(w1_idx2.public_points().snark_point(), w1_idx3.public_points().snark_point());
+        assert_ne!(w1_idx1.public_points().snark_point(), w1_idx3.public_points().snark_point());
+    }
+
+    // ==================================================================================
+    // SECTION 11: Determinism tests
+    // ==================================================================================
+
+    /// Test: Same inputs always produce same outputs
+    #[test]
+    fn proof_generation_is_not_deterministic_due_to_dleq() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+
+        let (proof1, public_data1) = prover.next(1, &w0, &()).unwrap();
+        let (proof2, public_data2) = prover.next(1, &w0, &()).unwrap();
+
+        // Public data should be identical (deterministic)
+        assert_eq!(public_data1.prev().snark_point(), public_data2.prev().snark_point());
+        assert_eq!(public_data1.next().snark_point(), public_data2.next().snark_point());
+
+        // DLEQ has randomness, so proofs will differ
+        // Just verify both are valid
+        assert!(prover.verify(1, &public_data1, &proof1, &()).is_ok());
+        assert!(prover.verify(1, &public_data2, &proof2, &()).is_ok());
+    }
+
+    /// Test: compute_next is deterministic
+    #[test]
+    fn compute_next_is_deterministic() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+
+        let w1_a = prover.compute_next(1, &w0, &()).unwrap();
+        let w1_b = prover.compute_next(1, &w0, &()).unwrap();
+        let w1_c = prover.compute_next(1, &w0, &()).unwrap();
+
+        assert_eq!(w1_a.public_points(), w1_b.public_points());
+        assert_eq!(w1_b.public_points(), w1_c.public_points());
+    }
+
+    // ==================================================================================
+    // SECTION 12: Stress and fuzzing-like tests
+    // ==================================================================================
+
+    /// Test: Many random proof/verify cycles
+    #[test]
+    fn stress_test_random_proofs() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        for i in 0..10 {
+            let w0 = ChannelWitness::<Grumpkin>::random();
+            let index = (i as u64 * 100) + 1; // Varied indices 1, 101, 201, ...
+
+            let result = prover.next(index, &w0, &());
+            assert!(result.is_ok(), "Random proof at index {index} should succeed");
+
+            let (proof, public_data) = result.unwrap();
+            let verify_result = prover.verify(index, &public_data, &proof, &());
+            assert!(
+                verify_result.is_ok(),
+                "Random proof verification at index {index} should succeed"
+            );
+        }
+    }
+
+    /// Test: Verify that proofs are reasonably sized
+    #[test]
+    fn proof_size_is_reasonable() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        // SNARK proof should be a reasonable size (not empty, not gigantic)
+        assert!(!proof.snark.is_empty(), "SNARK proof should not be empty");
+        assert!(
+            proof.snark.len() < 50_000,
+            "SNARK proof should be under 50KB, got {} bytes",
+            proof.snark.len()
+        );
+
+        // Serialize the full proof
+        let mut serialized = Vec::new();
+        proof.write(&mut serialized).expect("Serialization should succeed");
+
+        // Full proof includes DLEQ (which is ~44KB for Ed25519/Grumpkin cross-group proof)
+        assert!(serialized.len() > proof.snark.len(), "Full proof should include DLEQ");
+        assert!(
+            serialized.len() < 100_000,
+            "Full proof should be under 100KB, got {} bytes",
+            serialized.len()
+        );
     }
 }
