@@ -36,6 +36,14 @@ where
     snark: Vec<u8>,
 }
 
+/// Maximum allowed SNARK proof size (64KB).
+///
+/// This limit prevents DoS attacks where a malicious actor sends a proof with an
+/// enormous length field (e.g., u64::MAX), causing the deserializer to attempt
+/// allocating terabytes of memory. Current SNARK proofs are ~16KB, so 64KB provides
+/// 4x headroom for future proof system changes while preventing resource exhaustion.
+const MAX_SNARK_PROOF_SIZE: u64 = 65_536;
+
 impl<SF> Readable for SnarkDleqProof<SF>
 where
     SF: Curve,
@@ -46,6 +54,15 @@ where
             <Ed25519 as Dleq<SF>>::read(reader).map_err(|e| ReadError::new("SnarkDleqProof", format!("DLEQ: {e}")))?;
         let snark_len =
             reader.read_u64().map_err(|e| ReadError::new("SnarkDleqProof", format!("SNARK length: {e}")))?;
+
+        // DoS protection: reject unreasonably large SNARK lengths before allocating
+        if snark_len > MAX_SNARK_PROOF_SIZE {
+            return Err(ReadError::new(
+                "SnarkDleqProof",
+                format!("SNARK length {snark_len} exceeds maximum allowed size {MAX_SNARK_PROOF_SIZE}"),
+            ));
+        }
+
         let mut snark = vec![0u8; snark_len as usize];
         reader.read_exact(&mut snark).map_err(|e| ReadError::new("SnarkDleqProof", format!("SNARK data: {e}")))?;
         Ok(Self { dleq, snark })
@@ -829,6 +846,96 @@ mod security_tests {
 
         let result = prover.verify(1, &public_data, &empty_snark_proof, &());
         assert!(result.is_err(), "Empty SNARK should fail verification");
+    }
+
+    /// DoS Protection: Enormous SNARK length is rejected before allocation
+    ///
+    /// Previously, the deserializer would read a u64 length and immediately allocate
+    /// that many bytes, allowing DoS attacks. Now it validates the length against
+    /// MAX_SNARK_PROOF_SIZE (1MB) before allocating.
+    #[test]
+    fn dos_protection_rejects_enormous_snark_length() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (valid_proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        // Serialize valid proof to get the DLEQ portion
+        let mut serialized = Vec::new();
+        valid_proof.write(&mut serialized).expect("Serialization should succeed");
+
+        // Get just the DLEQ bytes (everything before the SNARK length)
+        let dleq_end = serialized.len() - 8 - valid_proof.snark.len();
+        let mut malicious = serialized[..dleq_end].to_vec();
+
+        // Append an enormous length (1GB) - this would have caused OOM before the fix
+        let huge_length: u64 = 1_000_000_000; // 1GB
+        malicious.extend_from_slice(&huge_length.to_le_bytes());
+        malicious.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        // Should reject immediately without attempting allocation
+        let mut cursor = Cursor::new(&malicious);
+        let result = SnarkDleqProof::<Grumpkin>::read(&mut cursor);
+
+        assert!(result.is_err(), "Enormous SNARK length should be rejected");
+        if let Err(err) = result {
+            assert!(
+                err.to_string().contains("exceeds maximum"),
+                "Error should mention size limit: {err}"
+            );
+        }
+    }
+
+    /// DoS Protection: u64::MAX length is rejected before allocation
+    #[test]
+    fn dos_protection_rejects_max_u64_snark_length() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (valid_proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        let mut serialized = Vec::new();
+        valid_proof.write(&mut serialized).expect("Serialization should succeed");
+
+        let dleq_end = serialized.len() - 8 - valid_proof.snark.len();
+        let mut malicious = serialized[..dleq_end].to_vec();
+
+        // Append u64::MAX - the absolute worst case attack
+        malicious.extend_from_slice(&u64::MAX.to_le_bytes());
+
+        let mut cursor = Cursor::new(&malicious);
+        let result = SnarkDleqProof::<Grumpkin>::read(&mut cursor);
+
+        assert!(result.is_err(), "u64::MAX SNARK length should be rejected");
+    }
+
+    /// Test: Valid proof sizes are still accepted
+    #[test]
+    fn dos_protection_accepts_valid_proof_sizes() {
+        let circuit = NoirUpdateCircuit::new().unwrap();
+        let prover = create_prover(&circuit);
+
+        let w0 = ChannelWitness::<Grumpkin>::random();
+        let (proof, _) = prover.next(1, &w0, &()).unwrap();
+
+        // Serialize and deserialize - should work fine
+        let mut serialized = Vec::new();
+        proof.write(&mut serialized).expect("Serialization should succeed");
+
+        let mut cursor = Cursor::new(&serialized);
+        let result = SnarkDleqProof::<Grumpkin>::read(&mut cursor);
+
+        assert!(result.is_ok(), "Valid proof size should be accepted");
+
+        // Verify the SNARK size is well under the MAX_SNARK_PROOF_SIZE limit
+        assert!(
+            (proof.snark.len() as u64) < MAX_SNARK_PROOF_SIZE,
+            "Current SNARK size {} should be under MAX_SNARK_PROOF_SIZE ({} bytes)",
+            proof.snark.len(),
+            MAX_SNARK_PROOF_SIZE
+        );
     }
 
     // ==================================================================================
