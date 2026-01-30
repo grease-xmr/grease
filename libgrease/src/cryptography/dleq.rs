@@ -373,6 +373,8 @@ pub enum DleqError {
 #[cfg(test)]
 mod test {
     use crate::cryptography::dleq::{Dleq, DleqError};
+    use crate::cryptography::witness::Offset;
+    use crate::cryptography::ChannelWitness;
     use crate::XmrScalar;
     use ciphersuite::group::ff::PrimeFieldBits;
     use ciphersuite::group::GroupEncoding;
@@ -383,8 +385,6 @@ mod test {
     use modular_frost::sign::Writable;
     use rand_core::OsRng;
     use std::ops::Add;
-    use crate::cryptography::ChannelWitness;
-    use crate::cryptography::witness::Offset;
 
     #[test]
     fn test_equivalence_ed25519_ed25519() {
