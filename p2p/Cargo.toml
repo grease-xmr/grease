@@ -8,6 +8,8 @@ libgrease = { workspace = true }
 wallet = { workspace = true }
 
 blake2 = "0.10.6"
+ciphersuite = { workspace = true }
+dalek-ff-group = { workspace = true }
 futures = { workspace = true }
 hex = "0.4.3"
 libp2p = { workspace = true, features = [ "identify", "json", "macros", "noise", "request-response", "tcp", "tokio", "yamux"] }

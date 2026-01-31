@@ -1,14 +1,19 @@
 use crate::cryptography::commit::HashCommitment256;
+use crate::cryptography::crypto_context::{get_crypto_context, has_crypto_context};
+use crate::cryptography::ecdh_encrypt::EncryptedScalar;
 use crate::cryptography::zk_objects::GenericScalar;
 use crate::cryptography::Commit;
 use blake2::Blake2b512;
 use ciphersuite::group::ff::Field;
+use ciphersuite::Ed25519;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::Scalar;
 use dalek_ff_group::{EdwardsPoint, Scalar as XmrScalar};
 use flexible_transcript::{RecommendedTranscript, Transcript};
 use hex::FromHexError;
+use log::error;
+use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -91,13 +96,33 @@ impl Debug for Curve25519Secret {
     }
 }
 
+/// Prefix for encrypted secret serialization format.
+/// This allows us to distinguish encrypted from plaintext secrets.
+const ENCRYPTED_PREFIX: &str = "enc:";
+
 impl Serialize for Curve25519Secret {
-    /// Serializes the secret key as a hex-encoded string.
+    /// Serializes the secret key as an encrypted hex-encoded string.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called without an active crypto context. Use
+    /// [`with_crypto_context`](crate::cryptography::crypto_context::with_crypto_context)
+    /// to wrap serialization operations.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.as_hex())
+        if !has_crypto_context() {
+            panic!(
+                "Attempted to serialize Curve25519Secret without crypto context. \
+                 Wrap serialization in with_crypto_context() to encrypt secrets."
+            );
+        }
+        let ctx = get_crypto_context();
+        let encrypted = ctx.encrypt_scalar(&self.0);
+        let bytes = encrypted.serialize();
+        let hex_str = format!("{ENCRYPTED_PREFIX}{}", hex::encode(&bytes));
+        serializer.serialize_str(&hex_str)
     }
 }
 
@@ -114,12 +139,42 @@ impl From<Scalar> for Curve25519Secret {
 }
 
 impl<'de> Deserialize<'de> for Curve25519Secret {
+    /// Deserializes the secret key from either encrypted or plaintext format.
+    ///
+    /// - Encrypted format: `enc:<hex-encoded EncryptedScalar>` (requires crypto context)
+    /// - Plaintext format: `<hex-encoded scalar>` (legacy format, used for migration)
+    ///
+    /// # Panics
+    ///
+    /// Panics if attempting to deserialize encrypted format without an active crypto context.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let hex_str = String::deserialize(deserializer)?;
-        Curve25519Secret::from_hex(&hex_str).map_err(serde::de::Error::custom)
+
+        if let Some(encrypted_hex) = hex_str.strip_prefix(ENCRYPTED_PREFIX) {
+            // Encrypted format - requires crypto context
+            if !has_crypto_context() {
+                panic!(
+                    "Attempted to deserialize encrypted Curve25519Secret without crypto context. \
+                     Wrap deserialization in with_crypto_context()."
+                );
+            }
+            let bytes = hex::decode(encrypted_hex).map_err(serde::de::Error::custom)?;
+            let encrypted = EncryptedScalar::<Ed25519>::read(&mut &bytes[..]).map_err(serde::de::Error::custom)?;
+            let ctx = get_crypto_context();
+            let scalar = ctx.decrypt_scalar(&encrypted);
+            Ok(Self(scalar))
+        } else {
+            // Plaintext format - legacy/migration support
+            // This allows reading old files that haven't been re-encrypted yet
+            error!(
+                "SECURITY WARNING: Deserializing plaintext secret. Plaintext storage is deprecated \
+                 and will be removed in a future version. Re-save to encrypt."
+            );
+            Curve25519Secret::from_hex(&hex_str).map_err(serde::de::Error::custom)
+        }
     }
 }
 
@@ -246,7 +301,43 @@ pub enum KeyError {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::cryptography::crypto_context::{with_crypto_context, CryptoContext};
+    use crate::XmrPoint;
+    use ciphersuite::Ciphersuite;
     use rand_core::OsRng;
+    use std::sync::Arc;
+
+    /// Mock crypto context for testing encrypted serialization
+    struct MockCryptoContext {
+        encryption_privkey: XmrScalar,
+        encryption_pubkey: XmrPoint,
+    }
+
+    impl MockCryptoContext {
+        fn new() -> Self {
+            let encryption_privkey = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut OsRng);
+            let encryption_pubkey = Ed25519::generator() * encryption_privkey;
+            Self { encryption_privkey, encryption_pubkey }
+        }
+    }
+
+    impl CryptoContext for MockCryptoContext {
+        fn encryption_privkey(&self) -> Zeroizing<XmrScalar> {
+            Zeroizing::new(self.encryption_privkey)
+        }
+
+        fn encryption_pubkey(&self) -> XmrPoint {
+            self.encryption_pubkey
+        }
+
+        fn encrypt_scalar(&self, scalar: &XmrScalar) -> EncryptedScalar<Ed25519> {
+            EncryptedScalar::encrypt(scalar, &self.encryption_pubkey(), &mut OsRng, b"test_domain")
+        }
+
+        fn decrypt_scalar(&self, encrypted: &EncryptedScalar<Ed25519>) -> Zeroizing<XmrScalar> {
+            Zeroizing::new(encrypted.decrypt(&*self.encryption_privkey(), b"test_domain"))
+        }
+    }
 
     #[test]
     fn test_keypair() {
@@ -296,5 +387,77 @@ mod test {
                 index: 63
             }))
         ));
+    }
+
+    #[test]
+    fn test_curve25519_secret_encrypted_serde_roundtrip() {
+        let ctx = Arc::new(MockCryptoContext::new());
+        let secret = Curve25519Secret::random(&mut OsRng);
+
+        // Serialize with crypto context (encrypts the secret)
+        let serialized = with_crypto_context(ctx.clone(), || serde_json::to_string(&secret).unwrap());
+
+        // Verify it's encrypted (starts with "enc:")
+        assert!(serialized.contains("enc:"), "Serialized form should be encrypted: {serialized}");
+
+        // Deserialize with crypto context (decrypts the secret)
+        let deserialized: Curve25519Secret = with_crypto_context(ctx, || serde_json::from_str(&serialized).unwrap());
+
+        // Verify roundtrip works
+        assert_eq!(secret.as_hex(), deserialized.as_hex());
+    }
+
+    #[test]
+    fn test_curve25519_secret_deserialize_legacy_plaintext() {
+        let ctx = Arc::new(MockCryptoContext::new());
+        let secret = Curve25519Secret::random(&mut OsRng);
+        let hex = secret.as_hex();
+
+        // Legacy format: just a quoted hex string
+        let legacy_json = format!("\"{hex}\"");
+
+        // Deserialize legacy format (should work even without context for plaintext)
+        let deserialized: Curve25519Secret = with_crypto_context(ctx, || serde_json::from_str(&legacy_json).unwrap());
+
+        assert_eq!(secret.as_hex(), deserialized.as_hex());
+    }
+
+    #[test]
+    #[should_panic(expected = "crypto context")]
+    fn test_curve25519_secret_serialize_without_context_panics() {
+        let secret = Curve25519Secret::random(&mut OsRng);
+        // Serializing without context should panic
+        let _ = serde_json::to_string(&secret);
+    }
+
+    #[test]
+    #[should_panic(expected = "crypto context")]
+    fn test_curve25519_secret_deserialize_encrypted_without_context_panics() {
+        let ctx = Arc::new(MockCryptoContext::new());
+        let secret = Curve25519Secret::random(&mut OsRng);
+
+        // Serialize with context to get encrypted format
+        let serialized = with_crypto_context(ctx, || serde_json::to_string(&secret).unwrap());
+
+        // Deserializing encrypted format without context should panic
+        let _: Curve25519Secret = serde_json::from_str(&serialized).unwrap();
+    }
+
+    #[test]
+    fn test_curve25519_secret_different_contexts_produce_different_ciphertexts() {
+        let ctx1 = Arc::new(MockCryptoContext::new());
+        let ctx2 = Arc::new(MockCryptoContext::new());
+        let secret = Curve25519Secret::random(&mut OsRng);
+
+        let serialized1 = with_crypto_context(ctx1.clone(), || serde_json::to_string(&secret).unwrap());
+        let serialized2 = with_crypto_context(ctx2, || serde_json::to_string(&secret).unwrap());
+
+        // Different contexts should produce different ciphertexts (due to random ephemeral keys)
+        // Note: Even the same context will produce different ciphertexts due to random nonces
+        assert_ne!(serialized1, serialized2);
+
+        // But decrypting with the correct context should give back the same value
+        let deserialized: Curve25519Secret = with_crypto_context(ctx1, || serde_json::from_str(&serialized1).unwrap());
+        assert_eq!(secret.as_hex(), deserialized.as_hex());
     }
 }

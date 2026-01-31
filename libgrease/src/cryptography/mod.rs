@@ -108,6 +108,7 @@
 //! - Identity point rejection prevents trivial forgery attacks in proofs
 
 mod commit;
+pub mod crypto_context;
 
 pub mod adapter_signature;
 pub mod dleq;

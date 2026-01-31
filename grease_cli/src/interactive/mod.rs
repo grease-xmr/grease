@@ -7,11 +7,12 @@ pub mod formatting;
 pub mod menus;
 use crate::config::{default_config_path, GlobalOptions};
 use crate::id_management::{
-    assign_identity, create_identity, delete_identity, list_identities, load_or_create_identities, MoneroKeyManager,
+    assign_identity, create_identity, delete_identity, key_manager_as_context, list_identities,
+    load_or_create_identities, MoneroKeyManager,
 };
 use crate::interactive::formatting::qr_code;
 use anyhow::{anyhow, Result};
-use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect};
+use dialoguer::{console::Style, theme::ColorfulTheme, FuzzySelect, Password};
 use grease_p2p::delegates::DummyDelegate;
 use grease_p2p::grease::{
     GreaseClient, GreaseClientOptions, NewChannelMessage, OutOfBandMerchantInfo, PaymentChannels,
@@ -19,6 +20,7 @@ use grease_p2p::grease::{
 use libgrease::amount::MoneroAmount;
 use libgrease::balance::Balances;
 use libgrease::channel_id::{ChannelId, ChannelIdMetadata};
+use libgrease::cryptography::crypto_context::with_crypto_context;
 use libgrease::cryptography::keys::Curve25519Secret;
 use libgrease::monero::data_objects::ClosingAddresses;
 use libgrease::state_machine::lifecycle::LifecycleStage;
@@ -41,26 +43,63 @@ pub struct InteractiveApp {
     server: MoneroNetworkServer,
 }
 
+/// Initializes the key manager from the configuration.
+///
+/// If `initial_secret` is present in the config, decrypts it (prompting for password if needed).
+/// Otherwise, generates a new random secret and stores it in the config as plaintext.
+///
+/// # Returns
+/// A tuple of the initialized `MoneroKeyManager` and a boolean indicating whether a new secret was created.
+fn initialize_key_manager(config: &mut GlobalOptions) -> Result<MoneroKeyManager, anyhow::Error> {
+    if config.initial_secret.is_some() {
+        // Try plaintext first (for development), then prompt for password
+        let secret = if let Some(secret) = config.initial_secret_plaintext() {
+            secret
+        } else if config.initial_secret_needs_password() {
+            let password = Password::new()
+                .with_prompt("Enter password for initial secret")
+                .interact()
+                .map_err(|e| anyhow::anyhow!("Failed to read password: {e}"))?;
+            config
+                .initial_secret(&password)
+                .map_err(|e| anyhow::anyhow!("Failed to decrypt initial secret: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("Initial secret is missing"))?
+        } else {
+            return Err(anyhow::anyhow!("Initial secret configuration is invalid"));
+        };
+        Ok(MoneroKeyManager::new(secret))
+    } else {
+        info!("No initial_secret found in config. Generating new random secret.");
+        let initial = Curve25519Secret::random(&mut rand_core::OsRng);
+        config.initial_secret = Some(crate::config::PasswordProtectedSecret::plaintext(initial.clone()));
+        Ok(MoneroKeyManager::new(initial))
+    }
+}
+
 impl InteractiveApp {
     /// Creates a new `InteractiveApp` instance with the provided configuration.
     ///
-    /// Initializes the key manager with a secret from the configuration or generates a random one if absent. Loads identities from the configured file if available, sets up the initial menu state, and attempts to auto-login using a preferred identity if specified.
+    /// Initializes the key manager with a secret from the configuration or generates a random one if absent.
+    /// Loads identities and channels from the configured file paths.
+    /// Channel loading requires the crypto context for decrypting stored secrets.
     pub fn new(mut config: GlobalOptions) -> Result<Self, anyhow::Error> {
         let current_menu = top_menu();
         let breadcrumbs = vec![top_menu()];
         let id_path = config.identities_file.clone().unwrap_or_else(|| config.base_path().join("identities.yml"));
         let identity = assign_identity(&id_path, config.preferred_identity.as_ref())?;
+
+        // Initialize the key manager first, so we can use it for channel loading
+        let key_manager = initialize_key_manager(&mut config)?;
+
+        // Load channels with crypto context for decrypting stored secrets
+        let channels = with_crypto_context(key_manager_as_context(&key_manager), || {
+            PaymentChannels::load(config.channel_directory())
+        })?;
+
         let delegate = DummyDelegate::default();
-        let channels = PaymentChannels::load(config.channel_directory())?;
         let options = GreaseClientOptions::default();
         let server = MoneroNetworkServer::new(identity.clone(), channels, RPC_ADDRESS, delegate, options)?;
-        let key_manager = if let Some(secret) = &config.initial_secret {
-            MoneroKeyManager::new(secret.clone())
-        } else {
-            let initial = Curve25519Secret::random(&mut rand_core::OsRng);
-            config.initial_secret = Some(initial.clone());
-            MoneroKeyManager::new(initial)
-        };
+
         let app = Self {
             identity,
             current_menu,
@@ -75,7 +114,8 @@ impl InteractiveApp {
     }
 
     pub async fn save_channels(&self) -> Result<()> {
-        self.server.save_channels(&self.config.channel_directory()).await?;
+        let ctx = key_manager_as_context(&self.key_manager);
+        self.server.save_channels(&self.config.channel_directory(), ctx).await?;
         Ok(())
     }
 

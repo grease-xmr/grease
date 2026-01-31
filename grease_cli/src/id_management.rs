@@ -3,16 +3,64 @@ use crate::error::ServerError;
 use anyhow::anyhow;
 use ciphersuite::{Ciphersuite, Ed25519};
 use grease_p2p::{ConversationIdentity, KeyManager};
+use libgrease::cryptography::crypto_context::CryptoContext;
+use libgrease::cryptography::ecdh_encrypt::EncryptedScalar;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::{XmrPoint, XmrScalar};
 use log::{debug, info};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use zeroize::Zeroizing;
+
+/// Domain separator for at-rest encryption of secrets.
+const AT_REST_ENCRYPT_DOMAIN: &[u8] = b"GreaseAtRestEncrypt";
+
+/// Domain separator for deriving the encryption keypair from the initial key.
+const ENCRYPTION_KEY_DST: &[u8] = b"GreaseEncryptionKey";
 
 #[derive(Clone)]
 pub struct MoneroKeyManager {
     initial_key: Curve25519Secret,
     initial_public_key: Curve25519PublicKey,
+}
+
+impl MoneroKeyManager {
+    /// Derives the encryption private key from the initial key.
+    ///
+    /// This provides key separation - the encryption key is NOT the same as the initial key.
+    fn derive_encryption_privkey(&self) -> Zeroizing<XmrScalar> {
+        let secret_bytes = self.initial_key.as_scalar().as_bytes();
+        Zeroizing::new(Ed25519::hash_to_F(ENCRYPTION_KEY_DST, secret_bytes))
+    }
+
+    /// Derives the encryption public key from the derived private key.
+    fn derive_encryption_pubkey(&self) -> XmrPoint {
+        Ed25519::generator() * &*self.derive_encryption_privkey()
+    }
+}
+
+impl CryptoContext for MoneroKeyManager {
+    fn encryption_privkey(&self) -> Zeroizing<XmrScalar> {
+        self.derive_encryption_privkey()
+    }
+
+    fn encryption_pubkey(&self) -> XmrPoint {
+        self.derive_encryption_pubkey()
+    }
+
+    fn encrypt_scalar(&self, scalar: &XmrScalar) -> EncryptedScalar<Ed25519> {
+        // Ed25519::F is dalek_ff_group::Scalar which is XmrScalar
+        // The EncryptedScalar::encrypt takes &C::F = &XmrScalar
+        EncryptedScalar::encrypt(scalar, &self.encryption_pubkey(), &mut OsRng, AT_REST_ENCRYPT_DOMAIN)
+    }
+
+    fn decrypt_scalar(&self, encrypted: &EncryptedScalar<Ed25519>) -> Zeroizing<XmrScalar> {
+        // Ed25519::F is dalek_ff_group::Scalar which is XmrScalar
+        Zeroizing::new(encrypted.decrypt(&*self.encryption_privkey(), AT_REST_ENCRYPT_DOMAIN))
+    }
 }
 
 impl KeyManager for MoneroKeyManager {
@@ -54,6 +102,13 @@ impl KeyManager for MoneroKeyManager {
         let pub2 = Curve25519PublicKey::from_secret(secret);
         &pub2 == public
     }
+}
+
+/// Helper function to create an `Arc<dyn CryptoContext>` from a `MoneroKeyManager`.
+///
+/// This is useful for passing the key manager to `with_crypto_context`.
+pub fn key_manager_as_context(km: &MoneroKeyManager) -> Arc<dyn CryptoContext> {
+    Arc::new(km.clone())
 }
 
 /// Executes an identity management command, handling creation, listing, or deletion of conversation identities.

@@ -2,6 +2,7 @@ use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
+use libgrease::cryptography::crypto_context::{with_crypto_context, CryptoContext};
 use libgrease::cryptography::zk_objects::{KesProof, Proofs0, PublicProof0, ShardInfo};
 use libgrease::monero::data_objects::{TransactionId, TransactionRecord};
 use libgrease::multisig::MultisigWalletData;
@@ -467,14 +468,22 @@ impl PaymentChannels {
     }
 
     /// Stores the in-memory channels to the configured channel directory, overwriting any existing files.
-    pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
+    ///
+    /// The `ctx` parameter provides the crypto context for encrypting secrets during serialization.
+    /// The context is set thread-locally before each serialization to handle work-stealing runtimes
+    /// where the task may move between threads across await points.
+    pub async fn save_channels<Pth: AsRef<Path>>(
+        &self,
+        path: Pth,
+        ctx: Arc<dyn CryptoContext>,
+    ) -> Result<(), PaymentChannelError> {
         let lock = self.channels.read().await;
         let channel_dir = path.as_ref();
         fs::create_dir_all(channel_dir)?;
         for (name, channel) in lock.iter() {
             let path = channel_dir.join(format!("{name}.ron"));
             let readable = channel.read().await;
-            let serialized = ron::to_string::<PaymentChannel>(&readable)?;
+            let serialized = with_crypto_context(ctx.clone(), || ron::to_string::<PaymentChannel>(&readable))?;
             drop(readable);
             fs::write(path, serialized)?;
         }
