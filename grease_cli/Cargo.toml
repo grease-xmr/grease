@@ -23,7 +23,7 @@ rand_core = { workspace = true }
 qrcode = {  version = "0.14.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_yml = {  workspace = true }
+yaml_serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 zeroize = { workspace = true }

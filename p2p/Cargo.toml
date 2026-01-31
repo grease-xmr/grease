@@ -20,7 +20,7 @@ rand = { version = "0.9.0" }
 rand_core = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_yml = {  workspace = true }
+yaml_serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 async-trait = "0.1.89"

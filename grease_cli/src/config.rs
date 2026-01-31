@@ -124,7 +124,7 @@ impl GlobalOptions {
         }
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
-        let config = serde_yml::from_reader(reader)?;
+        let config = yaml_serde::from_reader(reader)?;
         Ok(config)
     }
 
@@ -508,13 +508,13 @@ mod tests {
         let password = "test_password";
         let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
 
-        let yaml = serde_yml::to_string(&protected).unwrap();
+        let yaml = yaml_serde::to_string(&protected).unwrap();
         assert!(yaml.contains("encrypted: true"));
         assert!(yaml.contains("salt:"));
         assert!(yaml.contains("nonce:"));
         assert!(yaml.contains("ciphertext:"));
 
-        let loaded: PasswordProtectedSecret = serde_yml::from_str(&yaml).unwrap();
+        let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
         let decrypted = loaded.decrypt(password).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
@@ -524,11 +524,11 @@ mod tests {
         let secret = Curve25519Secret::random(&mut OsRng);
         let protected = PasswordProtectedSecret::plaintext(secret.clone());
 
-        let yaml = serde_yml::to_string(&protected).unwrap();
+        let yaml = yaml_serde::to_string(&protected).unwrap();
         assert!(yaml.contains("encrypted: false"));
         assert!(yaml.contains("plaintext:"));
 
-        let loaded: PasswordProtectedSecret = serde_yml::from_str(&yaml).unwrap();
+        let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
         let decrypted = loaded.decrypt("").unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
@@ -540,7 +540,7 @@ mod tests {
 
         // Legacy format is just a quoted hex string
         let yaml = format!("\"{hex}\"");
-        let loaded: PasswordProtectedSecret = serde_yml::from_str(&yaml).unwrap();
+        let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
         let decrypted = loaded.decrypt("").unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
