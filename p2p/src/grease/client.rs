@@ -15,6 +15,7 @@ use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::balance::Balances;
 use libgrease::channel_id::ChannelId;
 use libgrease::channel_metadata::ChannelMetadata;
+use libgrease::cryptography::crypto_context::CryptoContext;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use libgrease::cryptography::zk_objects::{
     generate_txc0_nonces, GenericPoint, KesProof, PublicProof0, PublicUpdateProof, ShardInfo, UpdateProofs,
@@ -34,6 +35,7 @@ use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -159,8 +161,12 @@ where
         self.inner.get_transaction_count(channel_id).await
     }
 
-    pub async fn save_channels<Pth: AsRef<Path>>(&self, path: Pth) -> Result<(), PaymentChannelError> {
-        self.inner.channels.save_channels(path).await
+    pub async fn save_channels<Pth: AsRef<Path>>(
+        &self,
+        path: Pth,
+        ctx: Arc<dyn CryptoContext>,
+    ) -> Result<(), PaymentChannelError> {
+        self.inner.channels.save_channels(path, ctx).await
     }
 
     pub async fn add_channel(&self, channel: PaymentChannel) {
