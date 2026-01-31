@@ -145,7 +145,7 @@ impl EventLoop {
             SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error } => {
                 self.on_outgoing_connection_error(peer_id, connection_id, error);
             }
-            SwarmEvent::IncomingConnectionError { connection_id, local_addr, send_back_addr, error } => {
+            SwarmEvent::IncomingConnectionError { connection_id, local_addr, send_back_addr, error, .. } => {
                 self.on_incoming_connection_error(connection_id, local_addr, send_back_addr, error);
             }
             SwarmEvent::Dialing { peer_id, connection_id } => {
