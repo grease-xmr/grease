@@ -124,7 +124,7 @@ impl GlobalOptions {
         }
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
-        let config = serde_yml::from_reader(reader)?;
+        let config = yaml_serde::from_reader(reader)?;
         Ok(config)
     }
 

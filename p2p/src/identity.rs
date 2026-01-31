@@ -83,7 +83,7 @@ impl ConversationIdentity {
     }
 
     pub fn to_yml(&self) -> Result<String, IdentityError> {
-        let s = serde_yml::to_string(self)?;
+        let s = yaml_serde::to_string(self)?;
         Ok(s)
     }
 
@@ -95,7 +95,7 @@ impl ConversationIdentity {
 
     pub fn load_yml<P: AsRef<Path>>(path: P) -> Result<Self, IdentityError> {
         let text = std::fs::read_to_string(path)?;
-        let identity: ConversationIdentity = serde_yml::from_str(&text)?;
+        let identity: ConversationIdentity = yaml_serde::from_str(&text)?;
         Ok(identity)
     }
 
@@ -157,7 +157,7 @@ pub enum IdentityError {
     #[error("Error reading/writing identity: {0}")]
     Io(#[from] std::io::Error),
     #[error("Error de/encoding identity in YAML: {0}")]
-    SerdeYaml(#[from] serde_yml::Error),
+    SerdeYaml(#[from] yaml_serde::Error),
     #[error("Error decoding identity in RON: {0}")]
     SerdeRon(#[from] ron::Error),
 }

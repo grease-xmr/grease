@@ -257,7 +257,7 @@ impl LocalIdentitySet {
 pub fn load_identities_file<P: AsRef<Path>>(path: P) -> Result<LocalIdentitySet, ServerError> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
-    let local_peer_set = serde_yml::from_reader(reader)?;
+    let local_peer_set = yaml_serde::from_reader(reader)?;
     Ok(local_peer_set)
 }
 
@@ -272,7 +272,7 @@ pub fn save_config_file<P: AsRef<Path>>(path: P, ids: &LocalIdentitySet) -> Resu
     }
     let file = std::fs::File::create(path)?;
     let writer = std::io::BufWriter::new(file);
-    serde_yml::to_writer(writer, ids)?;
+    yaml_serde::to_writer(writer, ids)?;
     Ok(())
 }
 
