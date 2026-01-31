@@ -13,16 +13,20 @@
 //! # Example
 //!
 //! ```ignore
-//! use libgrease::cryptography::crypto_context::with_crypto_context;
+//! use libgrease::cryptography::crypto_context::{with_crypto_context, CryptoContext};
+//! use std::sync::Arc;
+//!
+//! // key_manager must implement CryptoContext
+//! let ctx: Arc<dyn CryptoContext> = Arc::new(key_manager.clone());
 //!
 //! // When saving channel state
-//! with_crypto_context(key_manager.clone(), || {
+//! with_crypto_context(ctx.clone(), || {
 //!     file_store.write_channel(&state)?;
 //!     Ok(())
 //! })?;
 //!
 //! // When loading channel state
-//! let state = with_crypto_context(key_manager.clone(), || {
+//! let state = with_crypto_context(ctx, || {
 //!     file_store.load_channel(&channel_id)
 //! })?;
 //! ```
@@ -93,7 +97,9 @@ pub trait CryptoContext: Send + Sync {
 /// # Example
 ///
 /// ```ignore
-/// let state = with_crypto_context(key_manager.clone(), || {
+/// // key_manager must implement CryptoContext
+/// let ctx: Arc<dyn CryptoContext> = Arc::new(key_manager.clone());
+/// let state = with_crypto_context(ctx, || {
 ///     ron::ser::to_string_pretty(&channel_state, config)
 /// })?;
 /// ```

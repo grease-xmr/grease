@@ -13,9 +13,11 @@ use libgrease::cryptography::keys::PublicKey;
 /// the KeyManager must be set as the active crypto context:
 ///
 /// ```ignore
-/// use libgrease::cryptography::crypto_context::with_crypto_context;
+/// use libgrease::cryptography::crypto_context::{with_crypto_context, CryptoContext};
+/// use std::sync::Arc;
 ///
-/// with_crypto_context(key_manager.clone(), || {
+/// let ctx: Arc<dyn CryptoContext> = Arc::new(key_manager.clone());
+/// with_crypto_context(ctx, || {
 ///     file_store.write_channel(&state)?;
 ///     Ok(())
 /// })?;

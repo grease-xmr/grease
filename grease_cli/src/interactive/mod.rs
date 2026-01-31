@@ -49,7 +49,7 @@ pub struct InteractiveApp {
 /// Otherwise, generates a new random secret and stores it in the config as plaintext.
 ///
 /// # Returns
-/// A tuple of the initialized `MoneroKeyManager` and a boolean indicating whether a new secret was created.
+/// The initialized `MoneroKeyManager`.
 fn initialize_key_manager(config: &mut GlobalOptions) -> Result<MoneroKeyManager, anyhow::Error> {
     if config.initial_secret.is_some() {
         // Try plaintext first (for development), then prompt for password
@@ -69,7 +69,7 @@ fn initialize_key_manager(config: &mut GlobalOptions) -> Result<MoneroKeyManager
         };
         Ok(MoneroKeyManager::new(secret))
     } else {
-        info!("No initial_secret found in config. Generating new random secret.");
+        warn!("No initial_secret found in config. Generating new random secret - which will be LOST on exit!");
         let initial = Curve25519Secret::random(&mut rand_core::OsRng);
         config.initial_secret = Some(crate::config::PasswordProtectedSecret::plaintext(initial.clone()));
         Ok(MoneroKeyManager::new(initial))

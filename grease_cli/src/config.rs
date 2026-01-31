@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use libgrease::cryptography::keys::Curve25519Secret;
 use libp2p::Multiaddr;
 use monero::Address;
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -301,13 +301,13 @@ impl PasswordProtectedSecret {
         let cipher = ChaCha20Poly1305::new_from_slice(key_bytes)
             .map_err(|e| PasswordProtectedSecretError::Argon2Error(format!("Key creation failed: {e}")))?;
         let mut nonce = [0u8; 12];
-        rand::fill(&mut nonce);
+        OsRng.fill_bytes(&mut nonce);
 
         // Encrypt the secret
         let plaintext = secret.as_hex();
         let ciphertext = cipher
             .encrypt((&nonce).into(), plaintext.as_bytes())
-            .map_err(|_| PasswordProtectedSecretError::DecryptionFailed)?;
+            .map_err(|e| PasswordProtectedSecretError::Argon2Error(format!("Encrypt failed: {e}")))?;
 
         Ok(Self::Encrypted { salt: salt.to_string(), nonce, ciphertext })
     }
