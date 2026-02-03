@@ -60,7 +60,10 @@ fn test_happy_path_typed_api() {
     let customer_wallet = customer.finalize().unwrap();
 
     // Verify sorted public keys match
-    assert_eq!(merchant_wallet.sorted_public_keys().unwrap(), customer_wallet.sorted_public_keys().unwrap());
+    assert_eq!(
+        merchant_wallet.sorted_public_keys().unwrap(),
+        customer_wallet.sorted_public_keys().unwrap()
+    );
 }
 
 #[test]
@@ -224,7 +227,6 @@ fn test_mock_inject_verify_failure() {
     let result = customer.verify();
     assert!(matches!(result, Err(MultisigSetupError::CommitmentMismatch)));
 }
-
 
 // ============================================================================
 // Serialization Tests

@@ -92,7 +92,9 @@ impl LinkedMultisigWallets<Blake2b512> for MockMultisigWallet {
     }
 
     fn peer_public_key_commitment(&self) -> Result<&PublicKeyCommitment, MultisigWalletError> {
-        self.peer_commitment.as_ref().ok_or(MultisigWalletError::MissingInformation("Peer public key commitment".into()))
+        self.peer_commitment
+            .as_ref()
+            .ok_or(MultisigWalletError::MissingInformation("Peer public key commitment".into()))
     }
 
     fn set_peer_public_key(&mut self, public_key: Self::SharedKeyType) {

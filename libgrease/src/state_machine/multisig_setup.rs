@@ -132,7 +132,9 @@ pub trait SetupState<W>: HasPublicKey {
     fn wallet(&self) -> &W;
 
     /// Consumes the setup and returns the wallet if complete.
-    fn finalize(self) -> Result<W, (Self, MultisigSetupError)> where Self: Sized;
+    fn finalize(self) -> Result<W, (Self, MultisigSetupError)>
+    where
+        Self: Sized;
 }
 
 // ============================================================================
@@ -180,8 +182,8 @@ where
     /// Transitions: `CommitmentSent -> AwaitingPeerKey`
     pub fn receive_peer_key(&mut self, data: &[u8]) -> Result<(), MultisigSetupError> {
         self.require_stage(MerchantStage::CommitmentSent, "receive_peer_key")?;
-        let shared_key =
-            SharedPublicKey::read(&mut &data[..]).map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
+        let shared_key = SharedPublicKey::read(&mut &data[..])
+            .map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
         self.wallet.set_peer_public_key(shared_key);
         self.stage = MerchantStage::AwaitingPeerKey;
         Ok(())
@@ -191,7 +193,9 @@ where
     /// Available in: `CommitmentSent`, `AwaitingPeerKey`
     pub fn send_public_key(&self) -> Result<Vec<u8>, MultisigSetupError> {
         match self.stage {
-            MerchantStage::CommitmentSent | MerchantStage::AwaitingPeerKey => Ok(self.wallet.shared_public_key().serialize()),
+            MerchantStage::CommitmentSent | MerchantStage::AwaitingPeerKey => {
+                Ok(self.wallet.shared_public_key().serialize())
+            }
             _ => Err(self.invalid_transition("send_public_key")),
         }
     }
@@ -253,7 +257,8 @@ where
         if self.stage == MerchantStage::Complete {
             Ok(self.wallet)
         } else {
-            let error = MultisigSetupError::InvalidStateTransition { state: self.stage.to_string(), action: "finalize" };
+            let error =
+                MultisigSetupError::InvalidStateTransition { state: self.stage.to_string(), action: "finalize" };
             Err((self, error))
         }
     }
@@ -332,8 +337,8 @@ where
     /// Transitions: `AwaitingPeerKey -> AwaitingVerification`
     pub fn receive_peer_key(&mut self, data: &[u8]) -> Result<(), MultisigSetupError> {
         self.require_stage(CustomerStage::AwaitingPeerKey, "receive_peer_key")?;
-        let shared_key =
-            SharedPublicKey::read(&mut &data[..]).map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
+        let shared_key = SharedPublicKey::read(&mut &data[..])
+            .map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
         self.wallet.set_peer_public_key(shared_key);
         self.stage = CustomerStage::AwaitingVerification;
         Ok(())
@@ -397,7 +402,8 @@ where
         if self.stage == CustomerStage::Complete {
             Ok(self.wallet)
         } else {
-            let error = MultisigSetupError::InvalidStateTransition { state: self.stage.to_string(), action: "finalize" };
+            let error =
+                MultisigSetupError::InvalidStateTransition { state: self.stage.to_string(), action: "finalize" };
             Err((self, error))
         }
     }

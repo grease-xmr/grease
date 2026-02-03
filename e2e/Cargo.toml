@@ -41,3 +41,7 @@ futures-util = "0.3.30"
 [[test]]
 name = "cucumber_tests" # this should be the same as the filename of your test target
 harness = false  # allows Cucumber to print output instead of libtest
+
+[[test]]
+name = "wallet_tests"
+harness = false
