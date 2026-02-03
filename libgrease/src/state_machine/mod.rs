@@ -5,6 +5,7 @@ pub mod error;
 mod establishing_channel;
 mod events;
 pub mod lifecycle;
+pub mod multisig_setup;
 mod new_channel;
 mod open_channel;
 mod timeouts;
@@ -18,6 +19,7 @@ pub use disputing_channel::{DisputeReason, DisputingChannelState, DEFAULT_DISPUT
 pub use establishing_channel::{DefaultEstablishingState, EstablishingState};
 pub use events::LifeCycleEvent;
 pub use lifecycle::{DefaultChannelState, LifecycleStage};
+pub use multisig_setup::{CustomerSetup, CustomerStage, MerchantSetup, MerchantStage, MultisigSetupError, SetupState};
 pub use new_channel::{
     ChannelSeedBuilder, ChannelSeedInfo, NewChannelProposal, NewChannelState, RejectNewChannelReason,
 };

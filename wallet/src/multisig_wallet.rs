@@ -186,7 +186,7 @@ impl MultisigWallet {
             let scannable = self.get_scannable_block(block).await?;
             let outputs = scanner.scan(scannable).map_err(|e| RpcError::InternalError(e.to_string()))?;
             scanned += 1;
-            let outputs = outputs.not_additionally_locked();
+            let outputs = outputs.ignore_additional_timelock();
             if !outputs.is_empty() {
                 debug!("Scanned {} outputs for block {block_num}", outputs.len());
                 found += outputs.len();
