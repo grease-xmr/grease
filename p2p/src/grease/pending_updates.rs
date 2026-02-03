@@ -1,12 +1,15 @@
+use grease_babyjubjub::BabyJubJub;
 use libgrease::amount::MoneroDelta;
 use libgrease::cryptography::keys::Curve25519Secret;
-use libgrease::cryptography::zk_objects::UpdateProofs;
+use libgrease::cryptography::ChannelWitness;
 use log::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use wallet::multisig_wallet::AdaptSig;
 use wallet::MultisigWallet;
+
+pub type DefaultChannelWitness = ChannelWitness<BabyJubJub>;
 
 pub struct PendingUpdate {
     pub wallet: MultisigWallet,
@@ -17,7 +20,7 @@ pub struct PendingUpdate {
 }
 
 pub struct ResponderInfo {
-    pub my_proofs: UpdateProofs,
+    pub my_witness: DefaultChannelWitness,
     pub peer_preprocess: Vec<u8>,
     pub my_signature: Curve25519Secret,
     pub my_adapted_signature: AdaptSig,

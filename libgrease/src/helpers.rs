@@ -1,6 +1,8 @@
 use crate::XmrScalar;
 use chrono::{DateTime, TimeZone, Utc};
 use ciphersuite::group::ff::PrimeField;
+use ciphersuite::group::GroupEncoding;
+use ciphersuite::Ciphersuite;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 
@@ -98,6 +100,113 @@ where
     D: Deserializer<'de>,
 {
     xmr_scalar_from_hex(de).map(zeroize::Zeroizing::new)
+}
+
+/// Convert a group element to a hex string.
+pub fn group_element_to_hex<C: Ciphersuite>(element: &C::G) -> String {
+    hex::encode(element.to_bytes().as_ref())
+}
+
+/// Parse a group element from a hex string.
+pub fn group_element_from_hex<C: Ciphersuite>(hex_str: &str) -> Result<C::G, String> {
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex string: {e}"))?;
+    let mut repr = <C::G as GroupEncoding>::Repr::default();
+    let repr_len = repr.as_ref().len();
+    if bytes.len() != repr_len {
+        return Err(format!("Invalid length: expected {repr_len} bytes, got {}", bytes.len()));
+    }
+    repr.as_mut().copy_from_slice(&bytes);
+    C::G::from_bytes(&repr).into_option().ok_or_else(|| "Invalid group element".to_string())
+}
+
+/// Serialize a group element as a hex string using serde.
+pub fn serialize_group_element<C: Ciphersuite, S>(element: &C::G, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    group_element_to_hex::<C>(element).serialize(s)
+}
+
+/// Deserialize a group element from a hex string using serde.
+pub fn deserialize_group_element<'de, C: Ciphersuite, D>(de: D) -> Result<C::G, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(de)?;
+    group_element_from_hex::<C>(&hex_str).map_err(serde::de::Error::custom)
+}
+
+/// Serialize a group element as hex using only the `GroupEncoding` bound.
+///
+/// Unlike [`serialize_group_element`], this function is parameterized over `G` directly (not `C: Ciphersuite`),
+/// which allows Rust's type inference to resolve the generic from the field type `C::G`.
+pub fn serialize_ge<G: GroupEncoding, S: serde::Serializer>(element: &G, s: S) -> Result<S::Ok, S::Error> {
+    hex::encode(element.to_bytes().as_ref()).serialize(s)
+}
+
+/// Deserialize a group element from hex using only the `GroupEncoding` bound.
+///
+/// Unlike [`deserialize_group_element`], this function is parameterized over `G` directly (not `C: Ciphersuite`),
+/// which allows Rust's type inference to resolve the generic from the field type `C::G`.
+pub fn deserialize_ge<'de, G, D>(de: D) -> Result<G, D::Error>
+where
+    G: GroupEncoding,
+    D: Deserializer<'de>,
+{
+    let hex_str = String::deserialize(de)?;
+    let bytes = hex::decode(&hex_str).map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
+    let mut repr = G::Repr::default();
+    let repr_slice = repr.as_ref().len();
+    if bytes.len() != repr_slice {
+        return Err(serde::de::Error::custom(format!(
+            "Invalid group element length: expected {repr_slice} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    repr.as_mut().copy_from_slice(&bytes);
+    Option::from(G::from_bytes(&repr)).ok_or_else(|| serde::de::Error::custom("Invalid group element encoding"))
+}
+
+/// Serialize a `HashMap<TransactionId, TransactionRecord>` as a sequence of `(key, value)` pairs.
+///
+/// JSON requires map keys to be strings, but `TransactionId` serializes as an object.
+/// This helper serializes the map as a list of pairs instead.
+pub fn serialize_tx_map<S>(
+    map: &std::collections::HashMap<
+        crate::monero::data_objects::TransactionId,
+        crate::monero::data_objects::TransactionRecord,
+    >,
+    s: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = s.serialize_seq(Some(map.len()))?;
+    for (k, v) in map {
+        seq.serialize_element(&(k, v))?;
+    }
+    seq.end()
+}
+
+/// Deserialize a `HashMap<TransactionId, TransactionRecord>` from a sequence of `(key, value)` pairs.
+pub fn deserialize_tx_map<'de, D>(
+    de: D,
+) -> Result<
+    std::collections::HashMap<
+        crate::monero::data_objects::TransactionId,
+        crate::monero::data_objects::TransactionRecord,
+    >,
+    D::Error,
+>
+where
+    D: Deserializer<'de>,
+{
+    let pairs: Vec<(
+        crate::monero::data_objects::TransactionId,
+        crate::monero::data_objects::TransactionRecord,
+    )> = Vec::deserialize(de)?;
+    Ok(pairs.into_iter().collect())
 }
 
 /// A UTC Unix timestamp representing seconds since January 1, 1970.
@@ -259,5 +368,57 @@ mod tests {
         set.insert(Timestamp::new(100));
 
         assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_group_element_hex_roundtrip() {
+        use ciphersuite::group::ff::Field;
+        use ciphersuite::group::Group;
+        use ciphersuite::{Ciphersuite, Ed25519};
+        use rand_core::OsRng;
+
+        let mut rng = OsRng;
+
+        // Generate a random group element
+        let scalar = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let element = <Ed25519 as Ciphersuite>::G::generator() * scalar;
+
+        // Convert to hex and back
+        let hex_str = group_element_to_hex::<Ed25519>(&element);
+        let recovered = group_element_from_hex::<Ed25519>(&hex_str).unwrap();
+
+        assert_eq!(element, recovered);
+    }
+
+    #[test]
+    fn test_group_element_hex_generator() {
+        use ciphersuite::group::Group;
+        use ciphersuite::{Ciphersuite, Ed25519};
+
+        let generator = <Ed25519 as Ciphersuite>::G::generator();
+        let hex_str = group_element_to_hex::<Ed25519>(&generator);
+        let recovered = group_element_from_hex::<Ed25519>(&hex_str).unwrap();
+
+        assert_eq!(generator, recovered);
+    }
+
+    #[test]
+    fn test_group_element_hex_invalid_length() {
+        use ciphersuite::Ed25519;
+
+        // Too short
+        let result = group_element_from_hex::<Ed25519>("abcd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid length"));
+    }
+
+    #[test]
+    fn test_group_element_hex_invalid_hex() {
+        use ciphersuite::Ed25519;
+
+        // Invalid hex characters
+        let result = group_element_from_hex::<Ed25519>("xyz123");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid hex string"));
     }
 }

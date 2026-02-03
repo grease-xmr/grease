@@ -8,8 +8,11 @@ use std::str::FromStr;
 // re-export
 use crate::balance::Balances;
 use crate::cryptography::keys::Curve25519PublicKey;
-use crate::cryptography::zk_objects::{KesProof, PartialEncryptedKey};
+use crate::cryptography::pok::KesPoKProofs;
 use crate::payment_channel::ChannelRole;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartialEncryptedKey(pub String);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MultisigSplitSecrets {
@@ -26,7 +29,7 @@ pub struct MultisigSplitSecretsResponse {
     /// The encrypted secret shard for the KES
     pub kes_shard: PartialEncryptedKey,
     /// The proof/signature that the KES was constructed correctly
-    pub kes_proof: KesProof,
+    pub kes_proof: KesPoKProofs<ciphersuite::Ed25519>,
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]

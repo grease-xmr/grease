@@ -3,7 +3,7 @@
 use crate::delegates::error::DelegateError;
 use crate::grease::NewChannelMessage;
 use libgrease::amount::MoneroDelta;
-use libgrease::channel_metadata::ChannelMetadata;
+use libgrease::channel_metadata::StaticChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::cryptography::zk_objects::{
     Comm0PrivateInputs, GenericPoint, KesProof, PartialEncryptedKey, Proofs0, PublicProof0, PublicUpdateProof,
@@ -44,13 +44,13 @@ pub trait GreaseInitializer {
     fn generate_initial_proofs(
         &self,
         inputs: Comm0PrivateInputs,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> impl Future<Output = Result<Proofs0, DelegateError>> + Send;
 
     fn verify_initial_proofs(
         &self,
         proof: &PublicProof0,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
@@ -80,7 +80,7 @@ pub trait Updater {
         index: u64,
         delta: MoneroDelta,
         last_witness: &XmrScalar,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> impl Future<Output = Result<UpdateProofs, DelegateError>> + Send;
 
     fn verify_update(
@@ -88,7 +88,7 @@ pub trait Updater {
         index: u64,
         delta: MoneroDelta,
         proof: &PublicUpdateProof,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 
@@ -100,7 +100,7 @@ pub trait ChannelClosure {
         &self,
         witness_i: &XmrScalar,
         commitment: &GenericPoint,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> impl Future<Output = Result<(), DelegateError>> + Send;
 }
 //--------------------       Convenience all-inclusive delegate trait     ----------------------------------------------

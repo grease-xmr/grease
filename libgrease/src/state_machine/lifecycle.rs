@@ -1,15 +1,15 @@
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
-use crate::channel_metadata::ChannelMetadata;
+use crate::channel_metadata::StaticChannelMetadata;
 use crate::cryptography::dleq::Dleq;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{
     ClosedChannelState, ClosingChannelState, DisputingChannelState, EstablishedChannelState, EstablishingState,
-    NewChannelState,
 };
-use ciphersuite::Ed25519;
+use ciphersuite::{Ciphersuite, Ed25519};
+use grease_grumpkin::Grumpkin;
 use modular_frost::curve::Curve as FrostCurve;
 use monero::Network;
 use serde::{Deserialize, Serialize};
@@ -19,8 +19,6 @@ use thiserror::Error;
 /// A lightweight type indicating which phase of the lifecycle we're in. Generally used for reporting purposes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LifecycleStage {
-    /// The channel is being created.
-    New,
     /// The channel is being established.
     Establishing,
     /// The channel is open and ready to use.
@@ -36,7 +34,6 @@ pub enum LifecycleStage {
 impl Display for LifecycleStage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            LifecycleStage::New => write!(f, "New"),
             LifecycleStage::Establishing => write!(f, "Establishing"),
             LifecycleStage::Open => write!(f, "Open"),
             LifecycleStage::Closing => write!(f, "Closing"),
@@ -56,7 +53,7 @@ impl StateStorageError {
     }
 }
 
-pub trait LifeCycle {
+pub trait LifeCycle<KC: Ciphersuite = Ed25519> {
     fn name(&self) -> ChannelId {
         self.metadata().channel_id().name()
     }
@@ -65,9 +62,11 @@ pub trait LifeCycle {
         self.metadata().role()
     }
 
-    fn balance(&self) -> Balances {
-        self.metadata().balances()
-    }
+    /// Returns the current channel balance. Each state sources this differently:
+    /// - Proposing/Establishing: initial balance from channel ID
+    /// - Open/Closing/Disputing: dynamic balance from DynamicChannelMetadata
+    /// - Closed: stored final balance snapshot
+    fn balance(&self) -> Balances;
 
     fn my_balance(&self) -> MoneroAmount {
         let balance = self.balance();
@@ -80,71 +79,54 @@ pub trait LifeCycle {
     /// Get the current lifecycle stage of the channel.
     fn stage(&self) -> LifecycleStage;
 
-    fn metadata(&self) -> &ChannelMetadata;
+    fn metadata(&self) -> &StaticChannelMetadata<KC>;
 
     fn wallet_address(&self, network: Network) -> Option<String>;
 }
 
-#[macro_export]
-macro_rules! lifecycle_impl {
-    ($stage:ty, $stage_variant:ident) => {
-        impl LifeCycle for $stage {
-            fn stage(&self) -> LifecycleStage {
-                LifecycleStage::$stage_variant
-            }
-
-            fn metadata(&self) -> &ChannelMetadata {
-                &self.metadata
-            }
-
-            fn wallet_address(&self, network: Network) -> Option<String> {
-                self.multisig_address(network)
-            }
-        }
-    };
-}
-
+#[derive(Clone, Serialize, Deserialize)]
 /// The channel state enum representing all possible lifecycle states.
 ///
 /// The generic parameter `SF` specifies the SNARK-friendly curve used for DLEQ proofs and KES
-/// operations in the Establishing state. Use [`DefaultChannelState`] for the standard
-/// BabyJubJub curve.
-#[derive(Clone, Serialize, Deserialize)]
+/// operations for updating channel state.
+///
+/// `KC` refers to the curve employed by the KES.
 #[serde(bound = "")]
-pub enum ChannelState<SF = grease_babyjubjub::BabyJubJub>
+pub enum ChannelState<SF = Grumpkin, KC = Ed25519>
 where
     SF: FrostCurve,
-    Ed25519: Dleq<SF>,
+    KC: FrostCurve,
+    Ed25519: Dleq<SF> + Dleq<KC>,
 {
-    New(NewChannelState),
-    Establishing(EstablishingState<SF>),
-    Open(EstablishedChannelState),
-    Closing(ClosingChannelState),
-    Disputing(DisputingChannelState),
-    Closed(ClosedChannelState),
+    Establishing(EstablishingState<SF, KC>),
+    Open(EstablishedChannelState<SF, KC>),
+    Closing(ClosingChannelState<SF, KC>),
+    Disputing(DisputingChannelState<SF, KC>),
+    Closed(ClosedChannelState<SF, KC>),
 }
 
-/// Type alias for the default curve type (BabyJubJub).
-pub type DefaultChannelState = ChannelState<grease_babyjubjub::BabyJubJub>;
+/// Type alias for the default curve type (Grumpkin + Ed25519).
+pub type DefaultChannelState = ChannelState<Grumpkin, Ed25519>;
 
-impl<SF> Debug for ChannelState<SF>
+impl<SF, KC> Debug for ChannelState<SF, KC>
 where
     SF: FrostCurve,
-    Ed25519: Dleq<SF>,
+    KC: FrostCurve,
+    Ed25519: Dleq<SF> + Dleq<KC>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.stage())
     }
 }
 
-impl<SF> ChannelState<SF>
+impl<SF, KC> ChannelState<SF, KC>
 where
     SF: FrostCurve,
-    Ed25519: Dleq<SF>,
+    KC: FrostCurve,
+    Ed25519: Dleq<SF> + Dleq<KC>,
 {
-    pub fn as_lifecycle(&self) -> &dyn LifeCycle {
+    pub fn as_lifecycle(&self) -> &dyn LifeCycle<KC> {
         match self {
-            ChannelState::New(state) => state,
             ChannelState::Establishing(state) => state,
             ChannelState::Open(state) => state,
             ChannelState::Closing(state) => state,
@@ -154,36 +136,28 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_new(self) -> Result<NewChannelState, (Self, LifeCycleError)> {
-        match self {
-            ChannelState::New(state) => Ok(state),
-            _ => Err((self, LifeCycleError::invalid_state_for("Expected NewChannelState"))),
-        }
-    }
-
-    #[allow(clippy::result_large_err)]
-    pub fn to_establishing(self) -> Result<EstablishingState<SF>, (Self, LifeCycleError)> {
+    pub fn to_establishing(self) -> Result<EstablishingState<SF, KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Establishing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected EstablishingState"))),
         }
     }
 
-    pub fn as_establishing(&self) -> Result<&EstablishingState<SF>, LifeCycleError> {
+    pub fn as_establishing(&self) -> Result<&EstablishingState<SF, KC>, LifeCycleError> {
         match self {
             ChannelState::Establishing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected EstablishingState")),
         }
     }
 
-    pub fn as_open(&self) -> Result<&EstablishedChannelState, LifeCycleError> {
+    pub fn as_open(&self) -> Result<&EstablishedChannelState<SF, KC>, LifeCycleError> {
         match self {
             ChannelState::Open(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected EstablishedState")),
         }
     }
 
-    pub fn as_closing(&self) -> Result<&ClosingChannelState, LifeCycleError> {
+    pub fn as_closing(&self) -> Result<&ClosingChannelState<SF, KC>, LifeCycleError> {
         match self {
             ChannelState::Closing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected ClosingState")),
@@ -191,7 +165,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_open(self) -> Result<EstablishedChannelState, (Self, LifeCycleError)> {
+    pub fn to_open(self) -> Result<EstablishedChannelState<SF, KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Open(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected EstablishedChannelState"))),
@@ -199,14 +173,14 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_closing(self) -> Result<ClosingChannelState, (Self, LifeCycleError)> {
+    pub fn to_closing(self) -> Result<ClosingChannelState<SF, KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Closing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected ClosingChannelState"))),
         }
     }
 
-    pub fn as_disputing(&self) -> Result<&DisputingChannelState, LifeCycleError> {
+    pub fn as_disputing(&self) -> Result<&DisputingChannelState<SF, KC>, LifeCycleError> {
         match self {
             ChannelState::Disputing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected DisputingState")),
@@ -214,7 +188,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_disputing(self) -> Result<DisputingChannelState, (Self, LifeCycleError)> {
+    pub fn to_disputing(self) -> Result<DisputingChannelState<SF, KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Disputing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected DisputingChannelState"))),
@@ -222,7 +196,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_closed(self) -> Result<ClosedChannelState, (Self, LifeCycleError)> {
+    pub fn to_closed(self) -> Result<ClosedChannelState<SF, KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Closed(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected ClosedChannelState"))),
@@ -230,17 +204,22 @@ where
     }
 }
 
-impl<SF> LifeCycle for ChannelState<SF>
+impl<SF, KC> LifeCycle<KC> for ChannelState<SF, KC>
 where
     SF: FrostCurve,
-    Ed25519: Dleq<SF>,
+    KC: FrostCurve,
+    Ed25519: Dleq<SF> + Dleq<KC>,
 {
     fn stage(&self) -> LifecycleStage {
         self.as_lifecycle().stage()
     }
 
-    fn metadata(&self) -> &ChannelMetadata {
+    fn metadata(&self) -> &StaticChannelMetadata<KC> {
         self.as_lifecycle().metadata()
+    }
+
+    fn balance(&self) -> Balances {
+        self.as_lifecycle().balance()
     }
 
     fn wallet_address(&self, network: Network) -> Option<String> {
@@ -251,70 +230,29 @@ where
 #[cfg(test)]
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
-    use crate::balance::Balances;
-    use crate::channel_id::ChannelIdMetadata;
     use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-    use crate::cryptography::zk_objects::{KesProof, PrivateUpdateOutputs, PublicUpdateOutputs, UpdateProofs};
-    use crate::grease_protocol::establish_channel::EstablishProtocolCommon;
-    use crate::monero::data_objects::{ClosingAddresses, TransactionId, TransactionRecord};
+    use crate::cryptography::pok::KesPoK;
+    use crate::cryptography::pok::KesPoKProofs;
+    use crate::cryptography::ChannelWitness;
+    use crate::impls::tests::propose_protocol;
+    use crate::monero::data_objects::{TransactionId, TransactionRecord};
     use crate::multisig::MultisigWalletData;
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::establishing_channel::EstablishingState;
     use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
     use crate::state_machine::open_channel::{EstablishedChannelState, UpdateRecord};
-    use crate::state_machine::{ChannelCloseRecord, ChannelSeedBuilder, NewChannelProposal, NewChannelState};
+    use crate::state_machine::ChannelCloseRecord;
     use crate::XmrScalar;
-    use ciphersuite::Ed25519;
-    use ciphersuite::{group::Group, Ciphersuite};
-    use k256::elliptic_curve::Field;
+    use ciphersuite::group::ff::Field;
+    use ciphersuite::{Ciphersuite, Ed25519};
+    use grease_grumpkin::Grumpkin;
     use log::*;
-    use monero::Network;
 
-    const ALICE_ADDRESS: &str =
-        "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
-    const BOB_ADDRESS: &str =
-        "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
-
-    pub fn new_channel_state() -> NewChannelState {
-        use crate::cryptography::keys::PublicKey;
-
-        // All this info is known, or can be scanned in from a QR code etc
-        let kes_pubkey = "4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634";
-        let balances = Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("1.25").unwrap());
-        let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        // Generate channel keys and nonces for testing
-        let (_, merchant_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
-        let (_, customer_key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
-        let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Mainnet)
-            .with_kes_public_key("4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634")
-            .with_initial_balances(balances)
-            .with_channel_nonce(123)
-            .with_channel_key(merchant_key.clone())
-            .with_closing_address(closing.merchant)
-            .build()
-            .expect("to build initial state");
-
-        let channel_id: ChannelIdMetadata =
-            ChannelIdMetadata::new(merchant_key, customer_key, balances, closing, 123, 456);
-
-        let proposal = NewChannelProposal { network: seed.network, channel_id, seed };
-        let initial_state = NewChannelState::new(ChannelRole::Customer, proposal);
-        // Create a new channel state machine
-        assert_eq!(initial_state.stage(), LifecycleStage::New);
-        info!("New channel state machine created");
-        initial_state
-    }
-
-    pub fn accept_proposal(ic: NewChannelState) -> EstablishingState {
-        // Data gets sent to merchant. They respond with an ack and a proposal.
-        // Note that the role is role they want me to play.
-        let proposal = ic.for_proposal();
-        let Ok(establishing) = ic.next(proposal) else {
-            panic!("Failed to transition to Establishing state");
-        };
-        assert_eq!(establishing.stage(), LifecycleStage::Establishing);
-        establishing
+    /// Creates a new EstablishingState by running the full proposal protocol (customer side).
+    pub fn new_establishing_state() -> EstablishingState<Grumpkin> {
+        let (_merchant, customer) = propose_protocol::establish_channel();
+        customer
     }
 
     pub fn create_wallet(role: ChannelRole) -> MultisigWalletData {
@@ -333,16 +271,30 @@ pub mod test {
         }
     }
 
-    pub fn establish_channel(mut state: EstablishingState) -> EstablishedChannelState {
-        // Initialize protocol context for the establishment phase
-        state.init_protocol_context(&mut rand_core::OsRng);
-        // Initialize KES client with a test public key (using a placeholder for testing)
-        let kes_pubkey = grease_babyjubjub::BabyJubJub::generator();
-        state.initialize_kes_client(&mut rand_core::OsRng, kes_pubkey).expect("KES init should succeed");
+    pub fn establish_channel(mut state: EstablishingState<Grumpkin>) -> EstablishedChannelState<Grumpkin> {
+        let mut rng = rand_core::OsRng;
+
+        // Initialize protocol context (generates DLEQ proof, encrypted offset, stores witness)
+        state.generate_channel_secrets(&mut rng).expect("channel secret generation");
+
+        // Generate init package to populate adapted_sig (deferred from init_protocol_context)
+        let _pkg = state.generate_init_package(&mut rng).expect("generate init package");
 
         // The multisig wallet protocol is complete.
         let wallet = create_wallet(state.role());
         state.wallet_created(wallet);
+
+        // Set peer data (use own data as placeholders for requirements_met)
+        let own_dleq = state.dleq_proof.clone().unwrap();
+        state.set_peer_dleq_proof(own_dleq);
+        let own_sig = state.adapted_sig.clone().unwrap();
+        state.set_peer_adapted_signature(own_sig);
+        let own_chi = state.encrypted_offset.clone().unwrap();
+        state.set_peer_encrypted_offset(own_chi);
+        let own_payload_sig = state.payload_sig.clone().unwrap();
+        state.peer_payload_sig = Some(own_payload_sig);
+        state.peer_nonce_pubkey = Some(Ed25519::generator() * XmrScalar::random(&mut rng));
+        state.save_funding_tx_pipe(vec![1]);
 
         // The funding transaction has been created and broadcast.
         let tx = TransactionRecord {
@@ -354,7 +306,13 @@ pub mod test {
         state.funding_tx_confirmed(tx);
 
         // The KES details have been exchanged.
-        let kes_proof = KesProof { proof: "kes_0001".into() };
+        let mut rng = rand_core::OsRng;
+        let shard = XmrScalar::random(&mut rng);
+        let private_key = XmrScalar::random(&mut rng);
+        let kes_proof = KesPoKProofs {
+            customer_pok: KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key),
+            merchant_pok: KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key),
+        };
         state.kes_created(kes_proof);
 
         match state.next() {
@@ -373,29 +331,17 @@ pub mod test {
         }
     }
 
-    pub fn payment(state: &mut EstablishedChannelState, amount: &str) -> u64 {
+    pub fn payment(state: &mut EstablishedChannelState<Grumpkin>, amount: &str) -> u64 {
         let delta = MoneroDelta::from(MoneroAmount::from_xmr(amount).unwrap());
         let update_count = state.update_count() + 1;
-        let my_proofs = UpdateProofs {
-            public_outputs: PublicUpdateOutputs::default(),
-            private_outputs: PrivateUpdateOutputs {
-                update_count,
-                witness_i: Default::default(),
-                delta_bjj: Default::default(),
-                delta_ed: Default::default(),
-            },
-            proof: b"my_update_proof".to_vec(),
-        };
         let k = XmrScalar::random(&mut rand_core::OsRng);
         let q = XmrScalar::random(&mut rand_core::OsRng);
         let update_info = UpdateRecord {
-            my_signature: b"signature".to_vec(),
+            my_offset: ChannelWitness::random(),
             my_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &q, "", &mut rand_core::OsRng),
             peer_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &q, "", &mut rand_core::OsRng),
             my_preprocess: vec![],
             peer_preprocess: vec![],
-            my_proofs,
-            peer_proofs: Default::default(),
         };
         let updated_index = state.store_update(delta, update_info);
         assert_eq!(updated_index, update_count);
@@ -405,8 +351,7 @@ pub mod test {
     #[test]
     fn happy_path() {
         env_logger::try_init().ok();
-        let state = new_channel_state();
-        let state = accept_proposal(state);
+        let state = new_establishing_state();
         let mut state = establish_channel(state);
         // first payment
         let count = payment(&mut state, "0.1");
@@ -420,10 +365,10 @@ pub mod test {
         assert_eq!(state.update_count(), 3);
         assert_eq!(state.role(), ChannelRole::Customer);
         assert_eq!(state.my_balance(), MoneroAmount::from_xmr("0.65").unwrap());
-        let close = ChannelCloseRecord {
+        let close = ChannelCloseRecord::<Grumpkin> {
             final_balance: state.balance(),
             update_count: state.update_count(),
-            witness: Default::default(),
+            witness: ChannelWitness::random(),
         };
         let Ok(mut state) = state.close(close) else {
             panic!("Failed to transition to closing state");

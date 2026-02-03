@@ -6,6 +6,18 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use blake2::Blake2b512;
 use rand_core::{CryptoRng, RngCore};
 
+/// A struct to manage the key information for a multisig wallet.
+///
+/// This struct is designed to be used in the context of a payment channel, where each party has a role
+/// (customer or merchant) and needs to manage their own keys as well as information about the peer's keys.
+///
+/// Cloning, de- and serialization of this struct is relatively safe, since the secrets inherits the security properties of
+/// [`Curve25519Secret`].
+///
+/// # Panics
+///
+/// If a CryptoContext is not active, serialization and deserialization will panic.
+/// See [`crate::cryptography::context::CryptoContext`] for more details.
 #[derive(Debug, Clone)]
 pub struct MultisigWalletKeyRing {
     pub role: ChannelRole,

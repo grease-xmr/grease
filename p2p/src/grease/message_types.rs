@@ -8,7 +8,7 @@ use libgrease::monero::data_objects::{
     TransactionId,
 };
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
-use libgrease::state_machine::{ChannelCloseRecord, ChannelSeedInfo, NewChannelProposal};
+use libgrease::state_machine::{ChannelCloseRecord, MerchantSeedInfo, NewChannelProposal};
 use log::*;
 use monero::Network;
 use serde::{Deserialize, Serialize};
@@ -141,7 +141,7 @@ pub struct NewChannelMessage {
     /// Contains the information needed to uniquely identify the channel.
     pub id: ChannelIdMetadata,
     /// The seed info that the (usually) merchant provided initially.
-    pub seed: ChannelSeedInfo,
+    pub seed: MerchantSeedInfo,
     /// The libp2p contact info for the customer.
     pub contact_info_customer: ContactInfo,
     /// The libp2p contact info for the merchant.
@@ -152,7 +152,7 @@ impl NewChannelMessage {
     pub fn new(
         network: Network,
         id: ChannelIdMetadata,
-        seed: ChannelSeedInfo,
+        seed: MerchantSeedInfo,
         my_contact_info: ContactInfo,
         their_contact_info: ContactInfo,
     ) -> Self {
@@ -164,7 +164,14 @@ impl NewChannelMessage {
     }
 
     pub fn as_proposal(&self) -> NewChannelProposal {
-        NewChannelProposal { network: self.network, channel_id: self.id.clone(), seed: self.seed.clone() }
+        use ciphersuite::group::Group;
+        use ciphersuite::Ed25519;
+        NewChannelProposal {
+            channel_id: self.id.clone(),
+            // TODO: Store the customer's channel key in NewChannelMessage and use it here
+            customer_channel_key: <Ed25519 as ciphersuite::Ciphersuite>::G::generator(),
+            seed: self.seed.clone(),
+        }
     }
 }
 

@@ -1,11 +1,17 @@
+use crate::cryptography::keys::Curve25519Secret;
+use crate::error::ReadError;
+use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
 use crate::{XmrPoint, XmrScalar};
-use ciphersuite::group::ff::{Field, PrimeField};
+use ciphersuite::group::ff::{Field, PrimeField, PrimeFieldBits};
 use ciphersuite::group::Group;
-use ciphersuite::Ciphersuite;
+use ciphersuite::{Ciphersuite, Ed25519};
 use dalek_ff_group::EdwardsPoint;
+use dleq::cross_group::scalar::scalar_convert as dleq_scalar_convert;
+use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Formatter};
+use std::io::Write;
 use std::marker::PhantomData;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -39,24 +45,36 @@ pub enum WitnessError {
     InvalidScalar,
 }
 
-/// Try to convert a scalar from ciphersuite `From` to ciphersuite `To`.
+/// Try to convert a scalar between fields using serai's DLEQ-compatible conversion.
 ///
-/// Returns `Some(to_scalar)` if the byte representation is valid in `To`'s scalar field,
+/// This uses the same algorithm as the DLEQ proof library to ensure consistency.
+/// The conversion only succeeds if the scalar's value fits within the mutual capacity
+/// of both fields (i.e., no bits are set beyond `min(From::CAPACITY, To::CAPACITY)`).
+///
+/// Returns `Some(to_scalar)` if the scalar is mutually valid in both fields,
 /// `None` otherwise.
-pub fn convert_scalar<From: PrimeField, To: PrimeField>(scalar: &From) -> Option<To> {
-    let from_bytes = scalar.to_repr();
-    let mut to_repr = To::Repr::default();
-    let to_slice = to_repr.as_mut();
-    let from_slice = from_bytes.as_ref();
-    let copy_len = to_slice.len().min(from_slice.len());
-    to_slice[..copy_len].copy_from_slice(&from_slice[..copy_len]);
-    To::from_repr(to_repr).into_option()
+pub fn convert_scalar_dleq<From: PrimeFieldBits + Zeroize, To: PrimeFieldBits>(scalar: &From) -> Option<To> {
+    // Clone the scalar since dleq_scalar_convert takes ownership and zeroizes
+    let scalar_copy = *scalar;
+    dleq_scalar_convert::<From, To>(scalar_copy)
 }
 
 /// A channel witness is the adapter signature offset represented in a form that is valid in a ZK-SNARK context.
 ///
 /// Specifically, it is an Ed25519 scalar that is also guaranteed to be a valid scalar in the SNARK-friendly curve SF.
 /// This dual validity is required for cross-curve operations in the payment channel protocol.
+///
+/// ## De- and Serialization
+///
+/// The ChannelWitness serializes and deserializes via its Ed25519 scalar representation, which encrypts the
+/// value at rest. A
+///
+/// On deserialization, the scalar is validated to ensure it is also valid in the SNARK curve's scalar field.
+/// # Panics
+///
+/// Panics if called without an active crypto context. Use
+/// [`with_encryption_context`](crate::cryptography::encryption_context::with_encryption_context)
+/// to wrap serialization operations.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ChannelWitness<SF: Ciphersuite> {
     offset: Zeroizing<XmrScalar>,
@@ -71,24 +89,22 @@ impl<SF: Ciphersuite> Debug for ChannelWitness<SF> {
 
 impl<SF: Ciphersuite> Serialize for ChannelWitness<SF> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut bytes = self.offset.to_repr();
-        let result = crate::helpers::to_hex(bytes.as_ref(), serializer);
-        bytes.zeroize();
-        result
+        let secret = Curve25519Secret::from(*self.offset);
+        secret.serialize(serializer)
     }
 }
 
-impl<'de, SF: Ciphersuite> Deserialize<'de> for ChannelWitness<SF> {
+impl<'de, SF: Ciphersuite> Deserialize<'de> for ChannelWitness<SF>
+where
+    SF::F: PrimeFieldBits,
+{
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let bytes: [u8; 32] = crate::helpers::array_from_hex(deserializer)?;
-        let offset = XmrScalar::from_repr(bytes)
-            .into_option()
-            .ok_or_else(|| serde::de::Error::custom("Invalid Ed25519 scalar"))?;
-        // Validate that it's also valid in SF
-        if convert_scalar::<XmrScalar, SF::F>(&offset).is_none() {
+        let offset = Curve25519Secret::deserialize(deserializer)?;
+        // Validate that it's also valid in SF using DLEQ-compatible conversion
+        if convert_scalar_dleq::<XmrScalar, SF::F>(&offset.as_scalar()).is_none() {
             return Err(serde::de::Error::custom("Scalar is not valid in the SNARK curve"));
         }
-        Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
+        Ok(Self { offset: offset.to_scalar(), _snark_curve: PhantomData })
     }
 }
 
@@ -104,22 +120,28 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
 
     /// Try to create a ChannelWitness from a SNARK curve scalar.
     ///
-    /// This will fail if the scalar's byte representation is not a valid Ed25519 scalar.
-    pub fn try_from_snark_scalar(scalar: SF::F) -> Result<Self, WitnessError> {
-        let offset = convert_scalar::<SF::F, XmrScalar>(&scalar).ok_or(WitnessError::InvalidScalar)?;
+    /// This will fail if the scalar is not mutually valid in both Ed25519 and SF fields.
+    pub fn try_from_snark_scalar(scalar: SF::F) -> Result<Self, WitnessError>
+    where
+        SF::F: PrimeFieldBits,
+    {
+        let offset = convert_scalar_dleq::<SF::F, XmrScalar>(&scalar).ok_or(WitnessError::InvalidScalar)?;
         Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
     }
 
     /// Try to create a ChannelWitness from little-endian bytes.
     ///
     /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and SF.
-    pub fn try_from_le_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError> {
+    pub fn try_from_le_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError>
+    where
+        SF::F: PrimeFieldBits,
+    {
         let mut repr = <XmrScalar as PrimeField>::Repr::default();
         repr.as_mut().copy_from_slice(bytes);
         let offset = XmrScalar::from_repr(repr).into_option().ok_or(WitnessError::InvalidScalar)?;
 
-        // Also validate it's valid in SF
-        if convert_scalar::<XmrScalar, SF::F>(&offset).is_none() {
+        // Also validate it's mutually valid in SF using DLEQ-compatible conversion
+        if convert_scalar_dleq::<XmrScalar, SF::F>(&offset).is_none() {
             return Err(WitnessError::InvalidScalar);
         }
 
@@ -129,7 +151,10 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
     /// Try to create a ChannelWitness from big-endian bytes.
     ///
     /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and SF.
-    pub fn try_from_be_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError> {
+    pub fn try_from_be_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError>
+    where
+        SF::F: PrimeFieldBits,
+    {
         let mut bytes = *bytes;
         bytes.reverse();
         let result = Self::try_from_le_bytes(&bytes);
@@ -149,36 +174,29 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
 
     /// Create a new random ChannelWitness using the provided RNG.
     ///
-    /// The sampling strategy is optimized based on the relative field sizes:
-    /// - If SF's field is smaller (fewer bits), sample from SF (always valid in Ed25519)
-    /// - If Ed25519's field is smaller, sample from Ed25519 (always valid in SF)
-    /// - If equal bits, loop until we find a value valid in both (average ~2 iterations)
-    pub fn random_with_rng<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
-        use std::cmp::Ordering;
-
-        match <SF::F as PrimeField>::NUM_BITS.cmp(&<XmrScalar as PrimeField>::NUM_BITS) {
-            Ordering::Less => {
-                // SF's field is smaller - any SF scalar fits in Ed25519
-                let sf_scalar = SF::F::random(&mut *rng);
-                let offset = convert_scalar::<SF::F, XmrScalar>(&sf_scalar)
-                    .expect("SF scalar with fewer bits should always be valid in Ed25519");
-                Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData }
+    /// Uses rejection sampling to find a scalar that is mutually valid in both Ed25519 and SF
+    /// according to the DLEQ proof library's requirements. This ensures the generated witness
+    /// can be used with `generate_dleq` without failure.
+    pub fn random_with_rng<R: RngCore + CryptoRng>(rng: &mut R) -> Self
+    where
+        SF::F: PrimeFieldBits,
+    {
+        // Loop until we find a scalar that passes DLEQ-compatible conversion in both directions.
+        // For most curve pairs, this succeeds quickly since the mutual capacity is close to both fields.
+        const MAX_ITERS: usize = 256;
+        let mut iters = 0;
+        loop {
+            iters += 1;
+            let offset = XmrScalar::random(&mut *rng);
+            if convert_scalar_dleq::<XmrScalar, SF::F>(&offset).is_some() {
+                return Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData };
             }
-            Ordering::Greater => {
-                // Ed25519's field is smaller - any Ed25519 scalar fits in SF
-                let offset = XmrScalar::random(&mut *rng);
-                debug_assert!(convert_scalar::<XmrScalar, SF::F>(&offset).is_some());
-                Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData }
-            }
-            Ordering::Equal => {
-                // Same bit size - need to loop, but average ~2 iterations
-                loop {
-                    let sf_scalar = SF::F::random(&mut *rng);
-                    if let Some(offset) = convert_scalar::<SF::F, XmrScalar>(&sf_scalar) {
-                        debug_assert!(convert_scalar::<XmrScalar, SF::F>(&offset).is_some());
-                        return Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData };
-                    }
-                }
+            // If this fails it means that there is probably than an 8-bit difference in security between the curves.
+            if iters >= MAX_ITERS {
+                panic!(
+                    "Failed to generate a valid ChannelWitness after {MAX_ITERS} attempts. Are the two curves \
+                close enough in field order?"
+                );
             }
         }
     }
@@ -186,13 +204,19 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
     /// Get the offset scalar converted to curve SF's scalar field.
     ///
     /// This is guaranteed to succeed since the witness was constructed to be valid in both fields.
-    pub fn as_snark_scalar(&self) -> SF::F {
-        convert_scalar::<XmrScalar, SF::F>(&self.offset)
+    pub fn as_snark_scalar(&self) -> SF::F
+    where
+        SF::F: PrimeFieldBits,
+    {
+        convert_scalar_dleq::<XmrScalar, SF::F>(&self.offset)
             .expect("ChannelWitness invariant violated: offset should be valid in SF")
     }
 
     /// Get the public points corresponding to this witness.
-    pub fn public_points(&self) -> ChannelWitnessPublic<SF> {
+    pub fn public_points(&self) -> ChannelWitnessPublic<SF>
+    where
+        SF::F: PrimeFieldBits,
+    {
         let xmr_point = EdwardsPoint::generator() * &*self.offset;
         let snark_scalar = self.as_snark_scalar();
         let snark_point = SF::G::generator() * &snark_scalar;
@@ -200,7 +224,10 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
     }
 }
 
-impl<SF: Ciphersuite> Offset for ChannelWitness<SF> {
+impl<SF: Ciphersuite> Offset for ChannelWitness<SF>
+where
+    SF::F: PrimeFieldBits,
+{
     type Public = ChannelWitnessPublic<SF>;
 
     /// Get the offset scalar as an Ed25519 scalar.
@@ -213,14 +240,17 @@ impl<SF: Ciphersuite> Offset for ChannelWitness<SF> {
     }
 }
 
-impl<SF: Ciphersuite> TryFrom<XmrScalar> for ChannelWitness<SF> {
+impl<SF: Ciphersuite> TryFrom<XmrScalar> for ChannelWitness<SF>
+where
+    SF::F: PrimeFieldBits,
+{
     type Error = WitnessError;
 
     /// Try to create a ChannelWitness from an Ed25519 scalar.
     ///
-    /// This will fail if the scalar's byte representation is not a valid scalar in SF's field.
+    /// This will fail if the scalar is not mutually valid in both Ed25519 and SF fields.
     fn try_from(offset: XmrScalar) -> Result<Self, Self::Error> {
-        if convert_scalar::<XmrScalar, SF::F>(&offset).is_some() {
+        if convert_scalar_dleq::<XmrScalar, SF::F>(&offset).is_some() {
             Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
         } else {
             Err(WitnessError::InvalidScalar)
@@ -244,6 +274,13 @@ pub struct ChannelWitnessPublic<SF: Ciphersuite> {
 }
 
 impl<SF: Ciphersuite> ChannelWitnessPublic<SF> {
+    /// Create a new `ChannelWitnessPublic` from the given points.
+    ///
+    /// Note: This does not verify that the points are equivalent - that requires a DLEQ proof.
+    pub fn new(xmr_point: XmrPoint, snark_point: SF::G) -> Self {
+        Self { xmr_point, snark_point }
+    }
+
     /// Get the SNARK curve point.
     pub fn snark_point(&self) -> &SF::G {
         &self.snark_point
@@ -256,11 +293,35 @@ impl<SF: Ciphersuite> AsXmrPoint for ChannelWitnessPublic<SF> {
     }
 }
 
+impl<SF: Ciphersuite> Writable for ChannelWitnessPublic<SF> {
+    fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        write_group_element::<Ed25519, W>(writer, &self.xmr_point)?;
+        write_group_element::<SF, W>(writer, &self.snark_point)?;
+        Ok(())
+    }
+}
+
+impl<SF: Ciphersuite> Readable for ChannelWitnessPublic<SF> {
+    fn read<R: std::io::Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let xmr_point = read_group_element::<Ed25519, R>(reader)
+            .map_err(|e| ReadError::new("ChannelWitnessPublic", format!("Failed to read XMR point: {e}")))?;
+        let snark_point = read_group_element::<SF, R>(reader)
+            .map_err(|e| ReadError::new("ChannelWitnessPublic", format!("Failed to read SNARK point: {e}")))?;
+        Ok(Self::new(xmr_point, snark_point))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cryptography::encryption_context::{with_encryption_context, AesGcmEncryption, EncryptionContext};
     use ciphersuite::{Ed25519, Secp256k1};
     use grease_babyjubjub::{BabyJubJub, Scalar as BjjScalar};
+    use std::sync::Arc;
+
+    fn test_encryption_context() -> Arc<dyn EncryptionContext> {
+        Arc::new(AesGcmEncryption::random())
+    }
 
     #[test]
     fn random_witness_ed25519_is_valid() {
@@ -285,13 +346,13 @@ mod tests {
         for _ in 0..100 {
             let witness = ChannelWitness::<BabyJubJub>::random();
             let offset = witness.offset();
+            // Should be able to get as SNARK scalar
+            let snark_scalar = witness.as_snark_scalar();
 
             // Should be able to convert back
             let witness2 = ChannelWitness::<BabyJubJub>::try_from(*offset).expect("Should be valid");
             assert_eq!(witness.offset(), witness2.offset());
-
-            // Should be able to get as SNARK scalar
-            let _snark_scalar = witness.as_snark_scalar();
+            assert_eq!(snark_scalar, witness.as_snark_scalar());
         }
     }
 
@@ -367,10 +428,12 @@ mod tests {
 
     #[test]
     fn witness_serialization_roundtrip() {
+        let ctx = test_encryption_context();
         let witness = ChannelWitness::<BabyJubJub>::random();
-        let serialized = ron::to_string(&witness).expect("Serialization should succeed");
+        let serialized =
+            with_encryption_context(ctx.clone(), || ron::to_string(&witness).expect("Serialization should succeed"));
         let deserialized: ChannelWitness<BabyJubJub> =
-            ron::from_str(&serialized).expect("Deserialization should succeed");
+            with_encryption_context(ctx, || ron::from_str(&serialized).expect("Deserialization should succeed"));
         assert_eq!(witness.offset(), deserialized.offset());
     }
 
@@ -496,51 +559,25 @@ mod tests {
     }
 
     #[test]
-    fn convert_scalar_consistency() {
-        // Test that convert_scalar is consistent
-        for _ in 0..100 {
-            let witness = ChannelWitness::<BabyJubJub>::random();
-            let offset = witness.offset();
-
-            // Ed25519 -> BabyJubJub should succeed
-            let c_scalar = convert_scalar::<XmrScalar, BjjScalar>(offset);
-            assert!(c_scalar.is_some(), "Conversion should succeed for valid witness");
-
-            // BabyJubJub -> Ed25519 should round-trip
-            let c = c_scalar.unwrap();
-            let back = convert_scalar::<BjjScalar, XmrScalar>(&c);
-            assert!(back.is_some(), "Roundtrip should succeed");
-            assert_eq!(back.unwrap(), *offset, "Roundtrip should preserve value");
-        }
-    }
-
-    #[test]
-    fn convert_scalar_ed25519_identity() {
-        // Ed25519 -> Ed25519 should always work
-        for _ in 0..100 {
-            let scalar = XmrScalar::random(&mut OsRng);
-            let converted = convert_scalar::<XmrScalar, XmrScalar>(&scalar);
-            assert!(converted.is_some());
-            assert_eq!(converted.unwrap(), scalar);
-        }
-    }
-
-    #[test]
     fn serialization_preserves_validity() {
+        let ctx = test_encryption_context();
         // Test that serialization and deserialization preserve the validity invariant
         for _ in 0..10 {
             let witness = ChannelWitness::<BabyJubJub>::random();
 
             // Serialize and deserialize with RON
-            let ron_str = ron::to_string(&witness).expect("RON serialization should succeed");
-            let from_ron: ChannelWitness<BabyJubJub> =
-                ron::from_str(&ron_str).expect("RON deserialization should succeed");
+            let ron_str = with_encryption_context(ctx.clone(), || {
+                ron::to_string(&witness).expect("RON serialization should succeed")
+            });
+            let from_ron: ChannelWitness<BabyJubJub> = with_encryption_context(ctx.clone(), || {
+                ron::from_str(&ron_str).expect("RON deserialization should succeed")
+            });
 
             // Verify it matches
             assert_eq!(witness.offset(), from_ron.offset());
 
             // Verify it's still valid in C
-            assert!(convert_scalar::<XmrScalar, BjjScalar>(from_ron.offset()).is_some());
+            assert!(convert_scalar_dleq::<XmrScalar, BjjScalar>(from_ron.offset()).is_some());
         }
     }
 

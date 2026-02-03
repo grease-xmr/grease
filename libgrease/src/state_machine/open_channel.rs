@@ -8,102 +8,99 @@
 //!
 
 use crate::amount::{MoneroAmount, MoneroDelta};
-use crate::channel_metadata::ChannelMetadata;
+use crate::balance::Balances;
+use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::zk_objects::{GenericPoint, KesProof, PublicUpdateProof, UpdateProofs};
-use crate::lifecycle_impl;
+use crate::cryptography::dleq::Dleq;
+use crate::cryptography::ChannelWitness;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::multisig::MultisigWalletData;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::ChannelClosedReason;
-use crate::XmrScalar;
-use ciphersuite::Ed25519;
+use ciphersuite::{Ciphersuite, Ed25519};
 use log::*;
+use modular_frost::curve::Curve as FrostCurve;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use zeroize::Zeroizing;
 
 /// Container struct carrying all the information needed to record a payment channel update.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct UpdateRecord {
+#[serde(bound = "")]
+pub struct UpdateRecord<SF: Ciphersuite = grease_grumpkin::Grumpkin> {
     // My half of the spend authority for this transaction.
-    pub my_signature: Vec<u8>,
+    pub my_offset: ChannelWitness<SF>,
     pub my_adapted_signature: AdaptedSignature<Ed25519>,
     pub peer_adapted_signature: AdaptedSignature<Ed25519>,
     // Data needed to reconstruct the Monero transaction for this update.
     pub my_preprocess: Vec<u8>,
     pub peer_preprocess: Vec<u8>,
-    // ZK proof data for this update.
-    pub my_proofs: UpdateProofs,
-    pub peer_proofs: PublicUpdateProof,
 }
 
-impl Debug for UpdateRecord {
+impl<SF: Ciphersuite> Debug for UpdateRecord<SF> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "UpdateRecord(...)")
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct EstablishedChannelState {
-    pub(crate) metadata: ChannelMetadata,
+#[serde(bound = "")]
+pub struct EstablishedChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphersuite = Ed25519> {
+    pub(crate) metadata: StaticChannelMetadata<KC>,
+    pub(crate) dynamic: DynamicChannelMetadata,
     /// Information needed to reconstruct the multisig wallet.
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) kes_proof: KesProof,
-    pub(crate) current_update: Option<UpdateRecord>,
+    pub(crate) current_update: Option<UpdateRecord<SF>>,
 }
 
-impl Debug for EstablishedChannelState {
+impl<SF: Ciphersuite, KC: Ciphersuite> Debug for EstablishedChannelState<SF, KC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "EstablishedChannelState({} updates, role: {}, channel_id: {})",
-            self.metadata.update_count(),
+            self.dynamic.update_count,
             self.metadata.role(),
             self.metadata.channel_id().name(),
         )
     }
 }
 
-impl EstablishedChannelState {
-    pub fn to_channel_state(self) -> ChannelState {
+impl<SF: FrostCurve, KC: Ciphersuite> EstablishedChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
+    pub fn to_channel_state(self) -> ChannelState<SF, KC>
+    where
+        KC: FrostCurve,
+        Ed25519: Dleq<KC>,
+    {
         ChannelState::Open(self)
     }
 
     pub fn update_count(&self) -> u64 {
-        self.metadata.update_count()
+        self.dynamic.update_count
     }
 
     /// Returns the current witness for the channel.
     ///
     /// # Panics
-    /// Panics if no updates have been made. Use `current_update` to check first.
-    pub fn current_witness(&self) -> &XmrScalar {
-        self.current_update
-            .as_ref()
-            .map(|update| &update.my_proofs.private_outputs.witness_i)
-            .expect("No updates have been made yet")
+    /// Panics if no updates have been made yet. Use `has_updates()` to check first.
+    pub fn current_witness(&self) -> &ChannelWitness<SF> {
+        &self.current_update.as_ref().expect("No updates have been made yet").my_offset
+    }
+
+    /// Returns true if any updates have been made to this channel.
+    pub fn has_updates(&self) -> bool {
+        self.current_update.is_some()
     }
 
     pub fn multisig_address(&self, network: Network) -> Option<String> {
         let addr = self.multisig_wallet.address(network).to_string();
         Some(addr)
-    }
-
-    /// Returns the current peer commitment.
-    ///
-    /// # Panics
-    /// Panics if no updates have been made. Use `current_update` to check first.
-    pub fn current_peer_commitment(&self) -> GenericPoint {
-        self.current_update
-            .as_ref()
-            .map(|update| update.peer_proofs.public_outputs.T_current)
-            .expect("No updates have been made yet")
     }
 
     /// Returns the keys to be able to reconstruct the multisig wallet.
@@ -119,7 +116,7 @@ impl EstablishedChannelState {
     /// Returns a vector of payments to be made to the merchant and customer using the current channel state.
     /// NOTE: This does NOT take fees into account.
     pub fn get_payments_after_spending(&self, delta: MoneroDelta) -> Option<[(Address, MoneroAmount); 2]> {
-        let new_balance = self.balance().apply_delta(delta)?;
+        let new_balance = self.dynamic.current_balances.apply_delta(delta)?;
         let merchant_address = self.metadata.channel_id().closing_addresses().merchant;
         let customer_address = self.metadata.channel_id().closing_addresses().customer;
         Some([(merchant_address, new_balance.merchant), (customer_address, new_balance.customer)])
@@ -128,35 +125,26 @@ impl EstablishedChannelState {
     /// Return the record to send to the peer to co-operatively close the channel.
     /// Note that this record contains the secret that will allow the peer to publish closing transaction to the
     /// blockchain.
-    pub fn get_close_record(&self) -> ChannelCloseRecord {
+    pub fn get_close_record(&self) -> ChannelCloseRecord<SF> {
         ChannelCloseRecord {
-            final_balance: self.metadata.balances(),
-            update_count: self.metadata.update_count(),
-            witness: Zeroizing::new(*self.current_witness()),
+            final_balance: self.dynamic.current_balances,
+            update_count: self.dynamic.update_count,
+            witness: self.current_witness().clone(),
         }
     }
 
-    pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord) -> u64 {
-        self.metadata.apply_delta(delta);
+    pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord<SF>) -> u64 {
+        self.dynamic.apply_delta(delta);
         self.current_update = Some(update);
         self.update_count()
     }
 
-    fn finalize_with_no_updates(&mut self) {
-        // If the proofs are already set, we can skip this step.
-        if self.current_update.is_some() {
-            return;
-        }
-        // If no updates have been made, we set the current outputs to the initial outputs.
-        // Essentially, only witness_0 is important here, and maybe T_0. which is witness_0.G.
-        // The proofs are only needed in a dispute, but when update count is 0, there's no future state to prove in a
-        // dispute anyway.
-        todo!("Finalize the channel if no updates have been made");
-    }
-
     #[allow(clippy::result_large_err)]
-    pub fn close(mut self, close_record: ChannelCloseRecord) -> Result<ClosingChannelState, (Self, LifeCycleError)> {
-        let final_balance = self.metadata.balances();
+    pub fn close(
+        self,
+        close_record: ChannelCloseRecord<SF>,
+    ) -> Result<ClosingChannelState<SF, KC>, (Self, LifeCycleError)> {
+        let final_balance = self.dynamic.current_balances;
         if final_balance != close_record.final_balance {
             return Err((self, LifeCycleError::mismatch("closing balances")));
         }
@@ -170,17 +158,23 @@ impl EstablishedChannelState {
             final_balance.merchant,
             final_balance.customer
         );
-        if self.update_count() == 0 {
-            Self::finalize_with_no_updates(&mut self);
-        }
+        let last_update = match self.current_update {
+            Some(update) => update,
+            None => {
+                return Err((
+                    self,
+                    LifeCycleError::InvalidState("Cannot close channel without any updates".to_string()),
+                ))
+            }
+        };
         let closing_state = ClosingChannelState {
             peer_witness: close_record.witness,
             metadata: self.metadata.clone(),
+            dynamic: self.dynamic,
             reason: ChannelClosedReason::Normal,
             multisig_wallet: self.multisig_wallet,
             funding_transactions: self.funding_transactions,
-            kes_proof: self.kes_proof,
-            last_update: self.current_update.unwrap(),
+            last_update,
             final_tx: None,
         };
         Ok(closing_state)
@@ -188,11 +182,34 @@ impl EstablishedChannelState {
 }
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
-lifecycle_impl!(EstablishedChannelState, Open);
+
+impl<SF: FrostCurve, KC: Ciphersuite> LifeCycle<KC> for EstablishedChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
+    fn stage(&self) -> LifecycleStage {
+        LifecycleStage::Open
+    }
+
+    fn metadata(&self) -> &StaticChannelMetadata<KC> {
+        &self.metadata
+    }
+
+    fn balance(&self) -> Balances {
+        self.dynamic.current_balances
+    }
+
+    fn wallet_address(&self, network: Network) -> Option<String> {
+        self.multisig_address(network)
+    }
+}
 
 // --- Protocol Trait Implementations ---
 
-impl HasRole for EstablishedChannelState {
+impl<SF: FrostCurve, KC: Ciphersuite> HasRole for EstablishedChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }

@@ -7,15 +7,14 @@ use crate::delegates::traits::{
 };
 use crate::grease::NewChannelMessage;
 use libgrease::amount::MoneroDelta;
-use libgrease::channel_metadata::ChannelMetadata;
+use libgrease::channel_metadata::StaticChannelMetadata;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::cryptography::zk_objects::{
-    Comm0PrivateInputs, Comm0PrivateOutputs, GenericPoint, GenericScalar, KesProof, PartialEncryptedKey,
-    PrivateUpdateOutputs, Proofs0, PublicProof0, PublicUpdateOutputs, PublicUpdateProof, UpdateProofs,
+    Comm0PrivateInputs, GenericPoint, KesProof, PartialEncryptedKey, Proofs0, PublicProof0, PublicUpdateProof,
+    UpdateProofs,
 };
 use libgrease::monero::data_objects::MultisigSplitSecrets;
 use libgrease::state_machine::error::InvalidProposal;
-use libgrease::Field;
 use libgrease::XmrScalar;
 use log::*;
 
@@ -47,24 +46,16 @@ impl GreaseInitializer for DummyDelegate {
     async fn generate_initial_proofs(
         &self,
         _in: Comm0PrivateInputs,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> Result<Proofs0, DelegateError> {
         info!("DummyDelegate: Generating initial proofs for {}", metadata.channel_id().name());
-        Ok(Proofs0 {
-            public_outputs: Default::default(),
-            private_outputs: Comm0PrivateOutputs {
-                witness_0: XmrScalar::random(&mut rand_core::OsRng),
-                delta_bjj: Default::default(),
-                delta_ed: Default::default(),
-            },
-            proofs: vec![],
-        })
+        Ok(Proofs0 { public_outputs: 0, private_outputs: 0, proofs: vec![] })
     }
 
     async fn verify_initial_proofs(
         &self,
         _proof: &PublicProof0,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("DummyDelegate: Verifying initial proofs for {}", metadata.channel_id().name());
         Ok(())
@@ -126,30 +117,11 @@ impl Updater for DummyDelegate {
         index: u64,
         delta: MoneroDelta,
         _witness: &XmrScalar,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> Result<UpdateProofs, DelegateError> {
         info!("DummyDelegate: Generating update {index} proof for channel.  {}", delta.amount);
-        let mut rng = rand_core::OsRng;
-        // The witnesses need to be valid scalars
-        let witness_i = XmrScalar::random(&mut rng);
-        let public_outputs = PublicUpdateOutputs {
-            T_prev: GenericPoint::random(&mut rng),
-            T_current: GenericPoint::random(&mut rng),
-            S_current: GenericPoint::random(&mut rng),
-            challenge: GenericScalar::random(&mut rng),
-            rho_bjj: GenericScalar::random(&mut rng),
-            rho_ed: GenericScalar::random(&mut rng),
-            R_bjj: GenericPoint::random(&mut rng),
-            R_ed: GenericPoint::random(&mut rng),
-        };
-        let private_outputs = PrivateUpdateOutputs {
-            update_count: index,
-            witness_i,
-            delta_bjj: GenericScalar::random(&mut rng),
-            delta_ed: GenericScalar::random(&mut rng),
-        };
         let proof = format!("UpdateProof|{}|{index}|{}", metadata.channel_id().name(), delta.amount).into_bytes();
-        Ok(UpdateProofs { private_outputs, public_outputs, proof })
+        Ok(UpdateProofs { public_outputs: index, private_outputs: index, proof })
     }
 
     async fn verify_update(
@@ -157,7 +129,7 @@ impl Updater for DummyDelegate {
         index: u64,
         delta: MoneroDelta,
         proof: &PublicUpdateProof,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!("Verifying update {index} proof for {} picoXMR", delta.amount);
         let expected = format!("UpdateProof|{}|{index}|{}", metadata.channel_id().name(), delta.amount);
@@ -178,7 +150,7 @@ impl ChannelClosure for DummyDelegate {
         &self,
         _w: &XmrScalar,
         _c: &GenericPoint,
-        metadata: &ChannelMetadata,
+        metadata: &StaticChannelMetadata,
     ) -> Result<(), DelegateError> {
         info!(
             "DummyDelegate: Verifying peer witness for channel {} is correct.",

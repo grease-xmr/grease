@@ -34,10 +34,18 @@ pub enum InvalidProposal {
     MismatchedMerchantPublicKey,
     #[error("The customer's public key in the proposal does not match the one that was expected")]
     MismatchedCustomerPublicKey,
-    #[error("The KES's public key in the proposal does not match the one that was expected")]
-    MismatchedKesPublicKey,
+    #[error("The KES configuration in the proposal does not match the one that was expected")]
+    MismatchedKesConfig,
     #[error("The channel ID in the proposal does not match the one that was expected")]
     MismatchedChannelId,
+    #[error("The network in the proposal does not match the one that was expected")]
+    MismatchedNetwork,
+    #[error("The seed information in the proposal does not match what was expected")]
+    SeedMismatch,
+    #[error("The closing address in the proposal does not match the one that was expected")]
+    MismatchedAddress,
+    #[error("The channel nonce in the proposal does not match the one that was expected")]
+    MismatchedNonce,
 }
 
 impl LifeCycleError {

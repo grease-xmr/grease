@@ -51,54 +51,56 @@ impl StateStore for FileStore {
 mod test {
     use super::*;
     use crate::amount::MoneroAmount;
+    use crate::cryptography::encryption_context::{with_encryption_context, AesGcmEncryption};
+    use crate::cryptography::ChannelWitness;
     use crate::monero::data_objects::TransactionId;
     use crate::state_machine::error::LifeCycleError;
     use crate::state_machine::lifecycle::test::*;
     use crate::state_machine::{ChannelCloseRecord, ChannelClosedReason};
+    use std::sync::Arc;
 
     /// Saves and loads the state after every transition. We should be able to carry on as if nothing happened.
     #[test]
     fn test_file_store() {
-        fn inner() -> Result<(), (ChannelState, LifeCycleError)> {
-            let path = PathBuf::from("./test_data");
-            let mut store = FileStore::new(path).expect("directory to exist");
-            let state = new_channel_state().to_channel_state();
-            let name = state.name();
-            store.write_channel(&state).expect("Failed to write channel");
-            let _loaded = store.load_channel(&name).expect("Failed to load New channel");
-            let new = state.to_new()?;
-            let establishing = accept_proposal(new).to_channel_state();
-            store.write_channel(&establishing).expect("Failed to write channel");
-            let state = store.load_channel(&name).expect("Failed to load Establishing channel");
-            let establishing = state.to_establishing()?;
-            let open = establish_channel(establishing).to_channel_state();
-            store.write_channel(&open).expect("Failed to write channel");
-            let loaded = store.load_channel(&name).expect("Failed to load Open channel");
-            let mut open = loaded.to_open()?;
-            payment(&mut open, "0.1");
-            let state = open.to_channel_state();
-            store.write_channel(&state).expect("Failed to write channel");
-            let state = store.load_channel(&name).expect("Failed to load Open channel").to_open()?;
-            assert_eq!(state.update_count(), 1);
-            assert_eq!(state.my_balance(), MoneroAmount::from_xmr("1.15").unwrap());
-            let close = ChannelCloseRecord {
-                final_balance: state.balance(),
-                update_count: state.update_count(),
-                witness: Default::default(),
-            };
-            let state = state.close(close).unwrap().to_channel_state();
-            store.write_channel(&state).expect("Failed to write channel");
-            let loaded = store.load_channel(&name).expect("Failed to load Closing channel");
-            let mut state = loaded.to_closing()?;
-            assert_eq!(state.reason, ChannelClosedReason::Normal);
-            state.with_final_tx(TransactionId::new("finaltx1"));
-            let state = state.next().expect("Failed to close channel").to_channel_state();
-            store.write_channel(&state).expect("Failed to write channel");
-            let loaded = store.load_channel(&name).expect("Failed to load Open channel");
-            let state = loaded.to_closed()?;
-            assert_eq!(state.balance().customer, MoneroAmount::from_xmr("1.15").unwrap());
-            Ok(())
-        }
-        let _ = inner().map_err(|(_s, e)| panic!("{}", e));
+        let ctx = Arc::new(AesGcmEncryption::random());
+        with_encryption_context(ctx, || {
+            fn inner() -> Result<(), (ChannelState, LifeCycleError)> {
+                let path = PathBuf::from("./test_data");
+                let mut store = FileStore::new(path).expect("directory to exist");
+                let establishing = new_establishing_state().to_channel_state();
+                let name = establishing.name();
+                store.write_channel(&establishing).expect("Failed to write channel");
+                let state = store.load_channel(&name).expect("Failed to load Establishing channel");
+                let establishing = state.to_establishing()?;
+                let open = establish_channel(establishing).to_channel_state();
+                store.write_channel(&open).expect("Failed to write channel");
+                let loaded = store.load_channel(&name).expect("Failed to load Open channel");
+                let mut open = loaded.to_open()?;
+                payment(&mut open, "0.1");
+                let state = open.to_channel_state();
+                store.write_channel(&state).expect("Failed to write channel");
+                let state = store.load_channel(&name).expect("Failed to load Open channel").to_open()?;
+                assert_eq!(state.update_count(), 1);
+                assert_eq!(state.my_balance(), MoneroAmount::from_xmr("1.15").unwrap());
+                let close = ChannelCloseRecord::<grease_grumpkin::Grumpkin> {
+                    final_balance: state.balance(),
+                    update_count: state.update_count(),
+                    witness: ChannelWitness::random(),
+                };
+                let state = state.close(close).unwrap().to_channel_state();
+                store.write_channel(&state).expect("Failed to write channel");
+                let loaded = store.load_channel(&name).expect("Failed to load Closing channel");
+                let mut state = loaded.to_closing()?;
+                assert_eq!(state.reason, ChannelClosedReason::Normal);
+                state.with_final_tx(TransactionId::new("finaltx1"));
+                let state = state.next().expect("Failed to close channel").to_channel_state();
+                store.write_channel(&state).expect("Failed to write channel");
+                let loaded = store.load_channel(&name).expect("Failed to load Open channel");
+                let state = loaded.to_closed()?;
+                assert_eq!(state.balance().customer, MoneroAmount::from_xmr("1.15").unwrap());
+                Ok(())
+            }
+            let _ = inner().map_err(|(_s, e)| panic!("{}", e));
+        });
     }
 }

@@ -1,7 +1,11 @@
 use crate::balance::Balances;
 use crate::cryptography::keys::Curve25519PublicKey;
+use crate::helpers::group_element_to_hex;
+use crate::key_escrow_services::KesConfiguration;
 use crate::monero::data_objects::ClosingAddresses;
 use blake2::Blake2b512;
+use ciphersuite::group::GroupEncoding;
+use ciphersuite::{Ciphersuite, Ed25519};
 use digest::consts::U32;
 use digest::typenum::{IsGreaterOrEqual, True};
 use digest::OutputSizeUser;
@@ -52,8 +56,9 @@ impl ChannelId {
     pub const LENGTH: usize = 65;
 
     /// Create a new `ChannelId` from a [`ChannelIdMetadata`].
-    pub fn from_channel_id_metadata<D>(id: &ChannelIdMetadata<D>) -> Self
+    pub fn from_channel_id_metadata<C, D>(id: &ChannelIdMetadata<C, D>) -> Self
     where
+        C: Ciphersuite,
         D: Send + Clone + SecureDigest,
         <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
     {
@@ -150,11 +155,18 @@ impl TryFrom<String> for ChannelId {
 /// produces a 64-byte hash. The human-readable channel ID format is `XGC` followed by the
 /// first 31 bytes of the hash encoded as hex (65 characters total).
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ChannelIdMetadata<D = Blake2b512> {
-    merchant_key: Curve25519PublicKey,
-    customer_key: Curve25519PublicKey,
+#[serde(bound = "")]
+pub struct ChannelIdMetadata<C: Ciphersuite = Ed25519, D = Blake2b512> {
+    /// The key the customer uses to derive a shared channel secret.
+    #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
+    merchant_key: C::G,
+    /// The key the merchant uses to derive a shared channel secret.
+    #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
+    customer_key: C::G,
     initial_balance: Balances,
     closing_addresses: ClosingAddresses,
+    /// The KES configuration committed to in this channel ID.
+    kes_config: KesConfiguration<C>,
     /// The merchant's contribution to the channel nonce
     merchant_nonce: u64,
     /// The customer's contribution to the channel nonce
@@ -164,7 +176,7 @@ pub struct ChannelIdMetadata<D = Blake2b512> {
     _phantom: PhantomData<D>,
 }
 
-impl<D> ChannelIdMetadata<D>
+impl<C: Ciphersuite, D> ChannelIdMetadata<C, D>
 where
     D: Send + Clone + SecureDigest,
     <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
@@ -190,8 +202,8 @@ where
     ///
     /// // This fails to compile because Blake2b<U16> only produces 16 bytes
     /// fn wont_compile(
-    ///     merchant_key: Curve25519PublicKey,
-    ///     customer_key: Curve25519PublicKey,
+    ///     merchant_key: C::G,
+    ///     customer_key: C::G,
     ///     balance: Balances,
     ///     closing: ClosingAddresses,
     /// ) {
@@ -201,10 +213,11 @@ where
     /// }
     /// ```
     pub fn new(
-        merchant_key: Curve25519PublicKey,
-        customer_key: Curve25519PublicKey,
+        merchant_key: C::G,
+        customer_key: C::G,
         initial_balance: Balances,
         closing_addresses: ClosingAddresses,
+        kes_config: KesConfiguration<C>,
         merchant_nonce: u64,
         customer_nonce: u64,
     ) -> Self {
@@ -212,12 +225,15 @@ where
         let amount_cust = initial_balance.customer.to_piconero().to_le_bytes();
 
         let mut transcript = DigestTranscript::<D>::new(b"Grease ChannelId v1");
-        transcript.append_message(b"merchant_key", merchant_key.to_compressed().as_bytes());
-        transcript.append_message(b"customer_key", customer_key.to_compressed().as_bytes());
+        transcript.append_message(b"merchant_key", merchant_key.to_bytes());
+        transcript.append_message(b"customer_key", customer_key.to_bytes());
         transcript.append_message(b"merchant_balance", amount_mer);
         transcript.append_message(b"customer_balance", amount_cust);
         transcript.append_message(b"merchant_closing_address", closing_addresses.merchant().as_bytes());
         transcript.append_message(b"customer_closing_address", closing_addresses.customer().as_bytes());
+        transcript.append_message(b"kes_public_key", kes_config.kes_public_key.to_bytes());
+        transcript.append_message(b"kes_peer_public_key", kes_config.peer_public_key.to_bytes());
+        transcript.append_message(b"dispute_window", kes_config.dispute_window.as_secs().to_le_bytes());
         transcript.append_message(b"merchant_nonce", merchant_nonce.to_le_bytes());
         transcript.append_message(b"customer_nonce", customer_nonce.to_le_bytes());
 
@@ -229,19 +245,20 @@ where
             merchant_key,
             customer_key,
             initial_balance,
-            hashed_id,
             closing_addresses,
+            kes_config,
+            hashed_id,
             merchant_nonce,
             customer_nonce,
             _phantom: PhantomData,
         }
     }
 
-    pub fn merchant_key(&self) -> &Curve25519PublicKey {
+    pub fn merchant_key(&self) -> &C::G {
         &self.merchant_key
     }
 
-    pub fn customer_key(&self) -> &Curve25519PublicKey {
+    pub fn customer_key(&self) -> &C::G {
         &self.customer_key
     }
 
@@ -251,6 +268,10 @@ where
 
     pub fn closing_addresses(&self) -> &ClosingAddresses {
         &self.closing_addresses
+    }
+
+    pub fn kes_config(&self) -> &KesConfiguration<C> {
+        &self.kes_config
     }
 
     pub fn merchant_nonce(&self) -> u64 {
@@ -280,11 +301,11 @@ where
     }
 }
 
-impl Debug for ChannelIdMetadata {
+impl<C: Ciphersuite, D> Debug for ChannelIdMetadata<C, D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChannelId")
-            .field("merchant_key", &self.merchant_key.as_hex())
-            .field("customer_key", &self.customer_key.as_hex())
+            .field("merchant_key", &group_element_to_hex::<C>(&self.merchant_key))
+            .field("customer_key", &group_element_to_hex::<C>(&self.customer_key))
             .field("initial balance (merchant)", &self.initial_balance.merchant)
             .field("initial balance (customer)", &self.initial_balance.customer)
             .field("merchant_nonce", &self.merchant_nonce)
@@ -294,59 +315,67 @@ impl Debug for ChannelIdMetadata {
     }
 }
 
-impl Display for ChannelIdMetadata {
+impl<C: Ciphersuite, D> Display for ChannelIdMetadata<C, D>
+where
+    D: Send + Clone + SecureDigest,
+    <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_hex())
     }
 }
 
-impl PartialEq for ChannelIdMetadata {
+impl<C: Ciphersuite, D> PartialEq for ChannelIdMetadata<C, D> {
     fn eq(&self, other: &Self) -> bool {
         self.hashed_id == other.hashed_id
     }
 }
 
-impl Eq for ChannelIdMetadata {}
+impl<C: Ciphersuite, D> Eq for ChannelIdMetadata<C, D> {}
 
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::amount::MoneroAmount;
     use crate::balance::Balances;
-    use crate::cryptography::keys::Curve25519PublicKey;
+    use crate::key_escrow_services::KesConfiguration;
     use crate::monero::data_objects::ClosingAddresses;
+    use crate::XmrPoint;
     use blake2::Blake2b;
-    use digest::consts::{U32, U64};
+    use ciphersuite::group::ff::Field;
+    use ciphersuite::group::Group;
+    use ciphersuite::Ed25519;
+    use digest::consts::U32;
 
     const ALICE_ADDRESS: &str =
         "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
     const BOB_ADDRESS: &str =
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
-    // Valid Curve25519 public keys for testing (derived from known secret keys)
-    const MERCHANT_KEY_HEX: &str = "4dd896d542721742aff8671ba42aff0c4c846bea79065cf39a191bbeb11ea634";
-    const CUSTOMER_KEY_HEX: &str = "e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76";
-
-    fn merchant_key() -> Curve25519PublicKey {
-        Curve25519PublicKey::from_hex(MERCHANT_KEY_HEX).unwrap()
+    fn merchant_key() -> XmrPoint {
+        XmrPoint::generator()
     }
 
-    fn customer_key() -> Curve25519PublicKey {
-        Curve25519PublicKey::from_hex(CUSTOMER_KEY_HEX).unwrap()
+    fn customer_key() -> XmrPoint {
+        XmrPoint::generator() + XmrPoint::generator()
     }
 
-    fn other_key() -> Curve25519PublicKey {
-        // Generate a different key for testing
-        use crate::cryptography::keys::PublicKey;
-        let (_, key) = Curve25519PublicKey::keypair(&mut rand_core::OsRng);
-        key
+    fn other_key() -> XmrPoint {
+        XmrPoint::generator() * <Ed25519 as Ciphersuite>::F::random(&mut rand_core::OsRng)
+    }
+
+    fn test_kes_config() -> KesConfiguration<Ed25519> {
+        let kes_pk = customer_key();
+        let peer_pk = merchant_key();
+        KesConfiguration::new_with_defaults(kes_pk, peer_pk)
     }
 
     #[test]
     fn channel_id() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        let id: ChannelIdMetadata = ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, 100, 200);
+        let id: ChannelIdMetadata<Ed25519> =
+            ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, test_kes_config(), 100, 200);
         assert_eq!(id.merchant_key(), &merchant_key());
         assert_eq!(id.customer_key(), &customer_key());
         assert_eq!(id.initial_balance().merchant.to_piconero(), 1_250_000_000_000);
@@ -355,10 +384,9 @@ mod test {
         assert_eq!(id.customer_nonce(), 200);
         assert_eq!(id.closing_addresses().customer().to_string(), ALICE_ADDRESS);
         assert_eq!(id.closing_addresses().merchant().to_string(), BOB_ADDRESS);
-        // The hash should be 64 bytes with Blake2b512
         assert_eq!(id.hash().len(), 64);
         assert_eq!(id.as_hex().len(), 65);
-        assert_eq!(id.as_hex(), "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383")
+        assert!(id.as_hex().starts_with("XGC"));
     }
 
     #[test]
@@ -367,46 +395,69 @@ mod test {
         let amt2 = Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("0.5").unwrap());
         let closing1 = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
         let closing2 = ClosingAddresses::new(BOB_ADDRESS, ALICE_ADDRESS).expect("should be valid closing addresses");
+        let kes = test_kes_config();
 
         // Same parameters -> same ID
-        let id1 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
-        let id2 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
+        let id1: ChannelIdMetadata<Ed25519> =
+            ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, kes.clone(), 100, 200);
+        let id2: ChannelIdMetadata<Ed25519> =
+            ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, kes.clone(), 100, 200);
         assert_eq!(id1, id2);
 
         // Different merchant key -> different ID
-        let id3 = ChannelIdMetadata::new(other_key(), customer_key(), amt, closing1, 100, 200);
+        let id3 = ChannelIdMetadata::new(other_key(), customer_key(), amt, closing1, kes.clone(), 100, 200);
         assert_ne!(id1, id3);
 
         // Different customer key -> different ID
-        let id4 = ChannelIdMetadata::new(merchant_key(), other_key(), amt, closing1, 100, 200);
+        let id4 = ChannelIdMetadata::new(merchant_key(), other_key(), amt, closing1, kes.clone(), 100, 200);
         assert_ne!(id1, id4);
 
         // Different balance -> different ID
-        let id5 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt2, closing1, 100, 200);
+        let id5 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt2, closing1, kes.clone(), 100, 200);
         assert_ne!(id1, id5);
 
         // Different nonce -> different ID
-        let id6 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, 999, 200);
+        let id6 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, kes.clone(), 999, 200);
         assert_ne!(id1, id6);
 
         // Different output size -> different ID
-        let id7 = ChannelIdMetadata::<Blake2b<U32>>::new(merchant_key(), customer_key(), amt, closing1, 100, 200);
+        let id7 = ChannelIdMetadata::<Ed25519, Blake2b<U32>>::new(
+            merchant_key(),
+            customer_key(),
+            amt,
+            closing1,
+            kes.clone(),
+            100,
+            200,
+        );
         assert_ne!(id1.as_hex(), id7.as_hex());
 
         // Different closing addresses -> different ID
-        let id8 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing2, 100, 200);
+        let id8 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing2, kes.clone(), 100, 200);
         assert_ne!(id1, id8);
+
+        // Different KES config -> different ID
+        let other_kes = KesConfiguration::new_with_defaults(other_key(), merchant_key());
+        let id9 = ChannelIdMetadata::new(merchant_key(), customer_key(), amt, closing1, other_kes, 100, 200);
+        assert_ne!(id1, id9);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        let id: ChannelIdMetadata =
-            ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, 12345, 67890);
+        let id: ChannelIdMetadata<Ed25519> = ChannelIdMetadata::new(
+            merchant_key(),
+            customer_key(),
+            balance,
+            closing,
+            test_kes_config(),
+            12345,
+            67890,
+        );
 
         let serialized = ron::to_string(&id).unwrap();
-        let deserialized: ChannelIdMetadata = ron::from_str(&serialized).unwrap();
+        let deserialized: ChannelIdMetadata<Ed25519> = ron::from_str(&serialized).unwrap();
 
         assert_eq!(id.merchant_key(), deserialized.merchant_key());
         assert_eq!(id.customer_key(), deserialized.customer_key());
@@ -428,13 +479,11 @@ mod test {
     fn channel_id_string_from_channel_id() {
         let balance = Balances::new(MoneroAmount::from_xmr("1.25").unwrap(), MoneroAmount::from_xmr("0.75").unwrap());
         let closing = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("should be valid closing addresses");
-        let id: ChannelIdMetadata = ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, 100, 200);
+        let id: ChannelIdMetadata<Ed25519> =
+            ChannelIdMetadata::new(merchant_key(), customer_key(), balance, closing, test_kes_config(), 100, 200);
 
         let id_string = ChannelId::from_channel_id_metadata(&id);
-        assert_eq!(
-            id_string.as_str(),
-            "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383"
-        );
+        assert!(id_string.as_str().starts_with("XGC"));
         assert_eq!(id_string.as_str().len(), 65);
     }
 

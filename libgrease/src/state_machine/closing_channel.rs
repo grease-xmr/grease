@@ -1,59 +1,48 @@
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
-use crate::channel_metadata::ChannelMetadata;
-use crate::cryptography::zk_objects::KesProof;
+use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
+use crate::cryptography::dleq::Dleq;
 use crate::cryptography::ChannelWitness;
 use crate::grease_protocol::close_channel::{
     ChannelCloseSuccess, CloseFailureReason, CloseProtocolCommon, CloseProtocolError, CloseProtocolInitiator,
     CloseProtocolResponder, RequestChannelClose, RequestCloseFailed,
 };
-use crate::lifecycle_impl;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::multisig::MultisigWalletData;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::error::LifeCycleError;
-use crate::XmrScalar;
-use ciphersuite::Ciphersuite;
+use ciphersuite::{Ciphersuite, Ed25519};
+use modular_frost::curve::Curve as FrostCurve;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelCloseRecord {
+#[serde(bound = "")]
+pub struct ChannelCloseRecord<SF: Ciphersuite = grease_grumpkin::Grumpkin> {
     pub final_balance: Balances,
     pub update_count: u64,
-    #[serde(
-        serialize_with = "crate::helpers::zeroizing_scalar_to_hex",
-        deserialize_with = "crate::helpers::zeroizing_scalar_from_hex"
-    )]
-    pub witness: Zeroizing<XmrScalar>,
+    pub witness: ChannelWitness<SF>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClosingChannelState {
-    pub(crate) metadata: ChannelMetadata,
+#[serde(bound = "")]
+pub struct ClosingChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphersuite = Ed25519> {
+    pub(crate) metadata: StaticChannelMetadata<KC>,
+    pub(crate) dynamic: DynamicChannelMetadata,
     pub(crate) reason: ChannelClosedReason,
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    #[serde(
-        serialize_with = "crate::helpers::zeroizing_scalar_to_hex",
-        deserialize_with = "crate::helpers::zeroizing_scalar_from_hex"
-    )]
-    pub(crate) peer_witness: Zeroizing<XmrScalar>,
-    pub(crate) kes_proof: KesProof,
-    pub(crate) last_update: UpdateRecord,
+    pub(crate) peer_witness: ChannelWitness<SF>,
+    pub(crate) last_update: UpdateRecord<SF>,
     pub(crate) final_tx: Option<TransactionId>,
 }
 
-impl ClosingChannelState {
-    pub fn to_channel_state(self) -> ChannelState {
-        ChannelState::Closing(self)
-    }
+impl<SF: Ciphersuite, KC: Ciphersuite> ClosingChannelState<SF, KC> {
     pub fn final_balances(&self) -> Balances {
-        self.metadata.balances()
+        self.dynamic.current_balances
     }
 
     pub fn multisig_address(&self, _network: Network) -> Option<String> {
@@ -72,12 +61,12 @@ impl ClosingChannelState {
         data
     }
 
-    pub fn final_update(&self) -> UpdateRecord {
+    pub fn final_update(&self) -> UpdateRecord<SF> {
         self.last_update.clone()
     }
 
-    pub fn peer_witness(&self) -> &XmrScalar {
-        &*self.peer_witness
+    pub fn peer_witness(&self) -> &ChannelWitness<SF> {
+        &self.peer_witness
     }
 
     pub fn reason(&self) -> &ChannelClosedReason {
@@ -106,50 +95,85 @@ impl ClosingChannelState {
         }
         self.final_tx = Some(final_tx);
     }
-
-    #[allow(clippy::result_large_err)]
-    pub fn next(self) -> Result<ClosedChannelState, (Self, LifeCycleError)> {
-        if !self.requirements_met() {
-            return Err((self, LifeCycleError::InvalidStateTransition));
-        }
-
-        let closed_state = ClosedChannelState::new(ChannelClosedReason::Normal, self.metadata.clone());
-        Ok(closed_state)
-    }
 }
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use crate::state_machine::open_channel::UpdateRecord;
 
-lifecycle_impl!(ClosingChannelState, Closing);
+impl<SF: FrostCurve, KC: FrostCurve> ClosingChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF> + Dleq<KC>,
+{
+    pub fn to_channel_state(self) -> ChannelState<SF, KC> {
+        ChannelState::Closing(self)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn next(self) -> Result<ClosedChannelState<SF, KC>, (Self, LifeCycleError)> {
+        if !self.requirements_met() {
+            return Err((self, LifeCycleError::InvalidStateTransition));
+        }
+
+        let closed_state = ClosedChannelState::new(
+            ChannelClosedReason::Normal,
+            self.metadata.clone(),
+            self.dynamic.current_balances,
+        );
+        Ok(closed_state)
+    }
+}
+
+impl<SF: FrostCurve, KC: Ciphersuite> LifeCycle<KC> for ClosingChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
+    fn stage(&self) -> LifecycleStage {
+        LifecycleStage::Closing
+    }
+
+    fn metadata(&self) -> &StaticChannelMetadata<KC> {
+        &self.metadata
+    }
+
+    fn balance(&self) -> Balances {
+        self.dynamic.current_balances
+    }
+
+    fn wallet_address(&self, network: Network) -> Option<String> {
+        self.multisig_address(network)
+    }
+}
 
 // --- Protocol Trait Implementations ---
 
-impl HasRole for ClosingChannelState {
+impl<SF: FrostCurve, KC: Ciphersuite> HasRole for ClosingChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }
 }
 
-impl<SF: Ciphersuite> CloseProtocolCommon<SF> for ClosingChannelState {
+impl<SF: FrostCurve, KC: Ciphersuite> CloseProtocolCommon<SF> for ClosingChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
     fn channel_id(&self) -> ChannelId {
         self.metadata.channel_id().name()
     }
 
     fn update_count(&self) -> u64 {
-        self.metadata.update_count()
+        self.dynamic.update_count
     }
 
     fn current_offset(&self) -> ChannelWitness<SF> {
-        // Convert XmrScalar to ChannelWitness<SF>
-        // This should succeed since the witness was validated at channel establishment
-        ChannelWitness::<SF>::try_from(self.last_update.my_proofs.private_outputs.witness_i.clone())
-            .expect("witness_i should be valid in SF since channel was established")
+        todo!()
     }
 
     fn verify_offset(&self, _offset: &ChannelWitness<SF>, update_count: u64) -> Result<(), CloseProtocolError> {
         // Use direct metadata access to avoid trait method ambiguity
-        let my_update_count = self.metadata.update_count();
+        let my_update_count = self.dynamic.update_count;
         if update_count != my_update_count {
             return Err(CloseProtocolError::UpdateCountMismatch { expected: my_update_count, actual: update_count });
         }
@@ -160,13 +184,16 @@ impl<SF: Ciphersuite> CloseProtocolCommon<SF> for ClosingChannelState {
     }
 }
 
-impl<SF: Ciphersuite> CloseProtocolInitiator<SF> for ClosingChannelState {
+impl<SF: FrostCurve, KC: Ciphersuite> CloseProtocolInitiator<SF> for ClosingChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
     fn create_close_request(&self) -> Result<RequestChannelClose<SF>, CloseProtocolError> {
         // Use current_offset() which handles the conversion
         Ok(RequestChannelClose {
             channel_id: self.metadata.channel_id().name(),
             offset: <Self as CloseProtocolCommon<SF>>::current_offset(self),
-            update_count: self.metadata.update_count(),
+            update_count: self.dynamic.update_count,
         })
     }
 
@@ -178,8 +205,12 @@ impl<SF: Ciphersuite> CloseProtocolInitiator<SF> for ClosingChannelState {
         }
 
         // Verify the peer's offset
-        let my_update_count = self.metadata.update_count();
-        <ClosingChannelState as CloseProtocolCommon<SF>>::verify_offset(self, &response.offset, my_update_count)?;
+        let my_update_count = self.dynamic.update_count;
+        <ClosingChannelState<SF, KC> as CloseProtocolCommon<SF>>::verify_offset(
+            self,
+            &response.offset,
+            my_update_count,
+        )?;
 
         // If the responder broadcast the transaction, store it
         if let Some(txid) = response.txid {
@@ -202,7 +233,10 @@ impl<SF: Ciphersuite> CloseProtocolInitiator<SF> for ClosingChannelState {
     }
 }
 
-impl<SF: Ciphersuite> CloseProtocolResponder<SF> for ClosingChannelState {
+impl<SF: FrostCurve, KC: Ciphersuite> CloseProtocolResponder<SF> for ClosingChannelState<SF, KC>
+where
+    Ed25519: Dleq<SF>,
+{
     fn receive_close_request(&mut self, request: RequestChannelClose<SF>) -> Result<(), CloseProtocolError> {
         // Validate the request (use direct field access)
         let my_channel_id = self.metadata.channel_id().name();
@@ -210,7 +244,11 @@ impl<SF: Ciphersuite> CloseProtocolResponder<SF> for ClosingChannelState {
             return Err(CloseProtocolError::InvalidOffset("Channel ID mismatch".into()));
         }
 
-        <ClosingChannelState as CloseProtocolCommon<SF>>::verify_offset(self, &request.offset, request.update_count)?;
+        <ClosingChannelState<SF, KC> as CloseProtocolCommon<SF>>::verify_offset(
+            self,
+            &request.offset,
+            request.update_count,
+        )?;
 
         Ok(())
     }

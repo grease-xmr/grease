@@ -6,10 +6,10 @@ This document describes the complete Finite State Machine (FSM) for Grease payme
 
 ```mermaid
 stateDiagram-v2
-    [*] --> New: Create channel
+    [*] --> Proposing: Create channel
 
-    state New {
-        note right of New
+    state Proposing {
+        note right of Proposing
             <b>Protocol Traits:</b>
             - ProposeProtocolCommon
             - ProposeProtocolProposer (Merchant)
@@ -17,8 +17,8 @@ stateDiagram-v2
         end note
     }
 
-    New --> Establishing: verify_proposal() OK
-    New --> Closed: reject() / timeout
+    Proposing --> Establishing: ProposalAccepted / MerchantAcceptedProposal
+    Proposing --> Closed: RejectProposal / Timeout
 
     state Establishing {
         note right of Establishing
@@ -87,13 +87,14 @@ stateDiagram-v2
 
 ## State Descriptions
 
-### New (NewChannelState)
+### Proposing (ProposingState)
 
 The initial state when a channel is being proposed. The customer scans a merchant's QR code and initiates channel creation.
 
 **Events:**
-- `VerifiedProposal` - Proposal accepted, transition to Establishing
-- `RejectNewChannel` - Proposal rejected, transition to Closed
+- `ProposalAcceptedByMerchant` - Customer receives acceptance from merchant, transitions to Establishing
+- `MerchantAcceptedProposal` - Merchant accepts customer's proposal, transitions to Establishing
+- `RejectProposal` - Proposal rejected, transition to Closed
 - `Timeout` - Negotiation timeout, transition to Closed
 
 **Protocol Traits:**
@@ -186,7 +187,7 @@ Each state has role-specific protocol trait implementations:
 
 | State | Merchant Role | Customer Role |
 |-------|--------------|---------------|
-| New | `ProposeProtocolProposer` | `ProposeProtocolProposee` |
+| Proposing | `ProposeProtocolProposer` | `ProposeProtocolProposee` |
 | Establishing | `EstablishProtocolMerchant` | `EstablishProtocolCustomer` |
 | Open | `UpdateProtocolProposer` (proposer) | `UpdateProtocolProposee` (proposee) |
 | Closing | Initiator or Responder (depends on who closes) | Initiator or Responder |

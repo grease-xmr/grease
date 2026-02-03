@@ -1,125 +1,122 @@
-//! Channel Proposal Protocol Traits
-//!
-//! This module defines traits for the channel proposal phase, where a merchant (proposer)
-//! creates channel seed information and a customer (proposee) submits a channel proposal.
-
-use crate::channel_id::ChannelIdMetadata;
-use crate::payment_channel::HasRole;
-use crate::state_machine::{ChannelSeedInfo, NewChannelProposal, RejectNewChannelReason};
-use monero::Address;
-use rand_core::{CryptoRng, RngCore};
+use crate::balance::Balances;
+use crate::key_escrow_services::{KesConfiguration, KesImplementation};
+use ciphersuite::{Ciphersuite, Ed25519};
+use monero::{Address, Network};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
-/// Configuration for creating channel seed information.
-#[derive(Debug, Clone)]
-pub struct ChannelSeedConfig {
-    /// The KES public key identifier
-    pub kes_public_key: String,
-    /// The merchant's closing address
-    pub closing_address: Address,
+/// A record that (usually) the merchant will send out-of-band to the customer to give them the seed information they
+/// need to complete a new channel proposal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
+    /// The Monero network this channel will run on
+    #[serde(
+        deserialize_with = "crate::monero::helpers::deserialize_network",
+        serialize_with = "crate::monero::helpers::serialize_network"
+    )]
+    pub network: Network,
+    /// The KES configuration for this channel
+    pub kes_type: KesImplementation,
+    /// The KES configuration parameters (public key, dispute duration, etc.)
+    pub kes_config: KesConfiguration<KC>,
+    /// The initial set of channel balances
+    pub initial_balances: Balances,
+    /// The merchant's address that the closing transaction must pay into
+    pub merchant_closing_address: Address,
+    /// The public key corresponding to the merchant's secret channel nonce. Used to derive a shared secret for the
+    /// channel, $kappa$.
+    #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
+    pub merchant_channel_key: KC::G,
+    /// The merchant nonce for channel ID derivation, to help them identify this proposal.
+    pub merchant_nonce: u64,
 }
 
-/// Common functionality shared by both proposer and proposee.
-pub trait ProposeProtocolCommon: HasRole {
-    /// Returns the channel ID if available.
-    fn channel_id(&self) -> Option<&ChannelIdMetadata>;
-
-    /// Returns the seed info if available.
-    fn seed_info(&self) -> Option<&ChannelSeedInfo>;
-
-    /// Validates the seed info against protocol requirements.
-    fn validate_seed_info(&self) -> Result<(), ProposeProtocolError>;
+/// The builder struct for the [`MerchantSeedInfo`].
+/// See [`MerchantSeedInfo`] for more information about each field.
+pub struct MerchantSeedBuilder<KC: Ciphersuite> {
+    network: Network,
+    kes_type: KesImplementation,
+    channel_secret: Zeroizing<KC::F>,
+    kes_config: Option<KesConfiguration<KC>>,
+    initial_balances: Option<Balances>,
+    closing_address: Option<Address>,
+    channel_key: Option<KC::G>,
+    channel_nonce: Option<u64>,
 }
 
-/// Protocol trait for the proposer (typically the merchant).
-///
-/// The proposer - usually a merchant, creates the channel seed information, receives proposals from customers,
-/// and can accept or reject them.
-pub trait ProposeProtocolProposer: ProposeProtocolCommon {
-    /// Create channel seed information for a new channel.
-    ///
-    /// The seed info contains the merchant's public key, KES info, proposed balances,
-    /// and the merchant's nonce for channel ID derivation.
-    fn create_channel_seed<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-        config: ChannelSeedConfig,
-    ) -> Result<ChannelSeedInfo, ProposeProtocolError>;
+impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
+    pub fn new(network: Network, kes_type: KesImplementation, channel_secret: Zeroizing<KC::F>) -> Self {
+        MerchantSeedBuilder {
+            network,
+            kes_type,
+            channel_secret,
+            kes_config: None,
+            initial_balances: None,
+            closing_address: None,
+            channel_key: None,
+            channel_nonce: None,
+        }
+    }
 
-    /// Receive and validate a proposal from a customer.
-    ///
-    /// This validates that the proposal is consistent with the seed info
-    /// and meets protocol requirements.
-    fn receive_proposal(&mut self, proposal: &NewChannelProposal) -> Result<(), ProposeProtocolError>;
+    pub fn with_kes_config(mut self, kes_config: KesConfiguration<KC>) -> Self {
+        self.kes_config = Some(kes_config);
+        self
+    }
 
-    /// Accept the received proposal and prepare for channel establishment.
-    ///
-    /// Returns the accepted proposal for transmission to the customer.
-    fn accept_proposal(&self) -> Result<NewChannelProposal, ProposeProtocolError>;
+    pub fn with_initial_balances(mut self, initial_balances: Balances) -> Self {
+        self.initial_balances = Some(initial_balances);
+        self
+    }
 
-    /// Reject the received proposal with a reason.
-    fn reject_proposal(&self, reason: RejectNewChannelReason) -> Result<(), ProposeProtocolError>;
+    pub fn with_closing_address(mut self, address: Address) -> Self {
+        self.closing_address = Some(address);
+        self
+    }
+
+    /// Calculate the channel nonce public key from the given secret. The customer will use this key to determine a shared secret for the
+    /// channel.
+    pub fn with_channel_secret_nonce(mut self, secret: &KC::F) -> Self {
+        let channel_key = KC::generator() * *secret;
+        self.channel_key = Some(channel_key);
+        self
+    }
+
+    pub fn with_channel_nonce(mut self, nonce: u64) -> Self {
+        self.channel_nonce = Some(nonce);
+        self
+    }
+
+    pub fn build(self) -> Result<MerchantSeedInfo<KC>, MissingSeedInfo> {
+        let kes_config = self.kes_config.ok_or(MissingSeedInfo::KesConfig)?;
+        let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
+        let closing_address = self.closing_address.ok_or(MissingSeedInfo::ClosingAddress)?;
+        let channel_key = self.channel_key.ok_or(MissingSeedInfo::ChannelKey)?;
+        let channel_nonce = self.channel_nonce.ok_or(MissingSeedInfo::ChannelNonce)?;
+
+        Ok(MerchantSeedInfo {
+            network: self.network,
+            kes_type: self.kes_type,
+            kes_config,
+            initial_balances,
+            merchant_closing_address: closing_address,
+            merchant_channel_key: channel_key,
+            merchant_nonce: channel_nonce,
+        })
+    }
 }
 
-/// Protocol trait for the proposee (typically the customer).
-///
-/// The proposee receives seed information from a merchant, creates a proposal,
-/// and handles the merchant's response.
-pub trait ProposeProtocolProposee: ProposeProtocolCommon {
-    /// Receive and store seed information from the merchant.
-    ///
-    /// This validates the seed info and extracts the channel parameters.
-    fn receive_seed_info(&mut self, seed: ChannelSeedInfo) -> Result<(), ProposeProtocolError>;
-
-    /// Create a channel proposal based on the received seed info.
-    ///
-    /// The proposal includes the customer's public key, closing address,
-    /// and nonce for channel ID derivation.
-    fn create_proposal<R: RngCore + CryptoRng>(
-        &self,
-        rng: &mut R,
-        closing_address: &Address,
-    ) -> Result<NewChannelProposal, ProposeProtocolError>;
-
-    /// Handle acceptance of the proposal by the merchant.
-    ///
-    /// Validates that the accepted proposal matches what was sent.
-    fn handle_acceptance(&mut self, accepted: &NewChannelProposal) -> Result<(), ProposeProtocolError>;
-
-    /// Handle rejection of the proposal by the merchant.
-    fn handle_rejection(&mut self, reason: RejectNewChannelReason) -> Result<(), ProposeProtocolError>;
-}
-
-/// Errors that can occur during the channel proposal protocol.
-#[derive(Debug, Error)]
-pub enum ProposeProtocolError {
-    #[error("Missing required information: {0}")]
-    MissingInformation(String),
-
-    #[error("Invalid seed info: {0}")]
-    InvalidSeedInfo(String),
-
-    #[error("Invalid proposal: {0}")]
-    InvalidProposal(String),
-
-    #[error("Channel ID mismatch: expected {expected}, got {actual}")]
-    ChannelIdMismatch { expected: String, actual: String },
-
-    #[error("Proposal already received")]
-    ProposalAlreadyReceived,
-
-    #[error("No proposal received to accept or reject")]
-    NoProposalReceived,
-
-    #[error("Seed info not received")]
-    SeedInfoNotReceived,
-
-    #[error("Proposal was rejected: {0}")]
-    ProposalRejected(String),
-
-    #[error("Network mismatch: expected {expected}, got {actual}")]
-    NetworkMismatch { expected: String, actual: String },
-
-    #[error("Balance validation failed: {0}")]
-    BalanceValidationFailed(String),
+#[derive(Debug, Clone, Error)]
+pub enum MissingSeedInfo {
+    #[error("Missing KES configuration")]
+    KesConfig,
+    #[error("Missing initial balances")]
+    InitialBalances,
+    #[error("Missing closing address")]
+    ClosingAddress,
+    #[error("Missing channel key")]
+    ChannelKey,
+    #[error("Missing channel nonce")]
+    ChannelNonce,
 }

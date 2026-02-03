@@ -49,10 +49,10 @@
 //!     ┌────────────────────────────────────────┼────────────────────────┐
 //!     │              Foundation                │                        │
 //!     │  ┌─────────────┐    ┌──────────────┐   │   ┌─────────────────┐  │
-//!     │  │    keys     │    │    commit    │   │   │   zk_objects    │  │
-//!     │  │ (Curve25519 │    │ (hash-based  │   │   │ (ZK proof I/O   │  │
-//!     │  │  keypairs)  │    │ commitments) │   │   │  structures)    │  │
-//!     │  └─────────────┘    └──────────────┘   │   └─────────────────┘  │
+//!     │  │    keys     │    │    commit    │   │                       │
+//!     │  │ (Curve25519 │    │ (hash-based  │   │                       │
+//!     │  │  keypairs)  │    │ commitments) │   │                       │
+//!     │  └─────────────┘    └──────────────┘   │                       │
 //!     └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -88,7 +88,6 @@
 //! | Module         | Purpose                                                        |
 //! |----------------|----------------------------------------------------------------|
 //! | [`keys`]       | Curve25519 secret/public key types for Monero wallet operations|
-//! | [`zk_objects`] | Public/private inputs for ZK proofs, legacy serialization types|
 //!
 //! # Curve Support
 //!
@@ -108,10 +107,13 @@
 //! - Identity point rejection prevents trivial forgery attacks in proofs
 
 mod commit;
-pub mod crypto_context;
+pub mod encryption_context;
+pub mod secret_bytes;
+pub mod serializable_secret;
 
 pub mod adapter_signature;
 pub mod dleq;
+pub mod ecdh;
 pub mod ecdh_encrypt;
 pub mod keys;
 #[cfg(feature = "mocks")]
@@ -123,7 +125,5 @@ pub mod vcof;
 pub mod vcof_impls;
 mod vcof_snark_dleq;
 mod witness;
-pub mod zk_objects;
-
 pub use commit::{Commit, HashCommitment256};
-pub use witness::{convert_scalar, ChannelWitness, WitnessError};
+pub use witness::{convert_scalar_dleq, AsXmrPoint, ChannelWitness, ChannelWitnessPublic, Offset, WitnessError};

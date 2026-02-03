@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "acir"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir_field",
  "base64",
@@ -32,7 +32,7 @@ dependencies = [
 [[package]]
 name = "acir_field"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -46,7 +46,7 @@ dependencies = [
 [[package]]
 name = "acvm"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -61,7 +61,7 @@ dependencies = [
 [[package]]
 name = "acvm_blackbox_solver"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir",
  "blake2",
@@ -725,7 +725,7 @@ dependencies = [
 [[package]]
 name = "bn254_blackbox_solver"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "brillig"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir_field",
  "serde",
@@ -773,7 +773,7 @@ dependencies = [
 [[package]]
 name = "brillig_vm"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -2006,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "fm"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "codespan-reporting",
  "iter-extended",
@@ -3012,7 +3012,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "iter-extended"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 
 [[package]]
 name = "itertools"
@@ -3190,12 +3190,12 @@ name = "libgrease"
 version = "0.1.0"
 dependencies = [
  "acir_field",
+ "aes-gcm",
  "anyhow",
  "ark-bn254",
  "ark-ff",
  "async-trait",
  "blake2",
- "bn254_blackbox_solver",
  "chrono",
  "ciphersuite",
  "curve25519-dalek",
@@ -4031,7 +4031,7 @@ dependencies = [
 [[package]]
 name = "nargo"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "brillig",
@@ -4056,7 +4056,7 @@ dependencies = [
 [[package]]
 name = "nargo_toml"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "dirs",
  "fm",
@@ -4168,7 +4168,7 @@ checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 [[package]]
 name = "noir_greybox_fuzzer"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "build-data",
@@ -4188,7 +4188,7 @@ dependencies = [
 [[package]]
 name = "noir_protobuf"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "color-eyre",
  "prost",
@@ -4197,7 +4197,7 @@ dependencies = [
 [[package]]
 name = "noirc_abi"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "iter-extended",
@@ -4213,12 +4213,12 @@ dependencies = [
 [[package]]
 name = "noirc_arena"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 
 [[package]]
 name = "noirc_artifacts"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "codespan-reporting",
@@ -4233,7 +4233,7 @@ dependencies = [
 [[package]]
 name = "noirc_driver"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "build-data",
@@ -4253,7 +4253,7 @@ dependencies = [
 [[package]]
 name = "noirc_errors"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "base64",
@@ -4271,7 +4271,7 @@ dependencies = [
 [[package]]
 name = "noirc_evaluator"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "bn254_blackbox_solver",
@@ -4303,7 +4303,7 @@ dependencies = [
 [[package]]
 name = "noirc_frontend"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "bn254_blackbox_solver",
@@ -4332,7 +4332,7 @@ dependencies = [
 [[package]]
 name = "noirc_printable_type"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acvm",
  "iter-extended",
@@ -4343,7 +4343,7 @@ dependencies = [
 [[package]]
 name = "noirc_span"
 version = "1.0.0-beta.15"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "codespan",
  "serde",
@@ -7496,8 +7496,8 @@ dependencies = [
 
 [[package]]
 name = "zkuh-rs"
-version = "1.15.0"
-source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=ceb43b13ab0c6039dc709067a320026bf7718e9a#ceb43b13ab0c6039dc709067a320026bf7718e9a"
+version = "1.16.0"
+source = "git+https://github.com/grease-xmr/aztec-packages.git?rev=1b9f44205b#1b9f44205bd1953c7f607107fe327d204a35711f"
 dependencies = [
  "acir",
  "bindgen",
