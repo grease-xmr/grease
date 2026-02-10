@@ -47,9 +47,12 @@ pub struct KesInitBundle<KC: Ciphersuite> {
     pub merchant_payload_sig: SchnorrSignature<KC>,
 }
 
-/// Domain separation tag used when encrypting offsets to the KES.
-/// Must match `KesClient::domain_separation_tag()`.
-const KES_DOMAIN_TAG: &[u8] = b"GreaseEncryptToKES";
+/// Domain separation tag for encrypting offsets to the KES, bound to a specific channel.
+///
+/// The channel ID is included so that encrypted offsets cannot be replayed across channels.
+pub(crate) fn kes_offset_domain(channel_id: &ChannelId) -> String {
+    format!("GreaseEncryptToKES-{channel_id}")
+}
 
 /// Manages the KES's role during channel initialization.
 ///
@@ -59,6 +62,7 @@ const KES_DOMAIN_TAG: &[u8] = b"GreaseEncryptToKES";
 pub struct KesEstablishing<KC: Ciphersuite> {
     kes_secret: Zeroizing<KC::F>,
     kes_public: KC::G,
+    channel_id: Option<ChannelId>,
     customer_chi: Option<EncryptedSecret<KC>>,
     merchant_chi: Option<EncryptedSecret<KC>>,
 }
@@ -74,12 +78,21 @@ impl<KC: Ciphersuite> std::fmt::Debug for KesEstablishing<KC> {
 impl<KC: Ciphersuite> KesEstablishing<KC> {
     /// Create a new KES establishing instance from a KES keypair.
     pub fn new(kes_secret: Zeroizing<KC::F>, kes_public: KC::G) -> Self {
-        Self { kes_secret, kes_public, customer_chi: None, merchant_chi: None }
+        Self { kes_secret, kes_public, channel_id: None, customer_chi: None, merchant_chi: None }
     }
 
     /// The KES public key.
     pub fn public_key(&self) -> &KC::G {
         &self.kes_public
+    }
+
+    /// Set the channel ID for domain-separated offset decryption.
+    ///
+    /// This is set automatically by [`receive_bundle`](Self::receive_bundle). Use this method
+    /// when providing offsets individually via [`receive_customer_offset`](Self::receive_customer_offset)
+    /// and [`receive_merchant_offset`](Self::receive_merchant_offset).
+    pub fn set_channel_id(&mut self, channel_id: ChannelId) {
+        self.channel_id = Some(channel_id);
     }
 
     /// Store the customer's encrypted offset.
@@ -131,7 +144,8 @@ impl<KC: Ciphersuite> KesEstablishing<KC> {
         if !bundle.merchant_payload_sig.verify(&bundle.merchant_ephemeral_pubkey, &merchant_msg) {
             return Err(KesEstablishError::InvalidPayloadSignature { role: ChannelRole::Merchant });
         }
-        // 3. Store offsets
+        // 3. Store channel ID and offsets
+        self.channel_id = Some(bundle.channel_id);
         self.receive_customer_offset(bundle.customer_encrypted_offset)?;
         self.receive_merchant_offset(bundle.merchant_encrypted_offset)?;
         Ok(())
@@ -142,10 +156,12 @@ impl<KC: Ciphersuite> KesEstablishing<KC> {
     /// Both offsets must have been received via `receive_customer_offset` and
     /// `receive_merchant_offset` before calling this method.
     pub fn decrypt_offsets(&self) -> Result<DecryptedOffsets<KC>, KesEstablishError> {
+        let channel_id = self.channel_id.as_ref().ok_or(KesEstablishError::MissingChannelId)?;
         let customer_chi = self.customer_chi.as_ref().ok_or(KesEstablishError::MissingOffset(ChannelRole::Customer))?;
         let merchant_chi = self.merchant_chi.as_ref().ok_or(KesEstablishError::MissingOffset(ChannelRole::Merchant))?;
-        let customer_secret = customer_chi.decrypt(&self.kes_secret, KES_DOMAIN_TAG);
-        let merchant_secret = merchant_chi.decrypt(&self.kes_secret, KES_DOMAIN_TAG);
+        let domain = kes_offset_domain(channel_id);
+        let customer_secret = customer_chi.decrypt(&self.kes_secret, &domain);
+        let merchant_secret = merchant_chi.decrypt(&self.kes_secret, &domain);
         Ok(DecryptedOffsets { customer: customer_secret, merchant: merchant_secret })
     }
 
@@ -199,10 +215,109 @@ impl<KC: Ciphersuite> DecryptedOffsets<KC> {
 
 #[derive(Debug, Error)]
 pub enum KesEstablishError {
+    #[error("Channel ID not set — call receive_bundle or set_channel_id before decrypting")]
+    MissingChannelId,
     #[error("Missing offset from {0}")]
     MissingOffset(ChannelRole),
     #[error("Expected offset from {expected} but got {got}")]
     WrongRole { expected: ChannelRole, got: ChannelRole },
     #[error("Payload signature verification failed for {role}")]
     InvalidPayloadSignature { role: ChannelRole },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ciphersuite::Ed25519;
+    use dalek_ff_group::{EdwardsPoint, Scalar as EdScalar};
+    use modular_frost::curve::{Field, Group};
+    use std::str::FromStr;
+    use subtle::ConstantTimeEq;
+
+    fn test_channel_id() -> ChannelId {
+        ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap()
+    }
+
+    #[test]
+    fn encrypt_decrypt_offsets_round_trip() {
+        let mut rng = rand_core::OsRng;
+        let channel_id = test_channel_id();
+
+        // KES keypair
+        let kes_secret = EdScalar::random(&mut rng);
+        let kes_public = EdwardsPoint::generator() * &kes_secret;
+
+        // Random offsets for each party
+        let customer_scalar = EdScalar::random(&mut rng);
+        let merchant_scalar = EdScalar::random(&mut rng);
+        let customer_secret = SecretWithRole::new(customer_scalar, ChannelRole::Customer);
+        let merchant_secret = SecretWithRole::new(merchant_scalar, ChannelRole::Merchant);
+
+        // Encrypt to KES using the channel-bound domain tag
+        let domain = kes_offset_domain(&channel_id);
+        let customer_enc = EncryptedSecret::<Ed25519>::encrypt(customer_secret.clone(), &kes_public, &mut rng, &domain);
+        let merchant_enc = EncryptedSecret::<Ed25519>::encrypt(merchant_secret.clone(), &kes_public, &mut rng, &domain);
+
+        // Feed into KesEstablishing and decrypt
+        let mut kes = KesEstablishing::<Ed25519>::new(Zeroizing::new(kes_secret), kes_public);
+        kes.set_channel_id(channel_id);
+        kes.receive_customer_offset(customer_enc).unwrap();
+        kes.receive_merchant_offset(merchant_enc).unwrap();
+
+        let offsets = kes.decrypt_offsets().unwrap();
+        assert_eq!(offsets.customer().secret().ct_eq(&customer_scalar).unwrap_u8(), 1);
+        assert_eq!(offsets.merchant().secret().ct_eq(&merchant_scalar).unwrap_u8(), 1);
+    }
+
+    #[test]
+    fn decrypt_offsets_rejects_wrong_channel_id() {
+        let mut rng = rand_core::OsRng;
+        let channel_id = test_channel_id();
+        let wrong_channel_id =
+            ChannelId::from_str("XGCaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+
+        // KES keypair
+        let kes_secret = EdScalar::random(&mut rng);
+        let kes_public = EdwardsPoint::generator() * &kes_secret;
+
+        // Encrypt with the real channel ID
+        let domain = kes_offset_domain(&channel_id);
+        let customer_scalar = EdScalar::random(&mut rng);
+        let customer_enc = EncryptedSecret::<Ed25519>::encrypt(
+            SecretWithRole::new(customer_scalar, ChannelRole::Customer),
+            &kes_public,
+            &mut rng,
+            &domain,
+        );
+        let merchant_enc = EncryptedSecret::<Ed25519>::encrypt(
+            SecretWithRole::new(EdScalar::random(&mut rng), ChannelRole::Merchant),
+            &kes_public,
+            &mut rng,
+            &domain,
+        );
+
+        // Decrypt with a different channel ID — domain mismatch should produce wrong values
+        let mut kes = KesEstablishing::<Ed25519>::new(Zeroizing::new(kes_secret), kes_public);
+        kes.set_channel_id(wrong_channel_id);
+        kes.receive_customer_offset(customer_enc).unwrap();
+        kes.receive_merchant_offset(merchant_enc).unwrap();
+
+        let offsets = kes.decrypt_offsets().unwrap();
+        assert_eq!(
+            offsets.customer().secret().ct_eq(&customer_scalar).unwrap_u8(),
+            0,
+            "Decryption with wrong channel ID should not recover the original scalar"
+        );
+    }
+
+    #[test]
+    fn decrypt_offsets_requires_channel_id() {
+        let mut rng = rand_core::OsRng;
+        let kes_secret = EdScalar::random(&mut rng);
+        let kes_public = EdwardsPoint::generator() * &kes_secret;
+        let kes = KesEstablishing::<Ed25519>::new(Zeroizing::new(kes_secret), kes_public);
+
+        let err = kes.decrypt_offsets().unwrap_err();
+        assert!(matches!(err, KesEstablishError::MissingChannelId), "got: {err:?}");
+    }
 }

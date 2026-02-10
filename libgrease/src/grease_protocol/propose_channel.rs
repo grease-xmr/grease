@@ -4,7 +4,6 @@ use ciphersuite::{Ciphersuite, Ed25519};
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::Zeroizing;
 
 /// A record that (usually) the merchant will send out-of-band to the customer to give them the seed information they
 /// need to complete a new channel proposal.
@@ -38,7 +37,6 @@ pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
 pub struct MerchantSeedBuilder<KC: Ciphersuite> {
     network: Network,
     kes_type: KesImplementation,
-    channel_secret: Zeroizing<KC::F>,
     kes_config: Option<KesConfiguration<KC>>,
     initial_balances: Option<Balances>,
     closing_address: Option<Address>,
@@ -47,11 +45,10 @@ pub struct MerchantSeedBuilder<KC: Ciphersuite> {
 }
 
 impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
-    pub fn new(network: Network, kes_type: KesImplementation, channel_secret: Zeroizing<KC::F>) -> Self {
+    pub fn new(network: Network, kes_type: KesImplementation) -> Self {
         MerchantSeedBuilder {
             network,
             kes_type,
-            channel_secret,
             kes_config: None,
             initial_balances: None,
             closing_address: None,
@@ -75,9 +72,8 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
         self
     }
 
-    /// Calculate the channel nonce public key from the given secret. The customer will use this key to determine a shared secret for the
-    /// channel.
-    pub fn with_channel_secret_nonce(mut self, secret: &KC::F) -> Self {
+    /// Calculate the ephemeral channel public key $P_g$ from the channel secret, $hat(k)_a$. The secret is not stored.
+    pub fn derive_channel_pubkey(mut self, secret: &KC::F) -> Self {
         let channel_key = KC::generator() * *secret;
         self.channel_key = Some(channel_key);
         self

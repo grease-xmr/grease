@@ -280,12 +280,8 @@ where
         let kes_pubkey = self.metadata.kes_configuration().kes_public_key;
         let snark_scalar = witness.as_snark_scalar();
         let secret_with_role = SecretWithRole::new(snark_scalar, HasRole::role(self));
-        self.encrypted_offset = Some(EncryptedSecret::encrypt(
-            secret_with_role,
-            &kes_pubkey,
-            rng,
-            b"GreaseEncryptToKES",
-        ));
+        let domain = crate::grease_protocol::kes_establishing::kes_offset_domain(&self.metadata.channel_id().name());
+        self.encrypted_offset = Some(EncryptedSecret::encrypt(secret_with_role, &kes_pubkey, rng, domain));
 
         self.channel_witness = Some(witness);
         debug!("Channel secrets initialized: DLEQ proof, encrypted offset, and witness stored.");

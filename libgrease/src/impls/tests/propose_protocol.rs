@@ -42,10 +42,10 @@ fn build_merchant_seed_with_balances(
     let peer_pk = XmrPoint::generator() * &*channel_secret;
     let kes_config = KesConfiguration::new_with_defaults(kes_pk, peer_pk);
     let merchant_secret = XmrScalar::random(&mut rand_core::OsRng);
-    let seed = MerchantSeedBuilder::new(Network::Mainnet, KesImplementation::StandaloneEd25519, channel_secret.clone())
+    let seed = MerchantSeedBuilder::new(Network::Mainnet, KesImplementation::StandaloneEd25519)
         .with_kes_config(kes_config)
         .with_initial_balances(balances)
-        .with_channel_secret_nonce(&merchant_secret)
+        .derive_channel_pubkey(&merchant_secret)
         .with_channel_nonce(100)
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap())
         .build()

@@ -27,6 +27,7 @@ use ciphersuite::group::ff::Field;
 use ciphersuite::group::Group;
 use ciphersuite::{Ciphersuite, Ed25519};
 use rand_core::OsRng;
+use std::str::FromStr;
 use zeroize::Zeroizing;
 
 use super::propose_protocol::{establish_channel, establish_channel_with_kes_key};
@@ -470,10 +471,13 @@ fn test_kes_establishing_flow() {
     let customer_secret = SecretWithRole::new(crate::XmrScalar::random(&mut rng), ChannelRole::Customer);
     let merchant_secret = SecretWithRole::new(crate::XmrScalar::random(&mut rng), ChannelRole::Merchant);
 
-    let customer_chi =
-        EncryptedSecret::<Ed25519>::encrypt(customer_secret.clone(), &kes_public, &mut rng, b"GreaseEncryptToKES");
-    let merchant_chi =
-        EncryptedSecret::<Ed25519>::encrypt(merchant_secret.clone(), &kes_public, &mut rng, b"GreaseEncryptToKES");
+    let channel_id =
+        crate::channel_id::ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383")
+            .unwrap();
+    let domain = crate::grease_protocol::kes_establishing::kes_offset_domain(&channel_id);
+    let customer_chi = EncryptedSecret::<Ed25519>::encrypt(customer_secret.clone(), &kes_public, &mut rng, &domain);
+    let merchant_chi = EncryptedSecret::<Ed25519>::encrypt(merchant_secret.clone(), &kes_public, &mut rng, &domain);
+    kes.set_channel_id(channel_id);
 
     kes.receive_customer_offset(customer_chi).expect("receive customer offset");
     assert!(!kes.has_both_offsets());
@@ -506,8 +510,11 @@ fn test_kes_establishing_wrong_role() {
 
     // Create a merchant-role secret but try to submit as customer
     let merchant_secret = SecretWithRole::new(crate::XmrScalar::random(&mut rng), ChannelRole::Merchant);
-    let merchant_chi =
-        EncryptedSecret::<Ed25519>::encrypt(merchant_secret, &kes_public, &mut rng, b"GreaseEncryptToKES");
+    let channel_id =
+        crate::channel_id::ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383")
+            .unwrap();
+    let domain = crate::grease_protocol::kes_establishing::kes_offset_domain(&channel_id);
+    let merchant_chi = EncryptedSecret::<Ed25519>::encrypt(merchant_secret, &kes_public, &mut rng, &domain);
 
     let err = kes.receive_customer_offset(merchant_chi).unwrap_err();
     assert!(
@@ -524,8 +531,23 @@ fn test_kes_establishing_missing_offset() {
     let mut rng = OsRng;
     let kes_secret = Zeroizing::new(crate::XmrScalar::random(&mut rng));
     let kes_public = Ed25519::generator() * *kes_secret;
-    let kes = KesEstablishing::<Ed25519>::new(kes_secret, kes_public);
+    let mut kes = KesEstablishing::<Ed25519>::new(kes_secret, kes_public);
 
+    // Without a channel ID, decrypt_offsets should fail with MissingChannelId
+    let err = kes.decrypt_offsets().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::grease_protocol::kes_establishing::KesEstablishError::MissingChannelId
+        ),
+        "Should report missing channel ID, got: {err:?}"
+    );
+
+    // With a channel ID but no offsets, should fail with MissingOffset
+    let channel_id =
+        crate::channel_id::ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383")
+            .unwrap();
+    kes.set_channel_id(channel_id);
     let err = kes.decrypt_offsets().unwrap_err();
     assert!(
         matches!(
@@ -574,6 +596,8 @@ fn kes_with_offsets_from_flow(
 
     // Use the already-encrypted offsets generated during init_protocol_context.
     // These were encrypted to the KES public key from channel metadata.
+    let channel_id = merchant.metadata.channel_id().name();
+    kes.set_channel_id(channel_id);
     let customer_chi = customer.encrypted_offset.clone().expect("customer encrypted offset");
     let merchant_chi = merchant.encrypted_offset.clone().expect("merchant encrypted offset");
 
@@ -917,11 +941,13 @@ fn test_payload_signature_rejects_tampered_offset() {
         ChannelRole::Customer,
     );
     let kes_pubkey = merchant.state().metadata().kes_configuration().kes_public_key;
+    let channel_id = merchant.state().metadata().channel_id().name();
+    let domain = crate::grease_protocol::kes_establishing::kes_offset_domain(&channel_id);
     customer_pkg.encrypted_offset = crate::cryptography::secret_encryption::EncryptedSecret::<Ed25519>::encrypt(
         tampered_secret,
         &kes_pubkey,
         &mut rng,
-        b"GreaseEncryptToKES",
+        &domain,
     );
 
     let err = merchant.receive_customer_init_package(customer_pkg).unwrap_err();
