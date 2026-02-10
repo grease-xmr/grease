@@ -372,7 +372,7 @@ pub enum ProposeProtocolError {
     #[error("Missing required information: {0}")]
     MissingInformation(String),
 
-    #[error("Invalid proposal: {0}")]
+    #[error("Invalid closing address in proposal: {0}")]
     ClosingAddressError(#[from] ClosingAddressError),
 
     #[error("Invalid seed info: {0}")]
