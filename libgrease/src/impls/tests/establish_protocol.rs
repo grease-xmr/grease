@@ -75,8 +75,8 @@ pub fn full_establish_flow() -> (EstablishingState, EstablishingState) {
 pub fn full_establish_flow_with_kes_key() -> (EstablishingState, EstablishingState, crate::XmrScalar) {
     let (merchant_state, customer_state, kes_key) = establish_with_protocol_context_and_kes_key();
 
-    let mut merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
     let mut rng = OsRng;
 
     // Exchange wallet public keys
@@ -170,7 +170,7 @@ fn test_channel_secrets_not_initialized_error() {
 #[test]
 fn test_merchant_generate_init_package() {
     let (merchant_state, _) = establish_with_protocol_context();
-    let mut merchant = MerchantEstablishing::new(merchant_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
     let mut rng = OsRng;
 
     let package = merchant.generate_init_package(&mut rng).expect("generate merchant init package");
@@ -195,7 +195,7 @@ fn test_merchant_generate_init_package() {
 #[test]
 fn test_customer_generate_init_package() {
     let (_, customer_state) = establish_with_protocol_context();
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
     let mut rng = OsRng;
 
     let package = customer.generate_init_package(&mut rng).expect("generate customer init package");
@@ -221,8 +221,8 @@ fn test_customer_generate_init_package() {
 fn test_exchange_init_packages() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
 
-    let mut merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet public keys first (required for verification)
     let merchant_shared_key = merchant.state().wallet().shared_public_key();
@@ -257,8 +257,8 @@ fn test_receive_bad_dleq_proof() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
     let mut rng = OsRng;
 
-    let mut merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys (merchant needs customer's key to verify)
     let customer_shared_key = customer.state().wallet().shared_public_key();
@@ -286,8 +286,8 @@ fn test_receive_bad_adapter_sig() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
     let mut rng = OsRng;
 
-    let mut merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys — but give the merchant a *wrong* peer key so verification fails
     let customer_shared_key = customer.state().wallet().shared_public_key();
@@ -321,8 +321,8 @@ fn test_receive_bad_adapter_sig() {
 fn test_customer_verify_merchant_commitment() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
 
-    let merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Merchant commits to their shared public key, customer stores the commitment
     let commitment = merchant.state().wallet().commit_to_public_key();
@@ -341,8 +341,8 @@ fn test_customer_verify_merchant_commitment_mismatch() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
     let mut rng = OsRng;
 
-    let merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Create a commitment from a different (rogue) keypair
     let rogue_keyring = crate::impls::multisig::MultisigWalletKeyRing::random(&mut rng, ChannelRole::Merchant);
@@ -563,17 +563,23 @@ fn test_kes_establishing_missing_offset() {
 // ============================================================================
 
 #[test]
-#[should_panic(expected = "MerchantEstablishing requires a merchant state")]
 fn test_merchant_wrapper_rejects_customer() {
     let (_, customer) = establish_channel();
-    let _ = MerchantEstablishing::new(customer);
+    match MerchantEstablishing::new(customer) {
+        Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: ChannelRole::Customer }) => {}
+        Err(e) => panic!("expected WrongRole, got: {e:?}"),
+        Ok(_) => panic!("expected Err, got Ok"),
+    }
 }
 
 #[test]
-#[should_panic(expected = "CustomerEstablishing requires a customer state")]
 fn test_customer_wrapper_rejects_merchant() {
     let (merchant, _) = establish_channel();
-    let _ = CustomerEstablishing::new(merchant);
+    match CustomerEstablishing::new(merchant) {
+        Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: ChannelRole::Merchant }) => {}
+        Err(e) => panic!("expected WrongRole, got: {e:?}"),
+        Ok(_) => panic!("expected Err, got Ok"),
+    }
 }
 
 // ============================================================================
@@ -799,7 +805,7 @@ fn test_merchant_as_kes_proxy() {
     let mut rng = OsRng;
 
     // Wrap in role wrappers
-    let merchant = MerchantEstablishing::new(merchant_state);
+    let merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
 
     // Merchant has both offsets (own + customer's from the init package exchange)
     assert!(merchant.has_both_offsets(), "merchant should have both offsets after full flow");
@@ -924,8 +930,8 @@ fn test_payload_signature_rejects_tampered_offset() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
     let mut rng = OsRng;
 
-    let mut merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys
     let merchant_shared_key = merchant.state().wallet().shared_public_key();
@@ -964,8 +970,8 @@ fn test_payload_signature_rejects_wrong_signer() {
     let (merchant_state, customer_state) = establish_with_protocol_context();
     let mut rng = OsRng;
 
-    let mut merchant = MerchantEstablishing::new(merchant_state);
-    let mut customer = CustomerEstablishing::new(customer_state);
+    let mut merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys
     let merchant_shared_key = merchant.state().wallet().shared_public_key();
@@ -992,7 +998,7 @@ fn test_kes_rejects_invalid_bundle_signature() {
     use crate::grease_protocol::kes_establishing::KesEstablishError;
 
     let (merchant_state, customer_state, kes_key) = full_establish_flow_with_kes_key();
-    let merchant = MerchantEstablishing::new(merchant_state);
+    let merchant = MerchantEstablishing::new(merchant_state).expect("merchant role");
     let mut bundle = merchant.bundle_for_kes().expect("bundle_for_kes");
 
     // Tamper with the customer's payload signature

@@ -569,10 +569,13 @@ where
     pub fn verify_kes_proof(&self) -> Result<(), EstablishError> {
         let kes_proof =
             self.kes_proof.as_ref().ok_or_else(|| EstablishError::MissingInformation("KES proof".into()))?;
-        let my_dleq =
-            self.dleq_proof.as_ref().ok_or_else(|| EstablishError::MissingInformation("Peer DLEQ proof".into()))?;
-        let peer_dleq =
-            self.peer_dleq_proof().ok_or_else(|| EstablishError::MissingInformation("Peer DLEQ proof".into()))?;
+        let my_dleq = self
+            .dleq_proof
+            .as_ref()
+            .ok_or_else(|| EstablishError::MissingInformation(format!("{} DLEQ proof", HasRole::role(self))))?;
+        let peer_dleq = self
+            .peer_dleq_proof()
+            .ok_or_else(|| EstablishError::MissingInformation(format!("{} DLEQ proof", HasRole::role(self).other())))?;
         let kes_pubkey = self.metadata.kes_configuration().kes_public_key;
         // Determine which offset is customer/merchant based on our role
         let (customer_offset, merchant_offset) = match HasRole::role(self) {
@@ -705,14 +708,13 @@ where
     KC: FrostCurve,
     Ed25519: Dleq<SF> + Dleq<KC>,
 {
-    /// Wrap an `EstablishingState`. Panics if the state is not for a merchant.
-    pub fn new(state: EstablishingState<SF, KC>) -> Self {
-        assert_eq!(
-            HasRole::role(&state),
-            ChannelRole::Merchant,
-            "MerchantEstablishing requires a merchant state"
-        );
-        Self { inner: state }
+    /// Wrap an `EstablishingState`, returning an error if the state is not for a merchant.
+    pub fn new(state: EstablishingState<SF, KC>) -> Result<Self, EstablishError> {
+        let role = HasRole::role(&state);
+        if role != ChannelRole::Merchant {
+            return Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: role });
+        }
+        Ok(Self { inner: state })
     }
 
     /// Unwrap and return the underlying `EstablishingState`.
@@ -843,14 +845,13 @@ where
     KC: FrostCurve,
     Ed25519: Dleq<SF> + Dleq<KC>,
 {
-    /// Wrap an `EstablishingState`. Panics if the state is not for a customer.
-    pub fn new(state: EstablishingState<SF, KC>) -> Self {
-        assert_eq!(
-            HasRole::role(&state),
-            ChannelRole::Customer,
-            "CustomerEstablishing requires a customer state"
-        );
-        Self { inner: state }
+    /// Wrap an `EstablishingState`, returning an error if the state is not for a customer.
+    pub fn new(state: EstablishingState<SF, KC>) -> Result<Self, EstablishError> {
+        let role = HasRole::role(&state);
+        if role != ChannelRole::Customer {
+            return Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: role });
+        }
+        Ok(Self { inner: state })
     }
 
     /// Unwrap and return the underlying `EstablishingState`.

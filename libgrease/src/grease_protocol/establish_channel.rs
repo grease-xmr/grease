@@ -60,6 +60,8 @@ pub enum EstablishError {
     KesProofError(#[from] KesProofError),
     #[error("Payload signature verification failed: {0}")]
     InvalidPayloadSignature(String),
+    #[error("Expected {expected} role but got {got}")]
+    WrongRole { expected: crate::payment_channel::ChannelRole, got: crate::payment_channel::ChannelRole },
 }
 
 // Backwards-compatible alias during migration
