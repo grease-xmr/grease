@@ -4,6 +4,7 @@ use crate::cryptography::dleq::Dleq;
 use crate::cryptography::serializable_secret::SerializableSecret;
 pub use crate::grease_protocol::MerchantSeedInfo;
 use crate::monero::data_objects::ClosingAddresses;
+use crate::monero::error::ClosingAddressError;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::error::InvalidProposal;
 use crate::state_machine::establishing_channel::EstablishingState;
@@ -18,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 // ====================== Message types ======================
 
 /// The peer playing the role of Customer sends this proposal to the merchant to initiate a new channel.
@@ -77,7 +77,7 @@ where
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
     /// The customer's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
-    pub channel_secret: SerializableSecret<KC::F>,
+    channel_secret: SerializableSecret<KC::F>,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -108,9 +108,9 @@ where
         channel_secret: Zeroizing<KC::F>,
         customer_closing_address: Address,
         customer_nonce: u64,
-    ) -> Self {
+    ) -> Result<Self, ProposeProtocolError> {
         let closing_addresses =
-            ClosingAddresses { merchant: seed.merchant_closing_address, customer: customer_closing_address };
+            ClosingAddresses::new_from_addresses(customer_closing_address, seed.merchant_closing_address)?;
         let customer_channel_key = seed.merchant_channel_key * &*channel_secret;
         let channel_id = ChannelIdMetadata::new(
             seed.merchant_channel_key,
@@ -123,7 +123,7 @@ where
         );
         let metadata =
             StaticChannelMetadata::new(seed.network, ChannelRole::Customer, channel_id, seed.kes_type.clone());
-        ChannelProposer { metadata, seed_info: seed, channel_secret: channel_secret.into(), _sf: PhantomData }
+        Ok(ChannelProposer { metadata, seed_info: seed, channel_secret: channel_secret.into(), _sf: PhantomData })
     }
 
     /// Generate a NewChannelProposal payload to send to the merchant.
@@ -158,7 +158,7 @@ where
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
     /// The customer's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
-    pub channel_secret: SerializableSecret<KC::F>,
+    pub(crate) channel_secret: SerializableSecret<KC::F>,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -315,7 +315,7 @@ where
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
     /// The merchant's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
-    pub channel_secret: SerializableSecret<KC::F>,
+    pub(crate) channel_secret: SerializableSecret<KC::F>,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -371,6 +371,9 @@ where
 pub enum ProposeProtocolError {
     #[error("Missing required information: {0}")]
     MissingInformation(String),
+
+    #[error("Invalid proposal: {0}")]
+    ClosingAddressError(#[from] ClosingAddressError),
 
     #[error("Invalid seed info: {0}")]
     InvalidSeedInfo(String),

@@ -119,6 +119,10 @@ impl ClosingAddresses {
     pub fn new(customer: &str, merchant: &str) -> Result<Self, ClosingAddressError> {
         let customer = Address::from_str(customer).map_err(|e| ClosingAddressError::InvalidAddress(e.to_string()))?;
         let merchant = Address::from_str(merchant).map_err(|e| ClosingAddressError::InvalidAddress(e.to_string()))?;
+        Self::new_from_addresses(customer, merchant)
+    }
+
+    pub fn new_from_addresses(customer: Address, merchant: Address) -> Result<Self, ClosingAddressError> {
         if customer == merchant {
             return Err(ClosingAddressError::IdenticalAddresses);
         }

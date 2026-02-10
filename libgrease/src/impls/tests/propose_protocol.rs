@@ -61,7 +61,7 @@ fn build_merchant_seed(kes_private_key: &XmrScalar) -> (MerchantSeedInfo, Zeroiz
 fn customer_creates_proposal(seed: MerchantSeedInfo) -> ChannelProposer {
     let customer_secret = Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng));
     let customer_addr = CUSTOMER_ADDRESS.parse().unwrap();
-    let proposer = ChannelProposer::new(seed, customer_secret, customer_addr, 200);
+    let proposer = ChannelProposer::new(seed, customer_secret, customer_addr, 200).expect("should create proposer");
     assert_eq!(proposer.role(), ChannelRole::Customer);
     proposer
 }
