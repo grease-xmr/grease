@@ -67,12 +67,13 @@ pub fn convert_scalar_dleq<From: PrimeFieldBits + Zeroize, To: PrimeFieldBits>(s
 /// ## De- and Serialization
 ///
 /// The ChannelWitness serializes and deserializes via its Ed25519 scalar representation, which encrypts the
-/// value at rest. A
+/// value at rest.
 ///
 /// On deserialization, the scalar is validated to ensure it is also valid in the SNARK curve's scalar field.
+///
 /// # Panics
 ///
-/// Panics if called without an active crypto context. Use
+/// Panics if called without an active encryption context. Use
 /// [`with_encryption_context`](crate::cryptography::encryption_context::with_encryption_context)
 /// to wrap serialization operations.
 #[derive(Clone, PartialEq, Eq)]

@@ -10,7 +10,7 @@ default = ["mocks"]
 [dependencies]
 
 acir_field = { version = "1.0.0-beta.15", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "1b9f44205b" }
-aes-gcm = "0.10"
+aes-gcm = "0.10.3"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 taceo-poseidon2 = { version = "0.2.1", features = ["bn254", "t2", "t3"] }

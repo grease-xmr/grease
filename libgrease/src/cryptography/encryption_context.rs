@@ -48,7 +48,6 @@
 //! on a dedicated thread.
 
 use std::cell::RefCell;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -129,27 +128,6 @@ pub fn clear_encryption_context() {
     ENCRYPTION_CONTEXT.with(|c| {
         *c.borrow_mut() = None;
     });
-}
-
-/// RAII guard for the encryption context.
-///
-/// Sets the encryption context when created, clears it when dropped.
-/// Intentionally `!Send` and `!Sync` to prevent cross-thread misuse.
-pub struct EncryptionContextGuard {
-    _not_send: PhantomData<*const ()>,
-}
-
-impl EncryptionContextGuard {
-    pub fn new(ctx: Arc<dyn EncryptionContext>) -> Self {
-        set_encryption_context(ctx);
-        Self { _not_send: PhantomData }
-    }
-}
-
-impl Drop for EncryptionContextGuard {
-    fn drop(&mut self) {
-        clear_encryption_context();
-    }
 }
 
 // ---- AES-256-GCM Implementation ----
@@ -297,10 +275,5 @@ mod tests {
         }));
         assert!(result.is_err());
         assert!(!has_encryption_context());
-    }
-
-    #[test]
-    fn guard_is_not_send() {
-        static_assertions::assert_not_impl_any!(EncryptionContextGuard: Send, Sync);
     }
 }

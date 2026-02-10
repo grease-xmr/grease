@@ -17,7 +17,7 @@ stateDiagram-v2
         end note
     }
 
-    Proposing --> Establishing: ProposalAccepted / MerchantAcceptedProposal
+    Proposing --> Establishing: ProposalAcceptedByMerchant
     Proposing --> Closed: RejectProposal / Timeout
 
     state Establishing {
