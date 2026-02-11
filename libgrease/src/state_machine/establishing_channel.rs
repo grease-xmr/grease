@@ -41,7 +41,7 @@ use zeroize::{Zeroize, Zeroizing};
 /// The generic parameter `SF` specifies the SNARK-friendly curve (defaults to Grumpkin).
 /// The generic parameter `KC` specifies the Curve that the KES has elected to use. By default, the KES uses Ed25519,
 /// the same curve as Monero.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct EstablishingState<SF = Grumpkin, KC = Ed25519>
 where
@@ -72,9 +72,8 @@ where
     /// Wallet key ring for the multisig protocol during establishment.
     #[serde(skip)]
     pub(crate) wallet_keyring: Option<MultisigWalletKeyRing>,
-    /// The initial adapter offset encrypted for the KES.
-    #[serde(skip)]
     /// The encrypted initial adapter offset to be sent to the KES, ($chi$).
+    #[serde(skip)]
     pub(crate) encrypted_offset: Option<EncryptedSecret<KC>>,
     /// The peer's encrypted initial adapter offset to be sent to the KES, ($chi$).
     #[serde(skip)]
@@ -111,26 +110,27 @@ where
 /// Type alias for the default curve types (Grumpkin + Ed25519).
 pub type DefaultEstablishingState = EstablishingState<Grumpkin>;
 
-impl<SF, KC> Clone for EstablishingState<SF, KC>
+
+impl<SF, KC> EstablishingState<SF, KC>
 where
     SF: FrostCurve,
     KC: FrostCurve,
     Ed25519: Dleq<SF> + Dleq<KC>,
 {
-    fn clone(&self) -> Self {
-        Self {
-            metadata: self.metadata.clone(),
-            multisig_wallet: self.multisig_wallet.clone(),
-            funding_transaction_ids: self.funding_transaction_ids.clone(),
-            kes_proof: self.kes_proof.clone(),
-            funding_tx_pipe: self.funding_tx_pipe.clone(),
-            channel_nonce: self.channel_nonce.clone(),
-            wallet_keyring: self.wallet_keyring.clone(),
-            peer_dleq_proof: self.peer_dleq_proof.clone(),
+    pub fn new(metadata: StaticChannelMetadata<KC>, channel_nonce: ChannelNonce<KC>) -> Self {
+        EstablishingState {
+            metadata,
+            multisig_wallet: None,
+            funding_transaction_ids: HashMap::new(),
+            kes_proof: None,
+            funding_tx_pipe: None,
+            channel_nonce,
+            wallet_keyring: None,
+            peer_dleq_proof: None,
             dleq_proof: None,
             adapted_sig: None,
-            peer_adapted_sig: self.peer_adapted_sig.clone(),
-            peer_encrypted_offset: self.peer_encrypted_offset.clone(),
+            peer_adapted_sig: None,
+            peer_encrypted_offset: None,
             channel_witness: None,
             payload_sig: None,
             peer_payload_sig: None,
@@ -139,14 +139,6 @@ where
             encrypted_offset: None,
         }
     }
-}
-
-impl<SF, KC> EstablishingState<SF, KC>
-where
-    SF: FrostCurve,
-    KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
-{
     pub fn to_channel_state(self) -> ChannelState<SF, KC> {
         ChannelState::Establishing(self)
     }
@@ -592,26 +584,7 @@ where
 {
     fn from(state: AwaitingProposalResponse<SF, KC>) -> Self {
         let channel_nonce = channel_nonce_from_proposal(state.channel_secret, &state.metadata);
-        EstablishingState {
-            metadata: state.metadata,
-            multisig_wallet: None,
-            funding_transaction_ids: HashMap::new(),
-            kes_proof: None,
-            funding_tx_pipe: None,
-            channel_nonce,
-            wallet_keyring: None,
-            peer_dleq_proof: None,
-            dleq_proof: None,
-            adapted_sig: None,
-            peer_adapted_sig: None,
-            peer_encrypted_offset: None,
-            channel_witness: None,
-            payload_sig: None,
-            peer_payload_sig: None,
-            peer_nonce_pubkey: None,
-            _sf: PhantomData,
-            encrypted_offset: None,
-        }
+        EstablishingState::new(state.metadata, channel_nonce)
     }
 }
 
@@ -623,26 +596,7 @@ where
 {
     fn from(state: AwaitingConfirmation<SF, KC>) -> Self {
         let channel_nonce = channel_nonce_from_proposal(state.channel_secret, &state.metadata);
-        EstablishingState {
-            metadata: state.metadata,
-            multisig_wallet: None,
-            funding_transaction_ids: HashMap::new(),
-            kes_proof: None,
-            funding_tx_pipe: None,
-            channel_nonce,
-            wallet_keyring: None,
-            peer_dleq_proof: None,
-            dleq_proof: None,
-            adapted_sig: None,
-            peer_adapted_sig: None,
-            peer_encrypted_offset: None,
-            channel_witness: None,
-            payload_sig: None,
-            peer_payload_sig: None,
-            peer_nonce_pubkey: None,
-            _sf: PhantomData,
-            encrypted_offset: None,
-        }
+        EstablishingState::new(state.metadata, channel_nonce)
     }
 }
 

@@ -138,12 +138,6 @@ where
         };
         (awaiting_response, proposal)
     }
-
-    pub fn validate_seed_info(&self) -> Result<(), ProposeProtocolError> {
-        // TODO - check that the KES and initial balances are acceptable
-        // If this fails, we should abandon the channel creation
-        Ok(())
-    }
 }
 
 /// C2: Customer is waiting for the merchant's response to their proposal.
