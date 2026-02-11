@@ -10,7 +10,7 @@ use rand_core::{CryptoRng, RngCore};
 ///
 /// This struct is designed to be used in the context of a payment channel, where each party has a role
 /// (customer or merchant) and needs to manage their own keys as well as information about the peer's keys.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MultisigWalletKeyRing {
     pub role: ChannelRole,
     pub partial_spend_key: Curve25519Secret,

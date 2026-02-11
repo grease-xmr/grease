@@ -14,6 +14,7 @@ use modular_frost::algorithm::SchnorrSignature;
 use modular_frost::curve::Curve;
 use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
+use serde::Deserialize;
 use std::io;
 use std::io::{Read, Write};
 use thiserror::Error;
@@ -361,6 +362,30 @@ where
         self.proof.write(writer)?;
         self.public_points.write(writer)?;
         Ok(())
+    }
+}
+
+impl<SF, D> serde::Serialize for DleqProof<SF, D>
+where
+    SF: Curve,
+    D: Dleq<SF>,
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut bytes = Vec::new();
+        Writable::write(self, &mut bytes).map_err(serde::ser::Error::custom)?;
+        hex::encode(&bytes).serialize(serializer)
+    }
+}
+
+impl<'de, SF, D> serde::Deserialize<'de> for DleqProof<SF, D>
+where
+    SF: Curve,
+    D: Dleq<SF>,
+{
+    fn deserialize<De: serde::Deserializer<'de>>(de: De) -> Result<Self, De::Error> {
+        let hex_str = String::deserialize(de)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        Self::read(&mut &bytes[..]).map_err(serde::de::Error::custom)
     }
 }
 

@@ -856,16 +856,27 @@ fn test_merchant_as_kes_proxy() {
 // Serialization roundtrip
 // ============================================================================
 
+/// Full roundtrip test with all fields populated to non-default values.
+///
+/// Uses `full_establish_flow` to get a merchant state with all protocol context fields set
+/// (wallet keyring, DLEQ proofs, adapted signatures, encrypted offsets, channel witness,
+/// payload signatures, peer nonce pubkey), then adds multisig wallet, funding transactions,
+/// KES proof, and funding pipe data.
+///
+/// Verifies that every field survives JSON serialization and deserialization, including
+/// encrypted-at-rest fields (channel_witness, wallet_keyring).
 #[test]
 fn test_establishing_state_serialization_roundtrip() {
     use crate::amount::MoneroAmount;
     use crate::cryptography::encryption_context::{with_encryption_context, AesGcmEncryption};
+    use crate::cryptography::Offset;
+    use ciphersuite::group::ff::PrimeField;
     use std::sync::Arc;
 
-    let (mut merchant, _customer, _kes_key) = establish_with_protocol_context_and_kes_key();
+    let (mut merchant, _customer, _kes_key) = full_establish_flow_with_kes_key();
     let mut rng = OsRng;
 
-    // Populate serialized fields
+    // Populate remaining fields
     let wallet = crate::state_machine::lifecycle::test::create_wallet(ChannelRole::Merchant);
     merchant.wallet_created(wallet);
     merchant.save_funding_tx_pipe(vec![0xDE, 0xAD]);
@@ -885,8 +896,8 @@ fn test_establishing_state_serialization_roundtrip() {
     };
     merchant.funding_tx_confirmed(tx2);
 
-    // Generate init package to populate adapted_sig (for completeness)
-    let _pkg = merchant.generate_init_package(&mut rng).expect("generate init package");
+    // Verify all Option fields are populated before serialization
+    assert!(merchant.requirements_met());
 
     // Save original values for comparison
     let original_role = HasRole::role(&merchant);
@@ -894,16 +905,32 @@ fn test_establishing_state_serialization_roundtrip() {
     let original_nonce = *merchant.channel_nonce.nonce();
     let original_tx_count = merchant.funding_transaction_ids.len();
     let original_pipe = merchant.funding_tx_pipe.clone();
+    let original_witness_offset = *merchant.channel_witness.as_ref().unwrap().offset();
+    let original_keyring_pubkey = merchant.wallet_keyring.as_ref().unwrap().public_key;
+    let original_keyring_role = merchant.wallet_keyring.as_ref().unwrap().role;
+    let original_peer_nonce = merchant.peer_nonce_pubkey.unwrap();
 
     // Serialize with encryption context
     let ctx = Arc::new(AesGcmEncryption::random());
     let json = with_encryption_context(ctx.clone(), || serde_json::to_string(&merchant).expect("serialize"));
 
+    // Verify secrets are encrypted in the serialized output (not plaintext)
+    assert!(
+        json.contains("enc:"),
+        "channel_witness and wallet_keyring secrets should be encrypted"
+    );
+    // The raw witness offset hex should NOT appear in the output
+    let raw_witness_hex = hex::encode(original_witness_offset.to_repr());
+    assert!(
+        !json.contains(&raw_witness_hex),
+        "plaintext witness offset should not appear in serialized JSON"
+    );
+
     // Deserialize with same context
     let recovered: EstablishingState =
         with_encryption_context(ctx, || serde_json::from_str(&json).expect("deserialize"));
 
-    // Assert serialized fields roundtrip correctly
+    // Assert metadata and basic fields
     assert_eq!(HasRole::role(&recovered), original_role);
     assert_eq!(recovered.metadata.channel_id().name(), original_channel_id);
     assert!(recovered.multisig_wallet.is_some(), "multisig wallet should survive roundtrip");
@@ -916,21 +943,50 @@ fn test_establishing_state_serialization_roundtrip() {
         "channel nonce should decrypt correctly"
     );
 
-    // Assert #[serde(skip)] fields are None after deserialize
-    assert!(recovered.wallet_keyring.is_none(), "wallet_keyring should be skipped");
-    assert!(recovered.encrypted_offset.is_none(), "encrypted_offset should be skipped");
+    let keyring = recovered.wallet_keyring.as_ref().expect("wallet_keyring should survive roundtrip");
+    assert_eq!(keyring.role, original_keyring_role);
+    assert_eq!(keyring.public_key, original_keyring_pubkey);
+
     assert!(
-        recovered.peer_encrypted_offset.is_none(),
-        "peer_encrypted_offset should be skipped"
+        recovered.encrypted_offset.is_some(),
+        "encrypted_offset should survive roundtrip"
     );
-    assert!(recovered.peer_dleq_proof.is_none(), "peer_dleq_proof should be skipped");
-    assert!(recovered.dleq_proof.is_none(), "dleq_proof should be skipped");
-    assert!(recovered.adapted_sig.is_none(), "adapted_sig should be skipped");
-    assert!(recovered.peer_adapted_sig.is_none(), "peer_adapted_sig should be skipped");
-    assert!(recovered.channel_witness.is_none(), "channel_witness should be skipped");
-    assert!(recovered.payload_sig.is_none(), "payload_sig should be skipped");
-    assert!(recovered.peer_payload_sig.is_none(), "peer_payload_sig should be skipped");
-    assert!(recovered.peer_nonce_pubkey.is_none(), "peer_nonce_pubkey should be skipped");
+    assert!(
+        recovered.peer_encrypted_offset.is_some(),
+        "peer_encrypted_offset should survive roundtrip"
+    );
+
+    // DLEQ proofs should still verify after roundtrip
+    let dleq = recovered.dleq_proof.as_ref().expect("dleq_proof should survive roundtrip");
+    dleq.verify().expect("own DLEQ proof should verify after roundtrip");
+    let peer_dleq = recovered.peer_dleq_proof.as_ref().expect("peer_dleq_proof should survive roundtrip");
+    peer_dleq.verify().expect("peer DLEQ proof should verify after roundtrip");
+
+    // Adapted signatures should survive roundtrip
+    assert!(recovered.adapted_sig.is_some(), "adapted_sig should survive roundtrip");
+    assert!(
+        recovered.peer_adapted_sig.is_some(),
+        "peer_adapted_sig should survive roundtrip"
+    );
+
+    // Channel witness should decrypt and match (encrypted at rest)
+    let witness = recovered.channel_witness.as_ref().expect("channel_witness should survive roundtrip");
+    assert_eq!(
+        *witness.offset(),
+        original_witness_offset,
+        "channel witness offset should match after roundtrip"
+    );
+
+    // Payload signatures should survive roundtrip
+    assert!(recovered.payload_sig.is_some(), "payload_sig should survive roundtrip");
+    assert!(
+        recovered.peer_payload_sig.is_some(),
+        "peer_payload_sig should survive roundtrip"
+    );
+
+    // Peer nonce pubkey should survive roundtrip
+    let nonce_pk = recovered.peer_nonce_pubkey.expect("peer_nonce_pubkey should survive roundtrip");
+    assert_eq!(nonce_pk, original_peer_nonce, "peer nonce pubkey should match after roundtrip");
 }
 
 // ============================================================================

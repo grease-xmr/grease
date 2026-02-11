@@ -167,6 +167,25 @@ where
     Option::from(G::from_bytes(&repr)).ok_or_else(|| serde::de::Error::custom("Invalid group element encoding"))
 }
 
+/// Serialize an `Option<G>` group element as hex.
+///
+/// Must be used with `#[serde(skip_serializing_if = "Option::is_none")]` — panics if the value is `None`.
+pub fn option_serialize_ge<G: GroupEncoding, S: serde::Serializer>(opt: &Option<G>, s: S) -> Result<S::Ok, S::Error> {
+    match opt {
+        Some(element) => serialize_ge(element, s),
+        None => panic!(r#"Put skip_serializing_if = "Option::is_none" in front of the attribute to serialize"#),
+    }
+}
+
+/// Deserialize an `Option<G>` group element from hex.
+pub fn option_deserialize_ge<'de, G, D>(de: D) -> Result<Option<G>, D::Error>
+where
+    G: GroupEncoding,
+    D: Deserializer<'de>,
+{
+    deserialize_ge(de).map(Some)
+}
+
 /// Serialize a `HashMap<TransactionId, TransactionRecord>` as a sequence of `(key, value)` pairs.
 ///
 /// JSON requires map keys to be strings, but `TransactionId` serializes as an object.

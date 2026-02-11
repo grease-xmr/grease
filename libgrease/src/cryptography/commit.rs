@@ -3,6 +3,7 @@ use crate::grease_protocol::utils::Readable;
 use flexible_transcript::{SecureDigest, Transcript};
 use hex::{FromHex, FromHexError, ToHex};
 use modular_frost::sign::Writable;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 
@@ -79,3 +80,18 @@ impl<D: SecureDigest> PartialEq for HashCommitment256<D> {
 }
 
 impl<D: SecureDigest> Eq for HashCommitment256<D> {}
+
+impl<D: SecureDigest> Serialize for HashCommitment256<D> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        hex::encode(self.data).serialize(s)
+    }
+}
+
+impl<'de, D: SecureDigest> Deserialize<'de> for HashCommitment256<D> {
+    fn deserialize<De: Deserializer<'de>>(de: De) -> Result<Self, De::Error> {
+        let hex_str = String::deserialize(de)?;
+        let mut data = [0u8; 32];
+        hex::decode_to_slice(&hex_str, &mut data).map_err(serde::de::Error::custom)?;
+        Ok(Self::new(data))
+    }
+}

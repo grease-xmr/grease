@@ -42,7 +42,7 @@ use zeroize::{Zeroize, Zeroizing};
 /// The generic parameter `KC` specifies the Curve that the KES has elected to use. By default, the KES uses Ed25519,
 /// the same curve as Monero.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[serde(bound(serialize = "", deserialize = "KC::F: ciphersuite::group::ff::PrimeFieldBits"))]
 pub struct EstablishingState<SF = Grumpkin, KC = Ed25519>
 where
     SF: FrostCurve,
@@ -68,40 +68,44 @@ where
 
     /// The channel nonce ($\hat{k}_a$ or $\hat{k}_b$) with its ECDH-MC shared secret.
     pub(crate) channel_nonce: ChannelNonce<KC>,
-    // --- Protocol Context Fields (ephemeral, not serialized) ---
-    /// Wallet key ring for the multisig protocol during establishment.
-    #[serde(skip)]
+    /// Wallet key ring for the multisig protocol during establishment (encrypted at rest).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) wallet_keyring: Option<MultisigWalletKeyRing>,
-    /// The encrypted initial adapter offset to be sent to the KES, ($chi$).
-    #[serde(skip)]
+    /// The encrypted initial adapter offset to be sent to the KES, ($\chi$).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) encrypted_offset: Option<EncryptedSecret<KC>>,
-    /// The peer's encrypted initial adapter offset to be sent to the KES, ($chi$).
-    #[serde(skip)]
+    /// The peer's encrypted initial adapter offset to be sent to the KES, ($\chi$).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) peer_encrypted_offset: Option<EncryptedSecret<KC>>,
     /// Peer's DLEQ proof received during establishment (public data).
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) peer_dleq_proof: Option<DleqProof<KC, Ed25519>>,
     /// My DLEQ proof for the initial adapter offset (public data).
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) dleq_proof: Option<DleqProof<KC, Ed25519>>,
     /// My adapted signature for the initial channel close transaction (public data).
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) adapted_sig: Option<AdaptedSignature<Ed25519>>,
     /// Peer's adapted signature for the initial channel close transaction received during establishment (public data).
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) peer_adapted_sig: Option<AdaptedSignature<Ed25519>>,
     /// The channel witness, kept between `initialize_channel_secrets` and `generate_init_package`.
-    /// Ephemeral — not serialized or cloned.
-    #[serde(skip)]
+    /// Encrypted at rest via [`ChannelWitness`]'s serde implementation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) channel_witness: Option<ChannelWitness<KC>>,
     /// Our payload signature (signs our init package fields with ephemeral key).
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) payload_sig: Option<SchnorrSignature<KC>>,
     /// Peer's payload signature received during init package exchange.
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) peer_payload_sig: Option<SchnorrSignature<KC>>,
     /// Peer's nonce public key from their init package.
-    #[serde(skip)]
+    #[serde(
+        serialize_with = "crate::helpers::option_serialize_ge",
+        deserialize_with = "crate::helpers::option_deserialize_ge",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub(crate) peer_nonce_pubkey: Option<KC::G>,
     #[serde(skip)]
     _sf: PhantomData<SF>,
@@ -109,7 +113,6 @@ where
 
 /// Type alias for the default curve types (Grumpkin + Ed25519).
 pub type DefaultEstablishingState = EstablishingState<Grumpkin>;
-
 
 impl<SF, KC> EstablishingState<SF, KC>
 where
