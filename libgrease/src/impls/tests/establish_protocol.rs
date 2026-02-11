@@ -16,7 +16,7 @@ use crate::cryptography::secret_encryption::{EncryptedSecret, SecretWithRole};
 use crate::cryptography::{AsXmrPoint, ChannelWitnessPublic};
 use crate::grease_protocol::establish_channel::EstablishError;
 use crate::grease_protocol::kes_establishing::KesEstablishing;
-use crate::grease_protocol::multisig_wallet::{HasPublicKey, LinkedMultisigWallets};
+use crate::grease_protocol::multisig_wallet::{HasPublicKey, LinkedMultisigWallets, MultisigWalletError};
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::commitment_transaction_message;
@@ -80,10 +80,10 @@ pub fn full_establish_flow_with_kes_key() -> (EstablishingState, EstablishingSta
     let mut rng = OsRng;
 
     // Exchange wallet public keys
-    let merchant_shared_key = merchant.state().wallet().shared_public_key();
-    let customer_shared_key = customer.state().wallet().shared_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key(merchant_shared_key);
-    merchant.state_mut().wallet_mut().set_peer_public_key(customer_shared_key);
+    let merchant_shared_key = merchant.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    let customer_shared_key = customer.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(merchant_shared_key));
+    merchant.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(customer_shared_key));
 
     // Generate and exchange init packages
     let merchant_pkg = merchant.generate_init_package(&mut rng).expect("merchant init package");
@@ -108,13 +108,19 @@ fn test_init_protocol_context() {
     let mut merchant = merchant;
     merchant.generate_channel_secrets(&mut rng).expect("channel secret generation");
 
-    assert_eq!(merchant.wallet().role(), ChannelRole::Merchant);
+    assert_eq!(
+        merchant.wallet_keyring.as_ref().map(|w| w.role()).unwrap(),
+        ChannelRole::Merchant
+    );
     assert_eq!(HasRole::role(&merchant), ChannelRole::Merchant);
 
     let mut customer = customer;
     customer.generate_channel_secrets(&mut rng).expect("channel secret generation");
 
-    assert_eq!(customer.wallet().role(), ChannelRole::Customer);
+    assert_eq!(
+        customer.wallet_keyring.as_ref().map(|w| w.role()).unwrap(),
+        ChannelRole::Customer
+    );
     assert_eq!(HasRole::role(&customer), ChannelRole::Customer);
 }
 
@@ -225,10 +231,10 @@ fn test_exchange_init_packages() {
     let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet public keys first (required for verification)
-    let merchant_shared_key = merchant.state().wallet().shared_public_key();
-    let customer_shared_key = customer.state().wallet().shared_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key(merchant_shared_key);
-    merchant.state_mut().wallet_mut().set_peer_public_key(customer_shared_key);
+    let merchant_shared_key = merchant.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    let customer_shared_key = customer.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(merchant_shared_key));
+    merchant.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(customer_shared_key));
 
     // Generate packages
     let mut rng = OsRng;
@@ -261,8 +267,8 @@ fn test_receive_bad_dleq_proof() {
     let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys (merchant needs customer's key to verify)
-    let customer_shared_key = customer.state().wallet().shared_public_key();
-    merchant.state_mut().wallet_mut().set_peer_public_key(customer_shared_key);
+    let customer_shared_key = customer.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    merchant.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(customer_shared_key));
 
     let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer package");
 
@@ -290,8 +296,8 @@ fn test_receive_bad_adapter_sig() {
     let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys — but give the merchant a *wrong* peer key so verification fails
-    let customer_shared_key = customer.state().wallet().shared_public_key();
-    merchant.state_mut().wallet_mut().set_peer_public_key(customer_shared_key);
+    let customer_shared_key = customer.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    merchant.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(customer_shared_key));
 
     let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer package");
 
@@ -325,15 +331,21 @@ fn test_customer_verify_merchant_commitment() {
     let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Merchant commits to their shared public key, customer stores the commitment
-    let commitment = merchant.state().wallet().commit_to_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key_commitment(commitment);
+    let commitment = merchant.state().wallet_keyring.as_ref().map(|w| w.commit_to_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key_commitment(commitment));
 
     // Customer then receives the merchant's actual public key
-    let merchant_shared_key = merchant.state().wallet().shared_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key(merchant_shared_key);
+    let merchant_shared_key = merchant.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(merchant_shared_key));
 
     // Verification should succeed
-    customer.state().verify_merchant_public_key().expect("commitment verification should succeed");
+    customer
+        .state()
+        .wallet_keyring
+        .as_ref()
+        .unwrap()
+        .verify_peer_public_key()
+        .expect("commitment verification should succeed");
 }
 
 #[test]
@@ -347,16 +359,16 @@ fn test_customer_verify_merchant_commitment_mismatch() {
     // Create a commitment from a different (rogue) keypair
     let rogue_keyring = crate::impls::multisig::MultisigWalletKeyRing::random(&mut rng, ChannelRole::Merchant);
     let bad_commitment = rogue_keyring.commit_to_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key_commitment(bad_commitment);
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key_commitment(bad_commitment));
 
     // Set the real merchant's key
-    let merchant_shared_key = merchant.state().wallet().shared_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key(merchant_shared_key);
+    let merchant_shared_key = merchant.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(merchant_shared_key));
 
     // Verification should fail because commitment doesn't match key
-    let err = customer.state().verify_merchant_public_key().unwrap_err();
+    let err = customer.state().wallet_keyring.as_ref().unwrap().verify_peer_public_key().unwrap_err();
     assert!(
-        matches!(err, EstablishError::MultisigWalletError(_)),
+        matches!(err, MultisigWalletError::IncorrectPublicKey),
         "Should fail with wallet error, got: {err:?}"
     );
 }
@@ -934,10 +946,10 @@ fn test_payload_signature_rejects_tampered_offset() {
     let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys
-    let merchant_shared_key = merchant.state().wallet().shared_public_key();
-    let customer_shared_key = customer.state().wallet().shared_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key(merchant_shared_key);
-    merchant.state_mut().wallet_mut().set_peer_public_key(customer_shared_key);
+    let merchant_shared_key = merchant.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    let customer_shared_key = customer.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(merchant_shared_key));
+    merchant.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(customer_shared_key));
 
     let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer package");
 
@@ -974,10 +986,10 @@ fn test_payload_signature_rejects_wrong_signer() {
     let mut customer = CustomerEstablishing::new(customer_state).expect("customer role");
 
     // Exchange wallet keys
-    let merchant_shared_key = merchant.state().wallet().shared_public_key();
-    let customer_shared_key = customer.state().wallet().shared_public_key();
-    customer.state_mut().wallet_mut().set_peer_public_key(merchant_shared_key);
-    merchant.state_mut().wallet_mut().set_peer_public_key(customer_shared_key);
+    let merchant_shared_key = merchant.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    let customer_shared_key = customer.state().wallet_keyring.as_ref().map(|w| w.shared_public_key()).unwrap();
+    customer.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(merchant_shared_key));
+    merchant.state_mut().wallet_keyring.as_mut().map(|w| w.set_peer_public_key(customer_shared_key));
 
     let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer package");
 

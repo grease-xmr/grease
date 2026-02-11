@@ -321,16 +321,6 @@ where
         self.metadata.channel_id()
     }
 
-    /// Provide access to the multisig wallet key ring.
-    pub fn wallet(&self) -> &MultisigWalletKeyRing {
-        self.wallet_keyring.as_ref().expect("Protocol context not initialized. Call init_protocol_context first.")
-    }
-
-    /// Provide mutable access to the multisig wallet key ring.
-    pub fn wallet_mut(&mut self) -> &mut MultisigWalletKeyRing {
-        self.wallet_keyring.as_mut().expect("Protocol context not initialized. Call init_protocol_context first.")
-    }
-
     /// Set the peer's adapted signature.
     pub fn set_peer_adapted_signature(&mut self, adapted_signature: AdaptedSignature<Ed25519>) {
         self.peer_adapted_sig = Some(adapted_signature);
@@ -341,39 +331,10 @@ where
         self.peer_dleq_proof = Some(dleq_proof);
     }
 
-    /// Read the peer's shared public key (includes role) from the given reader and store it.
-    pub fn store_peer_shared_public_key<R: std::io::Read>(&mut self, reader: &mut R) -> Result<(), EstablishError> {
-        let shared_pubkey = SharedPublicKey::read(reader)?;
-        let my_role = HasRole::role(self);
-        if shared_pubkey.role() == my_role {
-            return Err(EstablishError::InvalidDataFromPeer(format!(
-                "Peer public key has incompatible role. It should be {} but received {}",
-                my_role.other(),
-                shared_pubkey.role()
-            )));
-        }
-        self.wallet_mut().set_peer_public_key(shared_pubkey);
-        Ok(())
-    }
-
     /// Read the peer's adapted signature from the given reader and store it.
     pub fn store_peer_adapted_signature<R: std::io::Read>(&mut self, reader: &mut R) -> Result<(), EstablishError> {
         let adapted_signature = AdaptedSignature::<Ed25519>::read(reader)?;
         self.set_peer_adapted_signature(adapted_signature);
-        Ok(())
-    }
-
-    /// Read the peer's public key commitment from the given reader and store it (customer-side).
-    pub fn store_wallet_commitment<R: std::io::Read>(&mut self, reader: &mut R) -> Result<(), EstablishError> {
-        let commitment =
-            PublicKeyCommitment::read(reader).map_err(|e| EstablishError::InvalidCommitment(e.to_string()))?;
-        self.wallet_mut().set_peer_public_key_commitment(commitment);
-        Ok(())
-    }
-
-    /// Verify that the merchant's public key matches the previously stored commitment (customer-side).
-    pub fn verify_merchant_public_key(&self) -> Result<(), EstablishError> {
-        self.wallet().verify_peer_public_key()?;
         Ok(())
     }
 }
