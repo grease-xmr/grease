@@ -760,13 +760,12 @@ fn test_prepare_kes_channel_id() {
 
 #[test]
 fn test_kes_derive_channel_keys_roundtrip() {
-    let (mut merchant, _customer) = establish_with_protocol_context();
+    let (mut merchant, _customer, kes_key) = establish_with_protocol_context_and_kes_key();
     let mut rng = OsRng;
 
-    // Create a standalone KES for key derivation
-    let kes_secret = Zeroizing::new(crate::XmrScalar::random(&mut rng));
-    let kes_public = Ed25519::generator() * *kes_secret;
-    let kes = KesEstablishing::<Ed25519>::new(kes_secret, kes_public);
+    // Use the real KES key that matches the public key in channel metadata
+    let kes_public = Ed25519::generator() * kes_key;
+    let kes = KesEstablishing::<Ed25519>::new(Zeroizing::new(kes_key), kes_public);
 
     // Generate an ephemeral channel ID from the merchant
     let ephemeral_id = merchant.prepare_kes_channel_id(&mut rng).expect("prepare_kes_channel_id");
