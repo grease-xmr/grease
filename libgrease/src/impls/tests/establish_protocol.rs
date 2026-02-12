@@ -443,6 +443,8 @@ fn test_establishing_to_open_with_all_requirements() {
     // Use own payload sig as placeholder for peer's
     let own_payload_sig = merchant.payload_sig.clone().unwrap();
     merchant.peer_payload_sig = Some(own_payload_sig);
+    // Use a placeholder peer nonce pubkey
+    merchant.peer_nonce_pubkey = Some(XmrPoint::generator());
     merchant.save_funding_tx_pipe(vec![1]);
 
     // Set KES proof
@@ -695,6 +697,8 @@ fn test_requirements_fail_without_kes_proof() {
     merchant.set_peer_encrypted_offset(own_chi);
     let own_payload_sig = merchant.payload_sig.clone().unwrap();
     merchant.peer_payload_sig = Some(own_payload_sig);
+    // Use a placeholder peer nonce pubkey
+    merchant.peer_nonce_pubkey = Some(XmrPoint::generator());
     merchant.save_funding_tx_pipe(vec![1]);
 
     // Fund the channel
