@@ -107,6 +107,17 @@ where
         default
     )]
     pub(crate) peer_nonce_pubkey: Option<KC::G>,
+    /// The per-channel KES public key ($P_g$) derived during establishment.
+    ///
+    /// Set after the KES derives channel keys (Section 4.4 step 3 of the spec).
+    /// Needed for force-close and dispute communication with the KES.
+    #[serde(
+        serialize_with = "crate::helpers::option_serialize_ge",
+        deserialize_with = "crate::helpers::option_deserialize_ge",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub(crate) kes_channel_pubkey: Option<KC::G>,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -138,6 +149,7 @@ where
             payload_sig: None,
             peer_payload_sig: None,
             peer_nonce_pubkey: None,
+            kes_channel_pubkey: None,
             _sf: PhantomData,
             encrypted_offset: None,
         }
@@ -182,9 +194,15 @@ where
         if self.peer_payload_sig.is_none() {
             missing.push("Peer payload signature");
         }
+        if self.peer_nonce_pubkey.is_none() {
+            missing.push("Peer nonce public key");
+        }
         if self.funding_tx_pipe.is_none() {
             error!("Funding transaction pipe data is required to detect channel funding, but it is missing.");
             missing.push("Funding transaction pipe data. We will never be able to detect if this channel is funded without this.");
+        }
+        if self.kes_channel_pubkey.is_none() {
+            warn!("KES per-channel public key (P_g) is not set. Force-close/dispute will not be possible.");
         }
         if !self.is_fully_funded() {
             missing.push("Funding transaction fully funded");
@@ -245,6 +263,15 @@ where
         }
     }
 
+    /// Set the per-channel KES public key ($P_g$) derived by the KES.
+    ///
+    /// This key is needed for force-close and dispute communication. It is
+    /// obtained from the [`ChannelKeyPair`](crate::grease_protocol::channel_keys::ChannelKeyPair)
+    /// returned by the KES after deriving channel keys (Section 4.4 of the spec).
+    pub fn set_kes_channel_pubkey(&mut self, pubkey: KC::G) {
+        self.kes_channel_pubkey = Some(pubkey);
+    }
+
     pub fn funding_tx_confirmed(&mut self, transaction: TransactionRecord) {
         debug!("Funding transaction broadcasted");
         self.funding_transaction_ids.insert(transaction.transaction_id.clone(), transaction);
@@ -298,6 +325,7 @@ where
             multisig_wallet: self.multisig_wallet.unwrap(),
             funding_transactions: self.funding_transaction_ids,
             current_update: None,
+            kes_channel_pubkey: self.kes_channel_pubkey,
         };
         Ok(open_channel)
     }
@@ -681,6 +709,12 @@ where
     }
 
     /// Bundle both encrypted offsets and payload signatures for forwarding to the KES.
+    ///
+    /// The spec (sequence diagram) shows the offsets ($\chi_c$, $\chi_m$) and the ephemeral
+    /// channel ID ($\kappa$) being sent to the KES in a single message. In this implementation
+    /// they are intentionally separated: `bundle_for_kes` collects the offsets and signatures,
+    /// while [`prepare_kes_channel_id`](EstablishingState::prepare_kes_channel_id) produces $\kappa$.
+    /// This allows the two operations to be performed and transmitted independently.
     pub fn bundle_for_kes(&self) -> Result<KesInitBundle<KC>, EstablishError> {
         let merchant_encrypted_offset = self
             .inner

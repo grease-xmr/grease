@@ -54,6 +54,32 @@ pub(crate) fn kes_offset_domain(channel_id: &ChannelId) -> String {
     format!("GreaseEncryptToKES-{channel_id}")
 }
 
+/// Persistent record stored by the KES after validating an OpenChannel request.
+///
+/// Corresponds to the `OpenChannel` record defined in Section 4.6.3 of the KES spec.
+/// The KES stores this in private/encrypted storage after successfully decrypting
+/// offsets and generating proof-of-knowledge proofs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct OpenChannelRecord<KC: Ciphersuite> {
+    /// The channel identifier.
+    pub channel_id: ChannelId,
+    /// The dispute window duration.
+    pub dispute_window: Duration,
+    /// Proof-of-knowledge proofs for both parties' offsets.
+    pub pok_proofs: KesPoKProofs<KC>,
+    /// The merchant's ephemeral public key ($P_m$).
+    #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
+    pub merchant_pubkey: KC::G,
+    /// The customer's ephemeral public key ($P_c$).
+    #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
+    pub customer_pubkey: KC::G,
+    /// The merchant's encrypted initial offset ($\chi^M$).
+    pub merchant_encrypted_offset: EncryptedSecret<KC>,
+    /// The customer's encrypted initial offset ($\chi^C$).
+    pub customer_encrypted_offset: EncryptedSecret<KC>,
+}
+
 /// Manages the KES's role during channel initialization.
 ///
 /// The KES receives encrypted offsets (chi values) from both the customer and
@@ -63,8 +89,11 @@ pub struct KesEstablishing<KC: Ciphersuite> {
     kes_secret: Zeroizing<KC::F>,
     kes_public: KC::G,
     channel_id: Option<ChannelId>,
+    dispute_window: Option<Duration>,
     customer_chi: Option<EncryptedSecret<KC>>,
     merchant_chi: Option<EncryptedSecret<KC>>,
+    customer_pubkey: Option<KC::G>,
+    merchant_pubkey: Option<KC::G>,
 }
 
 impl<KC: Ciphersuite> std::fmt::Debug for KesEstablishing<KC> {
@@ -78,7 +107,16 @@ impl<KC: Ciphersuite> std::fmt::Debug for KesEstablishing<KC> {
 impl<KC: Ciphersuite> KesEstablishing<KC> {
     /// Create a new KES establishing instance from a KES keypair.
     pub fn new(kes_secret: Zeroizing<KC::F>, kes_public: KC::G) -> Self {
-        Self { kes_secret, kes_public, channel_id: None, customer_chi: None, merchant_chi: None }
+        Self {
+            kes_secret,
+            kes_public,
+            channel_id: None,
+            dispute_window: None,
+            customer_chi: None,
+            merchant_chi: None,
+            customer_pubkey: None,
+            merchant_pubkey: None,
+        }
     }
 
     /// The KES public key.
@@ -144,8 +182,11 @@ impl<KC: Ciphersuite> KesEstablishing<KC> {
         if !bundle.merchant_payload_sig.verify(&bundle.merchant_ephemeral_pubkey, &merchant_msg) {
             return Err(KesEstablishError::InvalidPayloadSignature { role: ChannelRole::Merchant });
         }
-        // 3. Store channel ID and offsets
+        // 3. Store channel ID, dispute window, party pubkeys, and offsets
         self.channel_id = Some(bundle.channel_id);
+        self.dispute_window = Some(bundle.dispute_window);
+        self.customer_pubkey = Some(bundle.customer_ephemeral_pubkey);
+        self.merchant_pubkey = Some(bundle.merchant_ephemeral_pubkey);
         self.receive_customer_offset(bundle.customer_encrypted_offset)?;
         self.receive_merchant_offset(bundle.merchant_encrypted_offset)?;
         Ok(())
@@ -175,6 +216,60 @@ impl<KC: Ciphersuite> KesEstablishing<KC> {
         let merchant_pok = KesPoK::<KC>::prove(rng, offsets.merchant.secret(), &self.kes_secret);
         offsets.zeroize();
         Ok(KesPoKProofs { customer_pok, merchant_pok })
+    }
+
+    /// Set the dispute window.
+    ///
+    /// This is set automatically by [`receive_bundle`](Self::receive_bundle). Use this method
+    /// when providing offsets individually.
+    pub fn set_dispute_window(&mut self, dispute_window: Duration) {
+        self.dispute_window = Some(dispute_window);
+    }
+
+    /// Set the party ephemeral public keys.
+    ///
+    /// These are set automatically by [`receive_bundle`](Self::receive_bundle). Use this method
+    /// when providing offsets individually.
+    pub fn set_party_pubkeys(&mut self, customer: KC::G, merchant: KC::G) {
+        self.customer_pubkey = Some(customer);
+        self.merchant_pubkey = Some(merchant);
+    }
+
+    /// Decrypt offsets, generate proof-of-knowledge, and produce an [`OpenChannelRecord`]
+    /// for persistent storage.
+    ///
+    /// This implements the `validateOpen` algorithm from Section 4.6.3 of the KES spec:
+    /// the KES decrypts both offsets, generates PoK proofs, then builds the `OpenChannel`
+    /// record. The decrypted secrets are zeroized after proof generation.
+    ///
+    /// Requires that a bundle has been received (or channel ID, dispute window, party
+    /// pubkeys, and both offsets have been set individually).
+    pub fn finalize<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+    ) -> Result<(KesPoKProofs<KC>, OpenChannelRecord<KC>), KesEstablishError> {
+        let channel_id = self.channel_id.clone().ok_or(KesEstablishError::MissingChannelId)?;
+        let dispute_window = self.dispute_window.ok_or(KesEstablishError::MissingDisputeWindow)?;
+        let customer_pubkey =
+            self.customer_pubkey.ok_or(KesEstablishError::MissingPartyPubkey(ChannelRole::Customer))?;
+        let merchant_pubkey =
+            self.merchant_pubkey.ok_or(KesEstablishError::MissingPartyPubkey(ChannelRole::Merchant))?;
+        let customer_chi = self.customer_chi.clone().ok_or(KesEstablishError::MissingOffset(ChannelRole::Customer))?;
+        let merchant_chi = self.merchant_chi.clone().ok_or(KesEstablishError::MissingOffset(ChannelRole::Merchant))?;
+
+        let pok_proofs = self.generate_pok(rng)?;
+
+        let record = OpenChannelRecord {
+            channel_id,
+            dispute_window,
+            pok_proofs: pok_proofs.clone(),
+            merchant_pubkey,
+            customer_pubkey,
+            merchant_encrypted_offset: merchant_chi,
+            customer_encrypted_offset: customer_chi,
+        };
+
+        Ok((pok_proofs, record))
     }
 
     /// Derive a unique channel keypair from an ephemeral channel ID.
@@ -217,6 +312,10 @@ impl<KC: Ciphersuite> DecryptedOffsets<KC> {
 pub enum KesEstablishError {
     #[error("Channel ID not set — call receive_bundle or set_channel_id before decrypting")]
     MissingChannelId,
+    #[error("Dispute window not set — call receive_bundle or set_dispute_window before finalizing")]
+    MissingDisputeWindow,
+    #[error("Missing ephemeral public key for {0}")]
+    MissingPartyPubkey(ChannelRole),
     #[error("Missing offset from {0}")]
     MissingOffset(ChannelRole),
     #[error("Expected offset from {expected} but got {got}")]

@@ -55,6 +55,16 @@ pub struct EstablishedChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, 
     pub(crate) multisig_wallet: MultisigWalletData,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     pub(crate) current_update: Option<UpdateRecord<SF>>,
+    /// The per-channel KES public key ($P_g$) derived during establishment.
+    ///
+    /// Needed for force-close and dispute communication with the KES.
+    #[serde(
+        serialize_with = "crate::helpers::option_serialize_ge",
+        deserialize_with = "crate::helpers::option_deserialize_ge",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub(crate) kes_channel_pubkey: Option<KC::G>,
 }
 
 impl<SF: Ciphersuite, KC: Ciphersuite> Debug for EstablishedChannelState<SF, KC> {
@@ -96,6 +106,11 @@ where
     /// Returns true if any updates have been made to this channel.
     pub fn has_updates(&self) -> bool {
         self.current_update.is_some()
+    }
+
+    /// Returns the per-channel KES public key ($P_g$), if set during establishment.
+    pub fn kes_channel_pubkey(&self) -> Option<&KC::G> {
+        self.kes_channel_pubkey.as_ref()
     }
 
     pub fn multisig_address(&self, network: Network) -> Option<String> {
