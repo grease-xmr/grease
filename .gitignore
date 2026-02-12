@@ -36,6 +36,7 @@ grease-proofs/
 /scripts/testnet/*-spend-key.txt
 /testnet/*.bin
 /scripts/testnet/localnet
+/scripts/testnet/data
 
 # notes to self
 thoughts/

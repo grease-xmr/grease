@@ -11,9 +11,9 @@ use libgrease::monero::data_objects::{
     FinalizedUpdate, MultisigKeyInfo, MultisigSplitSecrets, MultisigSplitSecretsResponse, TransactionId,
 };
 use libgrease::state_machine::ChannelCloseRecord;
+use libgrease::wallet::multisig_wallet::AdaptSig;
 use libp2p::PeerId;
 use log::*;
-use wallet::multisig_wallet::AdaptSig;
 
 use crate::behaviour_v2::ProtocolCommandV2;
 use crate::grease::NewChannelMessage;

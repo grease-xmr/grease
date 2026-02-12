@@ -20,7 +20,7 @@ use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, Publi
 use libgrease::cryptography::zk_objects::{
     generate_txc0_nonces, GenericPoint, KesProof, PublicProof0, PublicUpdateProof, ShardInfo,
 };
-use libgrease::cryptography::ChannelWitness;
+use libgrease::cryptography::CrossCurveScalar;
 use libgrease::cryptography::Offset;
 use libgrease::grease_protocol::multisig_wallet::SharedPublicKey;
 use libgrease::monero::data_objects::{
@@ -34,6 +34,11 @@ use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStag
 use libgrease::state_machine::{
     ChannelCloseRecord, ChannelProposer, LifeCycleEvent, NewChannelProposal, ProposingState, UpdateRecord,
 };
+use libgrease::wallet::errors::WalletError;
+use libgrease::wallet::multisig_wallet::{
+    signature_share_to_bytes, signature_share_to_secret, translate_payments, AdaptSig,
+};
+use libgrease::wallet::transaction_monitor::TransactionMonitor;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;
@@ -42,9 +47,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinHandle;
-use wallet::errors::WalletError;
-use wallet::multisig_wallet::{signature_share_to_bytes, signature_share_to_secret, translate_payments, AdaptSig};
-use wallet::transaction_monitor::TransactionMonitor;
 use wallet::{connect_to_rpc, publish_transaction, MultisigWallet, RpcError};
 
 #[derive(Error, Debug)]
@@ -1119,7 +1121,7 @@ where
         let peer = channel.peer_id();
         let state = channel.state().as_open()?;
         let update_count = state.update_count() + 1;
-        let wallet_data = state.wallet_data();
+        let wallet_data = state.wallet();
         let funding_txs = state.funding_transactions().cloned().collect::<Vec<_>>();
         trace!("Reconstructing multisig wallet for channel {channel_id}.");
         let unadjusted = state
@@ -1517,7 +1519,7 @@ where
     ) -> Result<TransactionId, GreaseClientError> {
         let channel = self.channels.peek(channel_id).await.ok_or(GreaseClientError::ChannelNotFound)?;
         let state = channel.state().as_closing()?;
-        let wallet_data = state.wallet_data();
+        let wallet_data = state.wallet();
         let unadjusted = state.get_closing_payments();
         let role = state.role();
         trace!(

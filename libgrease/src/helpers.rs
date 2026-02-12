@@ -81,7 +81,7 @@ where
     let mut bytes = [0u8; 32];
     hex::decode_to_slice(&hex_str, &mut bytes)
         .map_err(|e| serde::de::Error::custom(format!("Invalid hex string: {e}")))?;
-    let scalar = Option::<XmrScalar>::from(XmrScalar::from_repr(bytes.into()))
+    let scalar = Option::<XmrScalar>::from(XmrScalar::from_repr(bytes))
         .ok_or_else(|| serde::de::Error::custom("Invalid scalar value"))?;
     Ok(scalar)
 }
@@ -278,7 +278,6 @@ impl From<Timestamp> for u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::FixedOffset;
 
     #[test]
     fn test_new() {
@@ -371,7 +370,7 @@ mod tests {
     fn test_clone_and_copy() {
         let ts1 = Timestamp::new(42);
         let ts2 = ts1;
-        let ts3 = ts1.clone();
+        let ts3 = ts1;
 
         assert_eq!(ts1, ts2);
         assert_eq!(ts1, ts3);

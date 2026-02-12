@@ -1,12 +1,13 @@
-use crate::errors::WalletError;
-use crate::{DScalar, MoneroAddress, SubaddressIndex};
+use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::wallet::errors::WalletError;
 use ciphersuite::{Ciphersuite, Ed25519};
-use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use curve25519_dalek::Scalar;
 use log::*;
 use monero_rpc::{FeeRate, Rpc, RpcError};
 use monero_serai::ringct::RctType;
 use monero_serai::transaction::Transaction;
 use monero_simple_request_rpc::SimpleRequestRpc;
+use monero_wallet::address::{MoneroAddress, SubaddressIndex};
 use monero_wallet::send::{Change, SendError, SignableTransaction};
 use monero_wallet::{OutputWithDecoys, Scanner, ViewPair, WalletOutput};
 use rand_core::{CryptoRng, RngCore};
@@ -151,7 +152,7 @@ pub async fn create_signable_tx<R: Send + Sync + RngCore + CryptoRng>(
     Ok(tx)
 }
 
-pub(crate) fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<DScalar> {
+pub fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<Scalar> {
     let mut data = [0u8; 32 + 8];
     data[..32].copy_from_slice(spend_key.to_compressed().as_bytes());
     data[32..].copy_from_slice(&index.to_le_bytes());
@@ -159,7 +160,7 @@ pub(crate) fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing
     Zeroizing::new(k.0)
 }
 
-pub(crate) fn create_change(public_spend_key: &Curve25519PublicKey) -> Result<Change, WalletError> {
+pub fn create_change(public_spend_key: &Curve25519PublicKey) -> Result<Change, WalletError> {
     let vk = view_key(public_spend_key, 0);
     let pair = ViewPair::new(public_spend_key.as_point().0, vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
     let index = SubaddressIndex::new(0, 1).expect("not to fail with valid hardcoded params");

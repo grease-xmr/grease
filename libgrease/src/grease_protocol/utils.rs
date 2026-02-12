@@ -41,6 +41,6 @@ pub fn read_field_element<C: Ciphersuite, R: Read + ?Sized>(reader: &mut R) -> R
         return Err(MoneroError::ParseFailed("Insufficient data left to read a field element"));
     }
     reader.read_exact(buf.as_mut())?;
-    let elem = C::F::from_repr(buf).into_option().ok_or_else(|| MoneroError::ParseFailed("Invalid field element"))?;
+    let elem = C::F::from_repr(buf).into_option().ok_or(MoneroError::ParseFailed("Invalid field element"))?;
     Ok(elem)
 }

@@ -13,14 +13,13 @@ use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::adapter_signature::SchnorrSignature;
 use crate::cryptography::dleq::Dleq;
 use crate::cryptography::keys::Curve25519PublicKey;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::CrossCurveScalar;
 use crate::grease_protocol::force_close_channel::{
     ClaimChannelRequest, ConsensusCloseRequest, DisputeChannelState as DisputeMessage, DisputeResolution,
     ForceCloseProtocolClaimant, ForceCloseProtocolCommon, ForceCloseProtocolDefendant, ForceCloseProtocolError,
     ForceCloseRequest, ForceCloseResponse, PendingChannelClose, PendingCloseStatus,
 };
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
-use crate::multisig::MultisigWalletData;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::error::LifeCycleError;
@@ -28,7 +27,6 @@ use crate::state_machine::open_channel::UpdateRecord;
 use crate::XmrScalar;
 use ciphersuite::{Ciphersuite, Ed25519};
 use modular_frost::curve::Curve as FrostCurve;
-use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -45,7 +43,7 @@ pub struct DisputingChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC
     /// The reason this dispute was initiated
     pub(crate) reason: DisputeReason,
     /// Wallet data needed for transaction creation
-    pub(crate) multisig_wallet: MultisigWalletData,
+    pub(crate) multisig_wallet: MultisigWallet,
     /// Funding transaction records
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     /// Last update record from the open channel state
@@ -77,7 +75,7 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
         metadata: StaticChannelMetadata<KC>,
         dynamic: DynamicChannelMetadata,
         reason: DisputeReason,
-        multisig_wallet: MultisigWalletData,
+        multisig_wallet: MultisigWallet,
         funding_transactions: HashMap<TransactionId, TransactionRecord>,
         last_update: UpdateRecord<SF>,
     ) -> Self {
@@ -95,9 +93,8 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
         }
     }
 
-    pub fn multisig_address(&self, _network: Network) -> Option<String> {
-        // TODO: Implement multisig address retrieval
-        None
+    pub fn multisig_address(&self) -> Option<String> {
+        Some(self.multisig_wallet.address().to_string())
     }
 
     pub fn status(&self) -> PendingCloseStatus {
@@ -112,23 +109,15 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
         self.dispute_window_end
     }
 
-    /// Returns the keys needed to reconstruct the multisig wallet.
-    /// Warning! The result of this function contains wallet secrets!
-    pub fn wallet_data(&self) -> MultisigWalletData {
-        let mut data = self.multisig_wallet.clone();
-        self.funding_transactions.values().for_each(|rec| {
-            data.known_outputs.push(rec.serialized.clone());
-        });
-        data
+    /// Returns a reference to the multisig wallet.
+    pub fn wallet(&self) -> &MultisigWallet {
+        // Do we need to copy over the funding tx outputs?
+        &self.multisig_wallet
     }
 
     pub fn with_final_tx(&mut self, final_tx: TransactionId) {
-        let prev = self.final_tx.take();
-        if prev.is_some() {
-            log::warn!(
-                "Overwriting existing final transaction {} in DisputingChannelState",
-                prev.as_ref().unwrap().id
-            );
+        if let Some(prev) = self.final_tx.take() {
+            log::warn!("Overwriting existing final transaction {} in DisputingChannelState", prev.id);
         }
         self.final_tx = Some(final_tx);
     }
@@ -167,6 +156,7 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
 }
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
+use crate::wallet::multisig_wallet::MultisigWallet;
 
 impl<SF: FrostCurve, KC: FrostCurve> DisputingChannelState<SF, KC>
 where
@@ -193,8 +183,8 @@ where
         self.dynamic.current_balances
     }
 
-    fn wallet_address(&self, network: Network) -> Option<String> {
-        self.multisig_address(network)
+    fn wallet_address(&self) -> Option<String> {
+        self.multisig_address()
     }
 }
 
@@ -218,17 +208,11 @@ where
     }
 
     fn public_key(&self) -> &Curve25519PublicKey {
-        &self.multisig_wallet.my_public_key
+        &self.multisig_wallet.my_public_key()
     }
 
     fn peer_public_key(&self) -> &Curve25519PublicKey {
-        // The peer is the other key in sorted_pubkeys (use direct field access to avoid ambiguity)
-        let my_key = &self.multisig_wallet.my_public_key;
-        if &self.multisig_wallet.sorted_pubkeys[0] == my_key {
-            &self.multisig_wallet.sorted_pubkeys[1]
-        } else {
-            &self.multisig_wallet.sorted_pubkeys[0]
-        }
+        &self.multisig_wallet.peer_public_key()
     }
 
     fn dispute_window(&self) -> Duration {
@@ -241,7 +225,7 @@ where
 
     fn sign_for_kes(&self, _message: &[u8]) -> Result<SchnorrSignature<K>, ForceCloseProtocolError> {
         // Signing requires wallet integration with the secret key.
-        // The actual implementation would use self.multisig_wallet.my_spend_key
+        // The actual implementation would use self.multisig_wallet.partial_spend_key
         Err(ForceCloseProtocolError::SignatureCreationFailed(
             "Signing requires external wallet integration".into(),
         ))
@@ -266,15 +250,9 @@ where
     Ed25519: Dleq<SF>,
 {
     fn create_force_close_request(&self) -> Result<ForceCloseRequest<K>, ForceCloseProtocolError> {
-        // Create the request payload - use direct field access to avoid trait method ambiguity
         let channel_id = self.metadata.channel_id().name();
-        let claimant = self.multisig_wallet.my_public_key;
-        // The peer is the other key in sorted_pubkeys
-        let defendant = if self.multisig_wallet.sorted_pubkeys[0] == claimant {
-            self.multisig_wallet.sorted_pubkeys[1]
-        } else {
-            self.multisig_wallet.sorted_pubkeys[0]
-        };
+        let claimant = self.multisig_wallet.my_public_key().clone();
+        let defendant = self.multisig_wallet.peer_public_key().clone();
         let update_count_claimed = self.dynamic.update_count;
 
         // Sign the request (placeholder - actual signing needs wallet integration)
@@ -308,7 +286,7 @@ where
         }
 
         let channel_id = self.metadata.channel_id().name();
-        let claimant = self.multisig_wallet.my_public_key;
+        let claimant = self.multisig_wallet.my_public_key().clone();
 
         // Sign the claim request
         let message = format!("claim:{channel_id}");
@@ -317,7 +295,7 @@ where
         Ok(ClaimChannelRequest { channel_id, claimant, signature })
     }
 
-    fn process_claimed_offset(&mut self, _encrypted: &[u8]) -> Result<ChannelWitness<SF>, ForceCloseProtocolError> {
+    fn process_claimed_offset(&mut self, _encrypted: &[u8]) -> Result<CrossCurveScalar<SF>, ForceCloseProtocolError> {
         // Decrypt the offset using our secret key
         // This requires KES decryption with our channel key
         Err(ForceCloseProtocolError::DecryptionFailed(
@@ -373,7 +351,7 @@ where
 
         let channel_id = self.metadata.channel_id().name();
         let claimant = pending.claimant;
-        let defendant = self.multisig_wallet.my_public_key;
+        let defendant = self.multisig_wallet.my_public_key().clone();
         let update_count_claimed = pending.update_count_claimed;
 
         // Create witness from our offset
@@ -409,7 +387,7 @@ where
 
         let channel_id = self.metadata.channel_id().name();
         let claimant = pending.claimant;
-        let defendant = self.multisig_wallet.my_public_key;
+        let defendant = self.multisig_wallet.my_public_key().clone();
 
         // Serialize the update record as proof
         let update_record = ron::to_string(&self.last_update)

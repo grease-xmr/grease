@@ -5,8 +5,8 @@ use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::zk_objects::PublicUpdateProof;
 use libgrease::monero::data_objects::FinalizedUpdate;
+use libgrease::wallet::multisig_wallet::AdaptSig;
 use libp2p::PeerId;
-use wallet::multisig_wallet::AdaptSig;
 
 use crate::grease_v2::messages::update::UpdatePreparedPayload;
 

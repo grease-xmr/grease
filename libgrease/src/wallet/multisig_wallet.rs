@@ -1,61 +1,149 @@
+use crate::amount::MoneroAmount;
+use crate::channel_id::ChannelId;
+use crate::cryptography::adapter_signature::AdaptedSignature;
+use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::payment_channel::multisig_keyring::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys};
+use crate::payment_channel::multisig_negotioation::MultisigWalletKeyNegotiation;
+use crate::payment_channel::{ChannelRole, HasRole};
+use crate::wallet::common::{create_change, create_signable_tx, MINIMUM_FEE};
+use crate::wallet::errors::WalletError;
+use crate::XmrScalar;
 use blake2::Digest;
 use dalek_ff_group::dalek::Scalar as DScalar;
-use modular_frost::curve::Ed25519;
-use monero_simple_request_rpc::SimpleRequestRpc;
-use rand_chacha::ChaCha20Rng;
-use std::collections::HashMap;
-use std::mem;
-use std::path::Path;
-
-use crate::common::{create_change, create_signable_tx, MINIMUM_FEE};
-use crate::errors::WalletError;
-use crate::payments::Payment;
-use libgrease::amount::MoneroAmount;
-use libgrease::cryptography::adapter_signature::AdaptedSignature;
-use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::grease_protocol::multisig_wallet::{MultisigTransaction, MultisigTxError};
-use libgrease::multisig::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys, MultisigWalletData};
-use libgrease::payment_channel::{ChannelRole, HasRole};
-use libgrease::XmrScalar;
 use log::*;
+use modular_frost::curve::Ed25519;
 use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
 use modular_frost::{Participant, ThresholdKeys};
-use monero::{Address as UAddress, AddressType as UAddressType};
+use monero::{Address as UAddress, AddressType as UAddressType, Network};
 use monero_rpc::{Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
 use monero_serai::ringct::clsag::ClsagAddendum;
 use monero_serai::transaction::Transaction;
-use monero_wallet::address::{AddressType, MoneroAddress, Network};
+use monero_simple_request_rpc::SimpleRequestRpc;
+use monero_wallet::address::{AddressType, MoneroAddress, Network as MoneroNetwork};
 use monero_wallet::send::{SignableTransaction, TransactionSignMachine, TransactionSignatureMachine};
 use monero_wallet::{Scanner, ViewPair, WalletOutput};
+use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::mem;
+use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
 pub type AdaptSig = AdaptedSignature<Ed25519>;
 
+#[derive(Serialize)]
 pub struct MultisigWallet {
+    #[serde(
+        deserialize_with = "crate::monero::helpers::deserialize_network",
+        serialize_with = "crate::monero::helpers::serialize_network"
+    )]
+    network: Network,
     role: ChannelRole,
-    rpc: SimpleRequestRpc,
+    rpc_url: String,
+    #[serde(skip)]
+    rpc: Arc<RwLock<Option<Arc<SimpleRequestRpc>>>>,
     my_spend_key: Curve25519Secret,
     my_public_key: Curve25519PublicKey,
     sorted_pubkeys: [Curve25519PublicKey; 2],
+    #[serde(skip)]
     musig_keys: ThresholdKeys<Ed25519>,
+    #[serde(skip)]
     joint_private_view_key: Curve25519Secret,
+    #[serde(skip)]
     joint_public_view_key: Curve25519PublicKey,
+    #[serde(skip)]
     joint_public_spend_key: Curve25519PublicKey,
     birthday: u64,
+    #[serde(
+        serialize_with = "crate::wallet::helpers::serialize_outputs",
+        deserialize_with = "crate::wallet::helpers::deserialize_outputs"
+    )]
     known_outputs: Vec<WalletOutput>,
+    peer_preprocess_data: Option<Vec<u8>>,
+    // The signing state machine can't be cloned or serialized. After cloning or deserialization, you have to make another async call to
+    // `prepare` to initialize it. We only store the preprocess data so that we avoid an async call when we want to sign the tx
+    #[serde(skip)]
     preprocess_data: Option<Vec<MoneroPreprocess>>,
+    #[serde(skip)]
     sign_machine: Option<TransactionSignMachine>,
+    #[serde(skip)]
     shared_spend_key: Option<SignatureShare<Ed25519>>,
+    #[serde(skip)]
     final_signer: Option<TransactionSignatureMachine>,
 }
 
-const MSG: &[u8] = b"Adapter signature: MuSig2 2-of-2 multisig transaction";
+impl Debug for MultisigWallet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MultisigWallet")?;
+        f.write_str(&format!("({}, {})", self.role, self.rpc_url))
+    }
+}
+
+impl Clone for MultisigWallet {
+    fn clone(&self) -> Self {
+        // Recompute musig_keys since ThresholdKeys doesn't impl Clone
+        let musig_keys = musig_2_of_2(&self.my_spend_key, &self.sorted_pubkeys)
+            .expect("Failed to recompute musig keys during clone");
+
+        MultisigWallet {
+            network: self.network,
+            role: self.role,
+            rpc_url: self.rpc_url.clone(),
+            rpc: Arc::clone(&self.rpc),
+            my_spend_key: self.my_spend_key.clone(),
+            my_public_key: self.my_public_key.clone(),
+            sorted_pubkeys: self.sorted_pubkeys,
+            musig_keys,
+            joint_private_view_key: self.joint_private_view_key.clone(),
+            joint_public_view_key: self.joint_public_view_key.clone(),
+            joint_public_spend_key: self.joint_public_spend_key.clone(),
+            birthday: self.birthday,
+            known_outputs: self.known_outputs.clone(),
+            peer_preprocess_data: self.peer_preprocess_data.clone(),
+            preprocess_data: None,
+            sign_machine: None,
+            shared_spend_key: None,
+            final_signer: None,
+        }
+    }
+}
+
+/// Generate the adapter signature message for a commitment transaction.
+///
+/// This binds the signature to the channel ID and state index, ensuring
+/// the adapted signature is only valid for the specific commitment transaction state.
+/// Both parties can compute this message independently before the transaction is built.
+///
+/// # Parameters
+/// - `channel_id`: The unique channel identifier
+/// - `state_index`: The state update index (0 for initial commitment)
+/// - `customer_amount`: Customer's balance in piconero
+/// - `merchant_amount`: Merchant's balance in piconero
+pub fn commitment_tx_message(
+    channel_id: &ChannelId,
+    state_index: u64,
+    customer_amount: u64,
+    merchant_amount: u64,
+) -> Vec<u8> {
+    use blake2::Blake2b512;
+    use flexible_transcript::{DigestTranscript, Transcript};
+
+    let mut transcript = DigestTranscript::<Blake2b512>::new(b"Grease CommitmentTx v1");
+    transcript.append_message(b"channel_id", channel_id.as_str().as_bytes());
+    transcript.append_message(b"state_index", state_index.to_le_bytes());
+    transcript.append_message(b"customer_amount", customer_amount.to_le_bytes());
+    transcript.append_message(b"merchant_amount", merchant_amount.to_le_bytes());
+    transcript.challenge(b"commitment_tx_message").to_vec()
+}
 
 impl MultisigWallet {
     pub fn new(
-        rpc: SimpleRequestRpc,
+        network: Network,
+        rpc_url: impl Into<String>,
         spend_key: Curve25519Secret,
         public_spend_key: &Curve25519PublicKey,
         peer_pubkey: &Curve25519PublicKey,
@@ -71,7 +159,9 @@ impl MultisigWallet {
         let joint_public_view_key = Curve25519PublicKey::from(j_pub_vk);
         let joint_public_spend_key = Curve25519PublicKey::from(musig_keys.group_key());
         Ok(MultisigWallet {
-            rpc,
+            network,
+            rpc_url: rpc_url.into(),
+            rpc: Arc::new(RwLock::new(None)),
             my_spend_key: spend_key,
             my_public_key: *public_spend_key,
             sorted_pubkeys: pubkeys,
@@ -82,6 +172,7 @@ impl MultisigWallet {
             birthday: birthday.unwrap_or_default(),
             known_outputs: Vec::new(),
             preprocess_data: None,
+            peer_preprocess_data: None,
             sign_machine: None,
             shared_spend_key: None,
             final_signer: None,
@@ -89,10 +180,33 @@ impl MultisigWallet {
         })
     }
 
+    /// Lazily connect to the Monero RPC if not already connected and return a thread-safe reference to it.
+    pub async fn rpc_connection(&self) -> Result<Arc<SimpleRequestRpc>, WalletError> {
+        let lock =
+            self.rpc.as_ref().read().map_err(|e| {
+                WalletError::InternalError(format!("Failed to acquire read lock on RPC connection: {e}"))
+            })?;
+        if let Some(rpc) = lock.as_ref() {
+            Ok(Arc::clone(rpc))
+        } else {
+            drop(lock);
+            let mut lock = self.rpc.as_ref().write().unwrap();
+            // Double check if another thread has already initialized the RPC connection while we were waiting for the write lock
+            if let Some(rpc) = lock.as_ref() {
+                Ok(Arc::clone(rpc))
+            } else {
+                let rpc = SimpleRequestRpc::new(self.rpc_url.clone()).await?;
+                let rpc = Arc::new(rpc);
+                *lock = Some(Arc::clone(&rpc));
+                Ok(rpc)
+            }
+        }
+    }
+
     /// Set the wallet's birthday, which is the block height from which the wallet should start scanning to the
     /// current block height.
     pub async fn reset_birthday(&mut self) -> Result<u64, WalletError> {
-        let height = self.rpc.get_height().await? as u64;
+        let height = self.get_height().await?;
         self.birthday = height;
         Ok(height)
     }
@@ -113,43 +227,14 @@ impl MultisigWallet {
         }
     }
 
-    pub fn from_serializable(rpc: SimpleRequestRpc, data: MultisigWalletData) -> Result<Self, WalletError> {
-        let mut sorted_pubkeys = data.sorted_pubkeys;
-        sort_pubkeys(&mut sorted_pubkeys);
-        let peer_pubkey = if data.my_public_key == sorted_pubkeys[0] { &sorted_pubkeys[1] } else { &sorted_pubkeys[0] };
-        let musig_keys = musig_2_of_2(&data.my_spend_key, &sorted_pubkeys)
-            .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
-        let (joint_private_view_key, joint_public_view_key) = musig_dh_viewkey(&data.my_spend_key, peer_pubkey);
-        let joint_private_view_key = Curve25519Secret::from(joint_private_view_key.0);
-        let joint_public_view_key = Curve25519PublicKey::from(joint_public_view_key);
-        let joint_public_spend_key = musig_keys.group_key();
-        let joint_public_spend_key = Curve25519PublicKey::from(joint_public_spend_key);
-        let known_outputs = data.known_outputs;
-        let known_outputs =
-            Self::read_outputs(known_outputs.as_slice()).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
-        let role = data.role;
-        Ok(Self {
-            rpc,
-            my_spend_key: data.my_spend_key,
-            my_public_key: data.my_public_key,
-            sorted_pubkeys,
-            musig_keys,
-            joint_private_view_key,
-            joint_public_view_key,
-            joint_public_spend_key,
-            birthday: data.birthday,
-            known_outputs,
-            preprocess_data: None,
-            sign_machine: None,
-            shared_spend_key: None,
-            final_signer: None,
-            role,
-        })
-    }
-
     pub fn address(&self) -> MoneroAddress {
+        let network = match self.network {
+            Network::Mainnet => MoneroNetwork::Mainnet,
+            Network::Testnet => MoneroNetwork::Testnet,
+            Network::Stagenet => MoneroNetwork::Stagenet,
+        };
         MoneroAddress::new(
-            Network::Mainnet,
+            network,
             AddressType::Legacy,
             self.joint_public_spend_key.as_point().0,
             self.joint_public_view_key.as_point().0,
@@ -160,19 +245,25 @@ impl MultisigWallet {
         &self.my_spend_key
     }
 
-    pub async fn get_height(&self) -> Result<u64, RpcError> {
-        self.rpc.get_height().await.map(|height| height as u64)
+    pub async fn get_height(&self) -> Result<u64, WalletError> {
+        let rpc = self.rpc_connection().await?;
+        let height = rpc.get_height().await.map(|height| height as u64)?;
+        Ok(height)
     }
 
-    pub async fn get_block_by_number(&self, block_num: u64) -> Result<Block, RpcError> {
-        self.rpc.get_block_by_number(block_num as usize).await
+    pub async fn get_block_by_number(&self, block_num: u64) -> Result<Block, WalletError> {
+        let rpc = self.rpc_connection().await?;
+        let block = rpc.get_block_by_number(block_num as usize).await?;
+        Ok(block)
     }
 
-    async fn get_scannable_block(&self, block: Block) -> Result<ScannableBlock, RpcError> {
-        self.rpc.get_scannable_block(block).await
+    async fn get_scannable_block(&self, block: Block) -> Result<ScannableBlock, WalletError> {
+        let rpc = self.rpc_connection().await?;
+        let block = rpc.get_scannable_block(block).await?;
+        Ok(block)
     }
 
-    pub async fn scan(&mut self, start: Option<u64>) -> Result<usize, RpcError> {
+    pub async fn scan(&mut self, start: Option<u64>) -> Result<usize, WalletError> {
         let k = self.joint_private_view_key.to_dalek_scalar();
         let pair = ViewPair::new(self.joint_public_spend_key.as_point().0, k)
             .map_err(|e| RpcError::InternalError(e.to_string()))?;
@@ -208,8 +299,8 @@ impl MultisigWallet {
         &self.known_outputs
     }
 
-    pub fn rpc(&self) -> &SimpleRequestRpc {
-        &self.rpc
+    pub fn rpc_url(&self) -> &str {
+        self.rpc_url.as_str()
     }
 
     pub fn find_spendable_outputs(&self, min_amount: u64) -> Result<Vec<WalletOutput>, WalletError> {
@@ -238,19 +329,6 @@ impl MultisigWallet {
 
     pub fn joint_private_view_key(&self) -> &Curve25519Secret {
         &self.joint_private_view_key
-    }
-
-    async fn pre_process<R: Send + Sync + RngCore + CryptoRng>(
-        &self,
-        payments: Vec<(MoneroAddress, u64)>,
-        rng: &mut R,
-    ) -> Result<SignableTransaction, WalletError> {
-        let rpc = self.rpc();
-        let change = create_change(self.joint_public_spend_key())?;
-        let spend_total = MINIMUM_FEE + payments.iter().map(|(_, amount)| *amount).sum::<u64>();
-        // If this returns, there is guaranteed to be at least one input
-        let inputs = self.find_spendable_outputs(spend_total)?;
-        create_signable_tx(rpc, rng, inputs, payments, change, vec![]).await
     }
 
     /// If you need to restore the wallet to an exact known last state, you should call `prepare` with the RNG
@@ -296,11 +374,19 @@ impl MultisigWallet {
         })
     }
 
-    pub fn partial_sign(&mut self, peer_data: &[u8]) -> Result<(), WalletError> {
+    /// Sign the multisig transaction prepared by `prepare`.
+    ///
+    /// This function will return an error if
+    /// * `prepare` has not been called, or
+    /// *  if the preprocess data from the peer has not been set via `set_peer_process_data`
+    pub fn partial_sign(&mut self) -> Result<(), WalletError> {
         if self.sign_machine.is_none() || self.preprocess_data.is_none() {
             return Err(WalletError::KeyError("Sign machine or preprocess data not initialized".into()));
         }
-        let data = peer_data.to_vec();
+        if self.peer_preprocess_data.is_none() {
+            return Err(WalletError::KeyError("Peer preprocess data not set".into()));
+        }
+        let data = self.peer_preprocess_data.clone().unwrap();
         let machine = self.sign_machine.take().unwrap();
         let preprocess = machine
             .read_preprocess(&mut data.as_slice())
@@ -322,19 +408,23 @@ impl MultisigWallet {
         self.shared_spend_key.clone()
     }
 
-    pub fn adapt_signature(&self, witness: &Curve25519Secret) -> Result<AdaptSig, WalletError> {
+    pub fn set_peer_process_data(&mut self, data: Vec<u8>) {
+        self.peer_preprocess_data = Some(data);
+    }
+
+    pub fn adapt_signature(&self, witness: &Curve25519Secret, msg: &[u8]) -> Result<AdaptSig, WalletError> {
         let secret = self
             .my_signing_share()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
         let secret = signature_share_to_scalar(secret);
         let mut rng = OsRng;
-        let adapted = AdaptSig::sign(&secret, witness.as_scalar(), MSG, &mut rng);
+        let adapted = AdaptSig::sign(&secret, witness.as_scalar(), msg, &mut rng);
         Ok(adapted)
     }
 
-    pub fn verify_adapted_signature(&self, adapted: &AdaptSig) -> Result<(), WalletError> {
+    pub fn verify_adapted_signature(&self, adapted: &AdaptSig, msg: &[u8]) -> Result<(), WalletError> {
         let p = self.peer_public_key().as_point();
-        match adapted.verify(&p, MSG) {
+        match adapted.verify(&p, msg) {
             true => Ok(()),
             false => Err(WalletError::SigningError("Adapted signature verification failed".into())),
         }
@@ -344,9 +434,10 @@ impl MultisigWallet {
         &self,
         adapted: &AdaptSig,
         offset: &XmrScalar,
+        msg: &[u8],
     ) -> Result<SignatureShare<Ed25519>, WalletError> {
         let p = self.peer_public_key().as_point();
-        let true_sig = adapted.adapt(offset, &p, MSG).map_err(|_| {
+        let true_sig = adapted.adapt(offset, &p, msg).map_err(|_| {
             WalletError::SigningError("Incorrect offset supplied. Adapter signature verification failed".into())
         })?;
         let bytes = true_sig.s().as_bytes();
@@ -381,32 +472,15 @@ impl MultisigWallet {
         Ok(tx)
     }
 
-    fn participants(&self) -> (Participant, Participant) {
-        let first = self.sorted_pubkeys[0] == self.my_public_key;
-        if first {
-            (Participant::new(1).unwrap(), Participant::new(2).unwrap())
-        } else {
-            (Participant::new(2).unwrap(), Participant::new(1).unwrap())
-        }
-    }
-
-    fn assign_commitments(&self, peer_data: Vec<MoneroPreprocess>) -> HashMap<Participant, Vec<MoneroPreprocess>> {
-        let mut commitments = HashMap::new();
-        let (me, them) = self.participants();
-        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
-        commitments.insert(them, peer_data);
-        commitments
-    }
-
-    fn assign_shares(
-        &self,
-        peer_shares: Vec<SignatureShare<Ed25519>>,
-    ) -> HashMap<Participant, Vec<SignatureShare<Ed25519>>> {
-        let mut shares = HashMap::new();
-        let (me, them) = self.participants();
-        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
-        shares.insert(them, peer_shares);
-        shares
+    /// Test-only: inject a synthetic signing share for testing adapter signatures.
+    ///
+    /// This bypasses the full MuSig2 signing flow, allowing tests to verify
+    /// adapter signature generation and verification without RPC calls.
+    #[cfg(any(test, feature = "mocks"))]
+    pub fn inject_test_signing_share(&mut self, scalar: &crate::XmrScalar) {
+        // Safety: SignatureShare<Ed25519> is a newtype around Ed25519::F (Scalar)
+        let share: SignatureShare<Ed25519> = unsafe { std::mem::transmute(scalar.0) };
+        self.shared_spend_key = Some(share);
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<usize, std::io::Error> {
@@ -437,23 +511,45 @@ impl MultisigWallet {
         Ok(wallet_outputs)
     }
 
-    pub fn serializable(&self) -> MultisigWalletData {
-        let mut known_outputs = Vec::with_capacity(self.known_outputs.len());
-        self.outputs().iter().for_each(|output| {
-            let mut buf = Vec::with_capacity(size_of::<WalletOutput>());
-            output.write(&mut buf).expect("Failed to write output to buffer");
-            known_outputs.push(buf);
-        });
-        MultisigWalletData {
-            my_spend_key: self.my_spend_key.clone(),
-            my_public_key: self.my_public_key,
-            sorted_pubkeys: self.sorted_pubkeys,
-            joint_private_view_key: self.joint_private_view_key.clone(),
-            joint_public_spend_key: self.joint_public_spend_key,
-            birthday: self.birthday,
-            known_outputs,
-            role: self.role,
+    fn participants(&self) -> (Participant, Participant) {
+        let first = self.sorted_pubkeys[0] == self.my_public_key;
+        if first {
+            (Participant::new(1).unwrap(), Participant::new(2).unwrap())
+        } else {
+            (Participant::new(2).unwrap(), Participant::new(1).unwrap())
         }
+    }
+
+    fn assign_commitments(&self, peer_data: Vec<MoneroPreprocess>) -> HashMap<Participant, Vec<MoneroPreprocess>> {
+        let mut commitments = HashMap::new();
+        let (me, them) = self.participants();
+        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
+        commitments.insert(them, peer_data);
+        commitments
+    }
+
+    fn assign_shares(
+        &self,
+        peer_shares: Vec<SignatureShare<Ed25519>>,
+    ) -> HashMap<Participant, Vec<SignatureShare<Ed25519>>> {
+        let mut shares = HashMap::new();
+        let (me, them) = self.participants();
+        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
+        shares.insert(them, peer_shares);
+        shares
+    }
+
+    async fn pre_process<R: Send + Sync + RngCore + CryptoRng>(
+        &self,
+        payments: Vec<(MoneroAddress, u64)>,
+        rng: &mut R,
+    ) -> Result<SignableTransaction, WalletError> {
+        let rpc = self.rpc_connection().await?;
+        let change = create_change(self.joint_public_spend_key())?;
+        let spend_total = MINIMUM_FEE + payments.iter().map(|(_, amount)| *amount).sum::<u64>();
+        // If this returns, there is guaranteed to be at least one input
+        let inputs = self.find_spendable_outputs(spend_total)?;
+        create_signable_tx(rpc.as_ref(), rng, inputs, payments, change, vec![]).await
     }
 }
 
@@ -463,38 +559,69 @@ impl HasRole for MultisigWallet {
     }
 }
 
-impl MultisigTransaction for MultisigWallet {
-    type Context = ();
-    type Preprocess = MoneroPreprocess;
-    type PartialSignature = SignatureShare<Ed25519>;
-    type Transaction = Transaction;
-    type PaymentType = Payment;
+impl TryFrom<MultisigWalletKeyNegotiation> for MultisigWallet {
+    type Error = WalletError;
 
-    async fn prepare_transaction<R: Send + Sync + RngCore + CryptoRng>(
-        &mut self,
-        payments: &[Self::PaymentType],
-        _ctx: &Self::Context,
-        rng: &mut R,
-    ) -> Result<(), MultisigTxError> {
-        let payments = payments.iter().map(|p| p.as_tuple()).collect();
-        self.prepare(payments, rng).await.map_err(|e| MultisigTxError::PreprepareError(e.to_string()))?;
-        Ok(())
+    fn try_from(neg: MultisigWalletKeyNegotiation) -> Result<Self, Self::Error> {
+        let peer_public_key = neg.peer_public_key.ok_or_else(|| {
+            WalletError::InternalError(
+                "Cannot convert from MultisigWalletKeyNegotiation: Missing peer public key ".into(),
+            )
+        })?;
+        Self::new(
+            neg.network,
+            neg.rpc_url,
+            neg.partial_spend_key,
+            &neg.public_key,
+            peer_public_key.public_key_ref(),
+            Some(neg.birthday),
+            neg.role,
+        )
     }
+}
 
-    fn partial_sign(&mut self, preparatory_data: &Self::Preprocess, _: &Self::Context) -> Result<(), MultisigTxError> {
-        let mut buf = Vec::<u8>::with_capacity(160);
-        preparatory_data.write(&mut buf).map_err(|e| MultisigTxError::PartialSignError(e.to_string()))?;
-        MultisigWallet::partial_sign(self, &buf).map_err(|e| MultisigTxError::PartialSignError(e.to_string()))?;
-        Ok(())
-    }
-
-    fn sign(
-        &mut self,
-        peer_sig: Self::PartialSignature,
-        _: &Self::Context,
-    ) -> Result<Self::Transaction, MultisigTxError> {
-        let tx = MultisigWallet::sign(self, peer_sig).map_err(|e| MultisigTxError::FinalSignError(e.to_string()))?;
-        Ok(tx)
+/// Custom deserialize for [`MultisigWallet`]: deserialize the serialized fields via a
+/// helper struct, then recompute the derived `#[serde(skip)]` fields via [`Self::new`].
+///
+/// Field names must match those produced by `#[derive(Serialize)]` on [`MultisigWallet`].
+/// The peer public key is recovered from `sorted_pubkeys`. The `joint_*` and `musig_keys`
+/// fields are recomputed by `Self::new()`.
+impl<'de> Deserialize<'de> for MultisigWallet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Helper {
+            #[serde(deserialize_with = "crate::monero::helpers::deserialize_network")]
+            network: Network,
+            role: ChannelRole,
+            rpc_url: String,
+            my_spend_key: Curve25519Secret,
+            my_public_key: Curve25519PublicKey,
+            sorted_pubkeys: [Curve25519PublicKey; 2],
+            birthday: u64,
+            #[serde(deserialize_with = "crate::wallet::helpers::deserialize_outputs")]
+            known_outputs: Vec<WalletOutput>,
+            peer_preprocess_data: Option<Vec<u8>>,
+        }
+        let h = Helper::deserialize(deserializer)?;
+        // Derive peer pubkey: it's the entry in sorted_pubkeys that isn't our own.
+        let peer_pubkey =
+            if h.sorted_pubkeys[0] == h.my_public_key { h.sorted_pubkeys[1] } else { h.sorted_pubkeys[0] };
+        let mut wallet = Self::new(
+            h.network,
+            h.rpc_url,
+            h.my_spend_key,
+            &h.my_public_key,
+            &peer_pubkey,
+            Some(h.birthday),
+            h.role,
+        )
+        .map_err(serde::de::Error::custom)?;
+        wallet.known_outputs = h.known_outputs;
+        wallet.peer_preprocess_data = h.peer_preprocess_data;
+        Ok(wallet)
     }
 }
 
@@ -551,9 +678,9 @@ pub fn convert_address(address: UAddress) -> MoneroAddress {
         UAddressType::SubAddress => AddressType::Subaddress,
     };
     let network = match address.network {
-        monero::Network::Mainnet => Network::Mainnet,
-        monero::Network::Testnet => Network::Testnet,
-        monero::Network::Stagenet => Network::Stagenet,
+        Network::Mainnet => MoneroNetwork::Mainnet,
+        Network::Testnet => MoneroNetwork::Testnet,
+        Network::Stagenet => MoneroNetwork::Stagenet,
     };
     let spend = address.public_spend.point.decompress().expect("Addresses weren't compatible?");
     let view = address.public_view.point.decompress().expect("Addresses weren't compatible?");

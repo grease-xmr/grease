@@ -2,7 +2,6 @@ use crate::channel_id::ChannelId;
 use crate::cryptography::secret_encryption::{EncryptedSecret, SecretWithRole};
 use crate::cryptography::serializable_secret::SerializableSecret;
 use crate::payment_channel::HasRole;
-use ciphersuite::group::Group;
 use ciphersuite::{group::GroupEncoding, Ciphersuite};
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -11,6 +10,8 @@ use zeroize::{Zeroize, Zeroizing};
 /// The ephemeral channel ID is the data structure sent by the peers to the KES that contains the encrypted shared
 /// secret derived from ECDH-MC. The KES uses this information to derive the channel keys.
 /// The channel ID is included for reference and to bind the secret to a specific channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct EphemeralChannelId<C: Ciphersuite> {
     channel_id: ChannelId,
     encrypted_key: EncryptedSecret<C>,
@@ -72,7 +73,7 @@ impl<C: Ciphersuite> ChannelNonce<C> {
 }
 
 /// Derives a shared secret using ECDH-MC as specified in Algorithm 6 of the Grease white paper.
-fn ephemeral_channel_id<C: Ciphersuite>(secret: &C::F, peer_pubkey: &C::G, id: &ChannelId) -> C::F {
+pub(crate) fn ephemeral_channel_id<C: Ciphersuite>(secret: &C::F, peer_pubkey: &C::G, id: &ChannelId) -> C::F {
     let shared_point = *peer_pubkey * secret;
     let msg = [shared_point.to_bytes().as_ref(), id.as_str().as_bytes()].concat();
     C::hash_to_F(b"ECDH-MC", &msg)

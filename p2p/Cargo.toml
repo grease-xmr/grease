@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 libgrease = { workspace = true }
-wallet = { workspace = true }
 
 blake2 = "0.10.6"
 grease-babyjubjub = { workspace = true }

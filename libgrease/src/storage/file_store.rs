@@ -50,57 +50,166 @@ impl StateStore for FileStore {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::amount::MoneroAmount;
     use crate::cryptography::encryption_context::{with_encryption_context, AesGcmEncryption};
-    use crate::cryptography::ChannelWitness;
-    use crate::monero::data_objects::TransactionId;
+    use crate::grease_protocol::kes_establishing::KesEstablishing;
     use crate::state_machine::error::LifeCycleError;
-    use crate::state_machine::lifecycle::test::*;
-    use crate::state_machine::{ChannelCloseRecord, ChannelClosedReason};
+    use crate::state_machine::lifecycle::LifecycleStage;
+    use crate::state_machine::{CustomerEstablishing, EstablishingState, MerchantEstablishing};
+    use crate::tests::establish_channel_tests::{establish_wallet, fake_tx, fund_both, inject_signing_shares};
+    use crate::tests::propose_channel_tests::propose_channel;
+    use crate::XmrScalar;
+    use rand_core::OsRng;
     use std::sync::Arc;
+    use zeroize::Zeroizing;
 
-    /// Saves and loads the state after every transition. We should be able to carry on as if nothing happened.
+    const URL: &str = "No RPC required";
+
+    /// Save an [`EstablishingState`] to the store and load it back.
+    fn round_trip(store: &mut FileStore, state: EstablishingState) -> EstablishingState {
+        let cs = state.to_channel_state();
+        let id = cs.as_lifecycle().name();
+        store.write_channel(&cs).expect("write_channel");
+        store.load_channel(&id).expect("load_channel").to_establishing().map_err(|(_, e)| e).expect("to_establishing")
+    }
+
+    /// Save, load, and re-wrap a merchant. Re-injects the signing share since it is
+    /// transient (`#[serde(skip)]`) and must be re-derived after deserialization.
+    fn reload_merchant(store: &mut FileStore, m: MerchantEstablishing) -> MerchantEstablishing {
+        let mut state = round_trip(store, m.into_inner());
+        re_inject_signing_share(&mut state);
+        MerchantEstablishing::new(state, URL).expect("re-wrap merchant")
+    }
+
+    /// Save, load, and re-wrap a customer. Re-injects the signing share.
+    fn reload_customer(store: &mut FileStore, c: CustomerEstablishing) -> CustomerEstablishing {
+        let mut state = round_trip(store, c.into_inner());
+        re_inject_signing_share(&mut state);
+        CustomerEstablishing::new(state, URL).expect("re-wrap customer")
+    }
+
+    /// Re-derive the signing share from the wallet's spend key after deserialization.
+    ///
+    /// The signing share is `#[serde(skip)]` on [`MultisigWallet`] so it is lost during
+    /// persistence. In production this would come from a fresh `prepare()` + `partial_sign()`
+    /// flow; here we re-derive it from the spend key as the test helpers do.
+    fn re_inject_signing_share(state: &mut EstablishingState) {
+        if let Some(wallet) = state.multisig_wallet.as_mut() {
+            let share = XmrScalar(*wallet.my_spend_key().to_dalek_scalar());
+            wallet.inject_test_signing_share(&share);
+        }
+    }
+
+    /// Saves and loads the state after every step of the establishment protocol.
+    /// Each party's state should survive a full serialization round-trip and
+    /// continue as if nothing happened.
     #[test]
     fn test_file_store() {
         let ctx = Arc::new(AesGcmEncryption::random());
         with_encryption_context(ctx, || {
             fn inner() -> Result<(), (ChannelState, LifeCycleError)> {
-                let path = PathBuf::from("./test_data");
-                let mut store = FileStore::new(path).expect("directory to exist");
-                let establishing = new_establishing_state().to_channel_state();
-                let name = establishing.name();
-                store.write_channel(&establishing).expect("Failed to write channel");
-                let state = store.load_channel(&name).expect("Failed to load Establishing channel");
-                let establishing = state.to_establishing()?;
-                let open = establish_channel(establishing).to_channel_state();
-                store.write_channel(&open).expect("Failed to write channel");
-                let loaded = store.load_channel(&name).expect("Failed to load Open channel");
-                let mut open = loaded.to_open()?;
-                payment(&mut open, "0.1");
-                let state = open.to_channel_state();
-                store.write_channel(&state).expect("Failed to write channel");
-                let state = store.load_channel(&name).expect("Failed to load Open channel").to_open()?;
-                assert_eq!(state.update_count(), 1);
-                assert_eq!(state.my_balance(), MoneroAmount::from_xmr("1.15").unwrap());
-                let close = ChannelCloseRecord::<grease_grumpkin::Grumpkin> {
-                    final_balance: state.balance(),
-                    update_count: state.update_count(),
-                    witness: ChannelWitness::random(),
-                };
-                let state = state.close(close).unwrap().to_channel_state();
-                store.write_channel(&state).expect("Failed to write channel");
-                let loaded = store.load_channel(&name).expect("Failed to load Closing channel");
-                let mut state = loaded.to_closing()?;
-                assert_eq!(state.reason, ChannelClosedReason::Normal);
-                state.with_final_tx(TransactionId::new("finaltx1"));
-                let state = state.next().expect("Failed to close channel").to_channel_state();
-                store.write_channel(&state).expect("Failed to write channel");
-                let loaded = store.load_channel(&name).expect("Failed to load Open channel");
-                let state = loaded.to_closed()?;
-                assert_eq!(state.balance().customer, MoneroAmount::from_xmr("1.15").unwrap());
+                let dir = std::env::temp_dir().join(format!("grease_file_store_test_{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                let mut store = FileStore::new(dir.clone()).expect("create file store");
+                let mut rng = OsRng;
+
+                // ---- Step 1: Channel proposal exchange ----
+                let (merchant_state, customer_state, kes_key) = propose_channel();
+
+                // Round-trip: both parties after proposal (no wallet yet)
+                let merchant_state = round_trip(&mut store, merchant_state);
+                let customer_state = round_trip(&mut store, customer_state);
+
+                // ---- Step 2: Wrap and establish wallet ----
+                let mut merchant = MerchantEstablishing::new(merchant_state, URL).expect("merchant");
+                let mut customer = CustomerEstablishing::new(customer_state, URL).expect("customer");
+                establish_wallet(&mut merchant, &mut customer);
+
+                // Round-trip: both parties after wallet setup
+                let mut merchant = reload_merchant(&mut store, merchant);
+                let mut customer = reload_customer(&mut store, customer);
+
+                // ---- Step 3: Set funding_tx_pipe ----
+                merchant.state_mut().save_funding_tx_pipe(vec![]);
+                customer.state_mut().save_funding_tx_pipe(vec![]);
+
+                // Round-trip: both parties after pipe setup
+                let mut merchant = reload_merchant(&mut store, merchant);
+                let mut customer = reload_customer(&mut store, customer);
+
+                // ---- Step 4: Customer generates init package ----
+                // Signing shares were re-injected by reload_*
+                let customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
+
+                // Round-trip: customer has adapted_sig + payload_sig stored
+                let customer = reload_customer(&mut store, customer);
+
+                // ---- Step 5: Merchant receives customer init package ----
+                merchant.receive_customer_init_package(customer_pkg).expect("merchant receives customer package");
+
+                // Round-trip: merchant has peer data. Re-inject signing share because
+                // merchant still needs to generate their own init package.
+                let mut merchant = reload_merchant(&mut store, merchant);
+
+                // ---- Step 6: Merchant generates init package ----
+                let merchant_pkg = merchant.generate_init_package(&mut rng).expect("merchant init package");
+
+                // Round-trip: merchant has adapted_sig + payload_sig stored
+                let merchant = reload_merchant(&mut store, merchant);
+
+                // ---- Step 7: Customer receives merchant init package ----
+                let mut customer = reload_customer(&mut store, customer);
+                customer.receive_merchant_init_package(merchant_pkg).expect("customer receives merchant package");
+
+                // Round-trip: customer has peer data
+                let customer = reload_customer(&mut store, customer);
+
+                // ---- Step 8: KES bundle + validation ----
+                let kes_bundle = merchant.bundle_for_kes(&mut rng).expect("bundle for KES");
+                let kes_secret = Zeroizing::new(kes_key);
+                let kes = KesEstablishing::from_bundle(kes_secret, kes_bundle).expect("KES from bundle");
+                let (proofs, record) = kes.finalize(&mut rng);
+                assert_eq!(record.channel_id, merchant.state().metadata.channel_id().name());
+
+                // ---- Step 9: Receive KES proofs ----
+                let mut merchant = reload_merchant(&mut store, merchant);
+                let mut customer = reload_customer(&mut store, customer);
+                merchant.receive_kes_proof(proofs.clone()).expect("merchant KES proofs");
+                customer.receive_kes_proof(proofs).expect("customer KES proofs");
+
+                // Round-trip: both have KES proof
+                let mut merchant = reload_merchant(&mut store, merchant);
+                let mut customer = reload_customer(&mut store, customer);
+
+                // ---- Step 10: Fund the channel ----
+                fund_both(&mut merchant, &mut customer);
+
+                // Round-trip: both have funding tx
+                let merchant = reload_merchant(&mut store, merchant);
+                let customer = reload_customer(&mut store, customer);
+
+                // ---- Step 11: Verify requirements and transition to Established ----
+                assert!(merchant.state().requirements_met(), "merchant requirements not met");
+                assert!(customer.state().requirements_met(), "customer requirements not met");
+
+                let established_m = merchant.into_inner().next().map_err(|(s, e)| (s.to_channel_state(), e))?;
+                let established_c = customer.into_inner().next().map_err(|(s, e)| (s.to_channel_state(), e))?;
+
+                // ---- Step 12: Round-trip the Established state ----
+                let cs_m = established_m.to_channel_state();
+                let id = cs_m.as_lifecycle().name();
+                store.write_channel(&cs_m).expect("write established merchant");
+                let loaded_m = store.load_channel(&id).expect("load established merchant");
+                assert_eq!(loaded_m.as_lifecycle().stage(), LifecycleStage::Open);
+
+                let cs_c = established_c.to_channel_state();
+                store.write_channel(&cs_c).expect("write established customer");
+                let loaded_c = store.load_channel(&id).expect("load established customer");
+                assert_eq!(loaded_c.as_lifecycle().stage(), LifecycleStage::Open);
+
+                let _ = std::fs::remove_dir_all(&dir);
                 Ok(())
             }
-            let _ = inner().map_err(|(_s, e)| panic!("{}", e));
+            let _ = inner().map_err(|(_s, e)| panic!("{e}"));
         });
     }
 }

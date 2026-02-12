@@ -12,9 +12,8 @@ use crate::balance::Balances;
 use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::dleq::Dleq;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::CrossCurveScalar;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
-use crate::multisig::MultisigWalletData;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
@@ -22,7 +21,7 @@ use crate::state_machine::ChannelClosedReason;
 use ciphersuite::{Ciphersuite, Ed25519};
 use log::*;
 use modular_frost::curve::Curve as FrostCurve;
-use monero::{Address, Network};
+use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -32,7 +31,7 @@ use std::fmt::{Debug, Formatter};
 #[serde(bound = "")]
 pub struct UpdateRecord<SF: Ciphersuite = grease_grumpkin::Grumpkin> {
     // My half of the spend authority for this transaction.
-    pub my_offset: ChannelWitness<SF>,
+    pub my_offset: CrossCurveScalar<SF>,
     pub my_adapted_signature: AdaptedSignature<Ed25519>,
     pub peer_adapted_signature: AdaptedSignature<Ed25519>,
     // Data needed to reconstruct the Monero transaction for this update.
@@ -52,7 +51,7 @@ pub struct EstablishedChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, 
     pub(crate) metadata: StaticChannelMetadata<KC>,
     pub(crate) dynamic: DynamicChannelMetadata,
     /// Information needed to reconstruct the multisig wallet.
-    pub(crate) multisig_wallet: MultisigWalletData,
+    pub(crate) multisig_wallet: MultisigWallet,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     pub(crate) current_update: Option<UpdateRecord<SF>>,
     /// The per-channel KES public key ($P_g$) derived during establishment.
@@ -99,7 +98,7 @@ where
     ///
     /// # Panics
     /// Panics if no updates have been made yet. Use `has_updates()` to check first.
-    pub fn current_witness(&self) -> &ChannelWitness<SF> {
+    pub fn current_witness(&self) -> &CrossCurveScalar<SF> {
         &self.current_update.as_ref().expect("No updates have been made yet").my_offset
     }
 
@@ -113,14 +112,13 @@ where
         self.kes_channel_pubkey.as_ref()
     }
 
-    pub fn multisig_address(&self, network: Network) -> Option<String> {
-        let addr = self.multisig_wallet.address(network).to_string();
-        Some(addr)
+    pub fn multisig_address(&self) -> Option<String> {
+        Some(self.multisig_wallet.address().to_string())
     }
 
     /// Returns the keys to be able to reconstruct the multisig wallet.
     /// Warning! The result of this function contains wallet secrets!
-    pub fn wallet_data(&self) -> MultisigWalletData {
+    pub fn wallet(&self) -> MultisigWallet {
         self.multisig_wallet.clone()
     }
 
@@ -197,6 +195,7 @@ where
 }
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
+use crate::wallet::multisig_wallet::MultisigWallet;
 
 impl<SF: FrostCurve, KC: Ciphersuite> LifeCycle<KC> for EstablishedChannelState<SF, KC>
 where
@@ -214,8 +213,8 @@ where
         self.dynamic.current_balances
     }
 
-    fn wallet_address(&self, network: Network) -> Option<String> {
-        self.multisig_address(network)
+    fn wallet_address(&self) -> Option<String> {
+        self.multisig_address()
     }
 }
 

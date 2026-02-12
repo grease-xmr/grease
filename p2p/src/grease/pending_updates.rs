@@ -1,15 +1,15 @@
 use grease_babyjubjub::BabyJubJub;
 use libgrease::amount::MoneroDelta;
 use libgrease::cryptography::keys::Curve25519Secret;
-use libgrease::cryptography::ChannelWitness;
+use libgrease::cryptography::CrossCurveScalar;
+use libgrease::wallet::multisig_wallet::AdaptSig;
 use log::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use wallet::multisig_wallet::AdaptSig;
 use wallet::MultisigWallet;
 
-pub type DefaultChannelWitness = ChannelWitness<BabyJubJub>;
+pub type DefaultChannelWitness = CrossCurveScalar<BabyJubJub>;
 
 pub struct PendingUpdate {
     pub wallet: MultisigWallet,

@@ -1,5 +1,4 @@
 use crate::balance::Balances;
-use crate::cryptography::keys::Curve25519PublicKey;
 use crate::helpers::group_element_to_hex;
 use crate::key_escrow_services::KesConfiguration;
 use crate::monero::data_objects::ClosingAddresses;

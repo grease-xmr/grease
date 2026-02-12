@@ -5,7 +5,7 @@
 //! transaction.
 
 use crate::channel_id::ChannelId;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::CrossCurveScalar;
 use crate::monero::data_objects::TransactionId;
 use crate::payment_channel::HasRole;
 use ciphersuite::Ciphersuite;
@@ -19,7 +19,7 @@ pub struct RequestChannelClose<SF: Ciphersuite> {
     /// The channel being closed
     pub channel_id: ChannelId,
     /// The initiator's partial offset (ω)
-    pub offset: ChannelWitness<SF>,
+    pub offset: CrossCurveScalar<SF>,
     /// The update count at close time
     pub update_count: u64,
 }
@@ -31,7 +31,7 @@ pub struct ChannelCloseSuccess<SF: Ciphersuite> {
     /// The channel being closed
     pub channel_id: ChannelId,
     /// The responder's partial offset (ω)
-    pub offset: ChannelWitness<SF>,
+    pub offset: CrossCurveScalar<SF>,
     /// Transaction ID if the responder broadcast the closing transaction
     pub txid: Option<TransactionId>,
 }
@@ -85,13 +85,13 @@ pub trait CloseProtocolCommon<SF: Ciphersuite>: HasRole {
     /// Returns the current channel witness (adapter signature offset).
     ///
     /// The witness is guaranteed to be valid in both Ed25519 and SF scalar fields.
-    fn current_offset(&self) -> ChannelWitness<SF>;
+    fn current_offset(&self) -> CrossCurveScalar<SF>;
 
     /// Verify that a peer's offset is valid for the given update count.
     ///
     /// This validates that the offset corresponds to the expected VCOF output
     /// for the specified update count.
-    fn verify_offset(&self, offset: &ChannelWitness<SF>, update_count: u64) -> Result<(), CloseProtocolError>;
+    fn verify_offset(&self, offset: &CrossCurveScalar<SF>, update_count: u64) -> Result<(), CloseProtocolError>;
 }
 
 /// Protocol trait for the close initiator.
@@ -114,7 +114,7 @@ pub trait CloseProtocolInitiator<SF: Ciphersuite>: CloseProtocolCommon<SF> {
     ///
     /// This should only be called after receiving a successful close response
     /// if the responder didn't broadcast.
-    fn broadcast_closing_tx(&self, peer_offset: &ChannelWitness<SF>) -> Result<TransactionId, CloseProtocolError>;
+    fn broadcast_closing_tx(&self, peer_offset: &CrossCurveScalar<SF>) -> Result<TransactionId, CloseProtocolError>;
 }
 
 /// Protocol trait for the close responder.
@@ -130,7 +130,7 @@ pub trait CloseProtocolResponder<SF: Ciphersuite>: CloseProtocolCommon<SF> {
     /// Returns the transaction ID if broadcast, or None if the initiator should broadcast.
     fn sign_and_broadcast(
         &mut self,
-        initiator_offset: &ChannelWitness<SF>,
+        initiator_offset: &CrossCurveScalar<SF>,
     ) -> Result<Option<TransactionId>, CloseProtocolError>;
 
     /// Create a success response to send to the initiator.

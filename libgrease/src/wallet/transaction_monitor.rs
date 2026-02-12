@@ -1,10 +1,10 @@
-use crate::connect_to_rpc;
-use crate::errors::WalletError;
-use crate::watch_only::WatchOnlyWallet;
-use libgrease::amount::MoneroAmount;
-use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
-use libgrease::monero::data_objects::{TransactionId, TransactionRecord};
-use libgrease::monero::watcher::MonitorTransactions;
+use crate::amount::MoneroAmount;
+use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
+use crate::monero::data_objects::{TransactionId, TransactionRecord};
+use crate::monero::watcher::MonitorTransactions;
+use crate::wallet::connect_to_rpc;
+use crate::wallet::errors::WalletError;
+use crate::wallet::watch_only::WatchOnlyWallet;
 use log::*;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -42,7 +42,7 @@ impl MonitorTransactions for TransactionMonitor {
         callback: Func,
     ) -> Result<(), Self::Error>
     where
-        Func: Fn(TransactionRecord) -> () + Send + 'static,
+        Func: Fn(TransactionRecord) + Send + 'static,
     {
         info!(
             "Registering transaction watcher for channel {channel_name} at address: {}",

@@ -34,7 +34,9 @@ rand_chacha = { version = "0.3.1", optional = true }
 rand_core = { workspace = true }
 ron = {  workspace = true }
 serde = { version = "1.0.219", features = ["derive"] }
+serde_json = {workspace = true}
 subtle = "2.6.1"
+tokio = { workspace = true }
 thiserror = "2.0.12"
 zeroize = {  workspace = true }
 zkuh-rs = { version = "1.16", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "1b9f44205b" }
@@ -46,10 +48,31 @@ dleq = { workspace = true }
 flexible-transcript = { workspace = true }
 modular-frost = {  workspace = true }
 
+[dependencies.monero-wallet]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+features = ["multisig"]
+
+[dependencies.monero-simple-request-rpc]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+
+[dependencies.monero-serai]
+version = "0.1.4-alpha"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+
+[dependencies.monero-rpc]
+version = "0.1"
+git = "https://github.com/serai-dex/serai.git"
+rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+
 [dev-dependencies]
 env_logger = "0.11.8"
 sha3 = "0.10"
 futures = { version = "0.3.31", features = ["executor"] }
 serde_json = { workspace = true }
 static_assertions = "1.1"
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread",  "macros"] }

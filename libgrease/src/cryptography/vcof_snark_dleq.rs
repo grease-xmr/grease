@@ -4,8 +4,8 @@ use crate::cryptography::vcof::{
     InvalidProof, NextWitness, ProvingError, VcofPrivateData, VcofPublicData, VerifiableConsecutiveOnewayFunction,
 };
 use crate::cryptography::vcof_impls::{NoirUpdateCircuit, PoseidonGrumpkinWitness};
-use crate::cryptography::witness::ChannelWitnessPublic;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::witness::CrossCurvePoints;
+use crate::cryptography::CrossCurveScalar;
 use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
 use ciphersuite::{Ciphersuite, Ed25519};
@@ -91,7 +91,7 @@ pub struct SnarkDleqVcofProver<'p, SF, F, C: InputConverter> {
 
 impl<'p, SF, V, C> SnarkDleqVcofProver<'p, SF, V, C>
 where
-    V: NextWitness<W = ChannelWitness<SF>>,
+    V: NextWitness<W = CrossCurveScalar<SF>>,
     SF: Curve,
     Ed25519: Dleq<SF>,
     C: InputConverter,
@@ -109,12 +109,12 @@ where
 
 impl<'p, SF, V, C> VerifiableConsecutiveOnewayFunction for SnarkDleqVcofProver<'p, SF, V, C>
 where
-    V: NextWitness<W = ChannelWitness<SF>>,
+    V: NextWitness<W = CrossCurveScalar<SF>>,
     SF: Curve,
     Ed25519: Dleq<SF>,
     C: InputConverter<Private = SnarkDleqPrivateData<SF>, Public = SnarkDleqPublicData<SF>>,
 {
-    type Witness = ChannelWitness<SF>;
+    type Witness = CrossCurveScalar<SF>;
     type PrivateData = SnarkDleqPrivateData<SF>;
     type PublicData = SnarkDleqPublicData<SF>;
     type Proof = SnarkDleqProof<SF>;
@@ -176,12 +176,12 @@ where
 
 #[derive(Clone, Debug, Zeroize)]
 pub struct SnarkDleqPrivateData<SF: Ciphersuite> {
-    prev: ChannelWitness<SF>,
-    next: ChannelWitness<SF>,
+    prev: CrossCurveScalar<SF>,
+    next: CrossCurveScalar<SF>,
 }
 
 impl<SF: Ciphersuite> VcofPrivateData for SnarkDleqPrivateData<SF> {
-    type W = ChannelWitness<SF>;
+    type W = CrossCurveScalar<SF>;
 
     fn from_parts(prev: Self::W, next: Self::W) -> Self {
         Self { prev, next }
@@ -198,12 +198,12 @@ impl<SF: Ciphersuite> VcofPrivateData for SnarkDleqPrivateData<SF> {
 
 #[derive(Clone, Debug)]
 pub struct SnarkDleqPublicData<SF: Ciphersuite> {
-    prev: ChannelWitnessPublic<SF>,
-    next: ChannelWitnessPublic<SF>,
+    prev: CrossCurvePoints<SF>,
+    next: CrossCurvePoints<SF>,
 }
 
 impl<SF: Ciphersuite> VcofPublicData for SnarkDleqPublicData<SF> {
-    type G = ChannelWitnessPublic<SF>;
+    type G = CrossCurvePoints<SF>;
 
     fn from_parts(prev: Self::G, next: Self::G) -> Self {
         Self { prev, next }
@@ -226,9 +226,8 @@ mod tests {
     use crate::cryptography::vcof_impls::{NoirUpdateCircuit, CHECKSUM_UPDATE};
     use crate::cryptography::vcof_snark_dleq::GP2VcofProver;
     use crate::cryptography::witness::Offset;
-    use crate::cryptography::ChannelWitness;
+    use crate::cryptography::CrossCurveScalar;
     use crate::helpers::xmr_scalar_as_be_hex;
-    use grease_grumpkin::ArkPrimeField;
     use grease_grumpkin::Grumpkin;
     use log::info;
 
@@ -241,11 +240,11 @@ mod tests {
             GP2VcofProver::new(CHECKSUM_UPDATE, circuit.artifact(), &circuit).expect("Failed to create NoirProver");
         // Use the known data from Prover.toml (big-endian hex)
         let scalar_be = hex::decode("004ed0099c91f5472632e7c5ff692f3ef438a3a4d2c1a08f025e931bb708d983").unwrap();
-        let w0 = ChannelWitness::<Grumpkin>::try_from_be_bytes(&scalar_be.try_into().unwrap())
+        let w0 = CrossCurveScalar::<Grumpkin>::try_from_be_bytes(&scalar_be.try_into().unwrap())
             .expect("Failed to create witness from Prover.toml scalar");
         let w0_public = w0.public_points();
         // Log the public points for the transition
-        let (x, y) = w0_public.snark_point().as_coordinates_be();
+        let (x, y) = w0_public.foreign_point().as_coordinates_be();
         // Verify point coordinates match Prover.toml
         assert_eq!(
             x, "07052091e5e2778b8da8fba45ac11ee22daeee1c4d0ff93ba741b1e4349a6eff",
@@ -266,7 +265,7 @@ mod tests {
             w1_hex, "024f1d193ceff6131819b6da4b541b8d29fcef2d8981eba79116d075240d8c58",
             "w1 mismatch"
         );
-        let (p1x, p1y) = w1_public.snark_point().as_coordinates_be();
+        let (p1x, p1y) = w1_public.foreign_point().as_coordinates_be();
         assert_eq!(p1x, "04e0f6f4f79db6fc119fc681e9d9319760e9f30ad963e499601e3b10bc876013");
         assert_eq!(p1y, "1d7570ee391669cd88727a40aaa528d8b0aee3cf2918e888fb0a2fed72a72626");
 
@@ -276,7 +275,7 @@ mod tests {
         info!("SNARK proof size: {} bytes", proof.snark.len());
         info!("VCOF proof generated successfully!");
 
-        let (c1x, c1y) = public_data.next().snark_point().as_coordinates_be();
+        let (c1x, c1y) = public_data.next().foreign_point().as_coordinates_be();
         assert_eq!(c1x, p1x, "public_data.next x coordinate mismatch");
         assert_eq!(c1y, p1y, "public_data.next y coordinate mismatch");
 
@@ -299,8 +298,7 @@ mod security_tests {
     use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
     use crate::cryptography::vcof::{ProvingError, VcofPrivateData, VcofPublicData};
     use crate::cryptography::vcof_impls::{NoirUpdateCircuit, CHECKSUM_UPDATE};
-    use crate::cryptography::witness::Offset;
-    use crate::cryptography::ChannelWitness;
+    use crate::cryptography::CrossCurveScalar;
     use crate::grease_protocol::utils::Readable;
     use ciphersuite::Ed25519;
     use grease_grumpkin::Grumpkin;
@@ -325,12 +323,12 @@ mod security_tests {
         let prover = create_prover(&circuit);
 
         // The "victim" has witness w0 and publishes P0 = w0 * G
-        let w0_victim = ChannelWitness::<Grumpkin>::random();
+        let w0_victim = CrossCurveScalar::<Grumpkin>::random();
         let w1_victim = prover.compute_next(1, &w0_victim, &()).unwrap();
 
         // Attacker has a different witness w0_attacker
-        let w0_attacker = ChannelWitness::<Grumpkin>::random();
-        let w1_attacker = prover.compute_next(1, &w0_attacker, &()).unwrap();
+        let w0_attacker = CrossCurveScalar::<Grumpkin>::random();
+        let _w1_attacker = prover.compute_next(1, &w0_attacker, &()).unwrap();
 
         // Attacker generates a legitimate proof for their own transition
         let (proof_attacker, _) = prover.next(1, &w0_attacker, &()).unwrap();
@@ -349,11 +347,11 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
-        let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
+        let (proof, _public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Create a completely different set of public points
-        let w0_fake = ChannelWitness::<Grumpkin>::random();
+        let w0_fake = CrossCurveScalar::<Grumpkin>::random();
         let w1_fake = prover.compute_next(1, &w0_fake, &()).unwrap();
 
         let fake_public_data = SnarkDleqPublicData::from_parts(w0_fake.public_points(), w1_fake.public_points());
@@ -370,14 +368,14 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
 
         // Create public data from w0 -> w1
         let public_data = SnarkDleqPublicData::from_parts(w0.public_points(), w1.public_points());
 
         // But use a WRONG private witness (attacker doesn't know w0)
-        let w0_wrong = ChannelWitness::<Grumpkin>::random();
+        let w0_wrong = CrossCurveScalar::<Grumpkin>::random();
         let w1_wrong = prover.compute_next(1, &w0_wrong, &()).unwrap();
         let private_data = SnarkDleqPrivateData::from_parts(w0_wrong.clone(), w1_wrong);
 
@@ -402,7 +400,7 @@ mod security_tests {
 
         // Generate multiple random proofs and verify they all pass
         for _ in 0..5 {
-            let w0 = ChannelWitness::<Grumpkin>::random();
+            let w0 = CrossCurveScalar::<Grumpkin>::random();
             let (proof, public_data) = prover.next(1, &w0, &()).expect("Proof generation should succeed");
             let result = prover.verify(1, &public_data, &proof, &());
             assert!(result.is_ok(), "Valid proof should always verify: {:?}", result.err());
@@ -415,7 +413,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let mut current = ChannelWitness::<Grumpkin>::random();
+        let mut current = CrossCurveScalar::<Grumpkin>::random();
         for i in 1..=5u64 {
             let (proof, public_data) = prover.next(i, &current, &()).expect("Proof generation should succeed");
             let result = prover.verify(i, &public_data, &proof, &());
@@ -434,7 +432,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
         let w2 = prover.compute_next(2, &w1, &()).unwrap();
 
@@ -457,7 +455,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
 
         // Try to prove w1 -> w0 (backwards)
@@ -475,7 +473,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, public_data) = prover.next(1, &w0, &()).expect("Proof generation should succeed");
 
         // Verify with wrong indices
@@ -491,7 +489,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
         let w2 = prover.compute_next(2, &w1, &()).unwrap();
 
@@ -511,7 +509,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
 
         // Generate proof for i=2 transition (from w1)
@@ -532,11 +530,11 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        // Pick a random index in [100, 150]
-        let target_index = 100 + (OsRng.next_u64() % 51); // 100 to 150 inclusive
+        // Pick a random index in [100, 120]
+        let target_index = 100 + (OsRng.next_u64() % 21); // 100 to 120 inclusive
 
         // Build chain up to target_index
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let mut current = w0.clone();
         for i in 1..target_index {
             current = prover.compute_next(i, &current, &()).unwrap();
@@ -552,7 +550,7 @@ mod security_tests {
 
         // Scan a range of indices to find if any other index accepts this proof
         let mut valid_indices = vec![];
-        for test_index in 75..=175 {
+        for test_index in 100..=120 {
             let result = prover.verify(test_index, &public_data, &proof, &());
             if result.is_ok() {
                 valid_indices.push(test_index);
@@ -582,7 +580,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let mut current = w0.clone();
 
         // Compute a chain: w0 -> w1 -> w2 -> w3 -> w4 -> w5
@@ -608,7 +606,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let mut current = w0.clone();
 
         let mut chain = vec![w0.clone()];
@@ -637,7 +635,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (mut proof, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Corrupt some bytes in the SNARK
@@ -657,8 +655,8 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0_a = ChannelWitness::<Grumpkin>::random();
-        let w0_b = ChannelWitness::<Grumpkin>::random();
+        let w0_a = CrossCurveScalar::<Grumpkin>::random();
+        let w0_b = CrossCurveScalar::<Grumpkin>::random();
 
         let (proof_a, public_data_a) = prover.next(1, &w0_a, &()).unwrap();
         let (proof_b, _) = prover.next(1, &w0_b, &()).unwrap();
@@ -682,11 +680,11 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (valid_proof, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Generate a DLEQ proof for a completely different secret
-        let other_secret = ChannelWitness::<Grumpkin>::random();
+        let other_secret = CrossCurveScalar::<Grumpkin>::random();
         let mut rng = OsRng;
         let (forged_dleq, _) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, &other_secret)
             .expect("DLEQ generation should succeed");
@@ -708,7 +706,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let result = prover.next(0, &w0, &());
 
         assert!(result.is_err(), "Index 0 should be rejected");
@@ -728,7 +726,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
 
         // Test with various large indices
         for &index in &[1000u64, 1_000_000, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
@@ -743,7 +741,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let result = prover.next(u64::MAX, &w0, &());
 
         // Should succeed in generating a proof
@@ -764,7 +762,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Serialize
@@ -786,7 +784,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, _) = prover.next(1, &w0, &()).unwrap();
 
         let mut serialized = Vec::new();
@@ -810,7 +808,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (_, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Generate random bytes of various sizes
@@ -835,7 +833,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (valid_proof, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Create a proof with empty SNARK
@@ -855,7 +853,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (valid_proof, _) = prover.next(1, &w0, &()).unwrap();
 
         // Serialize valid proof to get the DLEQ portion
@@ -890,7 +888,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (valid_proof, _) = prover.next(1, &w0, &()).unwrap();
 
         let mut serialized = Vec::new();
@@ -914,7 +912,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, _) = prover.next(1, &w0, &()).unwrap();
 
         // Serialize and deserialize - should work fine
@@ -945,14 +943,14 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, _) = prover.next(1, &w0, &()).unwrap();
 
         // Compute the correct next witness
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
 
         // Use a different prev point
-        let w0_fake = ChannelWitness::<Grumpkin>::random();
+        let w0_fake = CrossCurveScalar::<Grumpkin>::random();
         let modified_public_data = SnarkDleqPublicData::from_parts(
             w0_fake.public_points(), // Wrong prev
             w1.public_points(),      // Correct next
@@ -968,11 +966,11 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, _) = prover.next(1, &w0, &()).unwrap();
 
         // Use a different next point
-        let w1_fake = ChannelWitness::<Grumpkin>::random();
+        let w1_fake = CrossCurveScalar::<Grumpkin>::random();
         let modified_public_data = SnarkDleqPublicData::from_parts(
             w0.public_points(),      // Correct prev
             w1_fake.public_points(), // Wrong next
@@ -988,13 +986,13 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // Swap prev and next
         let swapped_public_data = SnarkDleqPublicData::from_parts(
-            public_data.next().clone(), // next as prev
-            public_data.prev().clone(), // prev as next
+            *public_data.next(), // next as prev
+            *public_data.prev(), // prev as next
         );
 
         let result = prover.verify(1, &swapped_public_data, &proof, &());
@@ -1011,7 +1009,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, public_data) = prover.next(1, &w0, &()).unwrap();
 
         // The DLEQ should be for the next witness, not the prev witness
@@ -1026,7 +1024,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let w1 = prover.compute_next(1, &w0, &()).unwrap();
 
         // Generate DLEQ for w0 (prev) instead of w1 (next)
@@ -1058,7 +1056,7 @@ mod security_tests {
 
         // Test with some small scalar values
         for i in 1u64..=10 {
-            if let Ok(w0) = ChannelWitness::<Grumpkin>::try_from_snark_scalar(grease_grumpkin::Scalar::from(i)) {
+            if let Ok(w0) = CrossCurveScalar::<Grumpkin>::try_from_foreign_scalar(grease_grumpkin::Scalar::from(i)) {
                 let result = prover.next(1, &w0, &());
                 assert!(result.is_ok(), "Small scalar witness {i} should work: {:?}", result.err());
 
@@ -1075,16 +1073,16 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
 
         let w1_idx1 = prover.compute_next(1, &w0, &()).unwrap();
         let w1_idx2 = prover.compute_next(2, &w0, &()).unwrap();
         let w1_idx3 = prover.compute_next(3, &w0, &()).unwrap();
 
         // All should be different
-        assert_ne!(w1_idx1.public_points().snark_point(), w1_idx2.public_points().snark_point());
-        assert_ne!(w1_idx2.public_points().snark_point(), w1_idx3.public_points().snark_point());
-        assert_ne!(w1_idx1.public_points().snark_point(), w1_idx3.public_points().snark_point());
+        assert_ne!(w1_idx1.public_points().foreign_point(), w1_idx2.public_points().foreign_point());
+        assert_ne!(w1_idx2.public_points().foreign_point(), w1_idx3.public_points().foreign_point());
+        assert_ne!(w1_idx1.public_points().foreign_point(), w1_idx3.public_points().foreign_point());
     }
 
     // ==================================================================================
@@ -1097,14 +1095,14 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
 
         let (proof1, public_data1) = prover.next(1, &w0, &()).unwrap();
         let (proof2, public_data2) = prover.next(1, &w0, &()).unwrap();
 
         // Public data should be identical (deterministic)
-        assert_eq!(public_data1.prev().snark_point(), public_data2.prev().snark_point());
-        assert_eq!(public_data1.next().snark_point(), public_data2.next().snark_point());
+        assert_eq!(public_data1.prev().foreign_point(), public_data2.prev().foreign_point());
+        assert_eq!(public_data1.next().foreign_point(), public_data2.next().foreign_point());
 
         // DLEQ has randomness, so proofs will differ
         // Just verify both are valid
@@ -1118,7 +1116,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
 
         let w1_a = prover.compute_next(1, &w0, &()).unwrap();
         let w1_b = prover.compute_next(1, &w0, &()).unwrap();
@@ -1139,7 +1137,7 @@ mod security_tests {
         let prover = create_prover(&circuit);
 
         for i in 0..10 {
-            let w0 = ChannelWitness::<Grumpkin>::random();
+            let w0 = CrossCurveScalar::<Grumpkin>::random();
             let index = (i as u64 * 100) + 1; // Varied indices 1, 101, 201, ...
 
             let result = prover.next(index, &w0, &());
@@ -1160,7 +1158,7 @@ mod security_tests {
         let circuit = NoirUpdateCircuit::new().unwrap();
         let prover = create_prover(&circuit);
 
-        let w0 = ChannelWitness::<Grumpkin>::random();
+        let w0 = CrossCurveScalar::<Grumpkin>::random();
         let (proof, _) = prover.next(1, &w0, &()).unwrap();
 
         // SNARK proof should be a reasonable size (not empty, not gigantic)

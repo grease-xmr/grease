@@ -1,13 +1,13 @@
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use libgrease::payment_channel::ChannelRole;
+use libgrease::wallet::common::publish_transaction;
+use libgrease::wallet::errors::WalletError;
+use libgrease::wallet::multisig_wallet::MultisigWallet;
+use libgrease::wallet::watch_only::WatchOnlyWallet;
 use log::*;
 use monero_rpc::RpcError;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
-use wallet::errors::WalletError;
-use wallet::multisig_wallet::MultisigWallet;
-use wallet::publish_transaction;
-use wallet::watch_only::WatchOnlyWallet;
 
 /// To run this example, you need a Regtest Monero node running on localhost:25070.
 /// AND you need to have transferred at least 1 XMR to the address in `ALICE`.
@@ -32,9 +32,24 @@ async fn main() -> Result<(), WalletError> {
     println!("Bob  : {} / {}", k_b.as_hex(), p_b.as_hex());
 
     // They exchange their public keys and create multisig wallets
-    let rpc = SimpleRequestRpc::new("http://localhost:25070".into()).await?;
-    let mut wallet_a = MultisigWallet::new(rpc.clone(), k_a, &p_a, &p_b, None, ChannelRole::Customer)?;
-    let mut wallet_b = MultisigWallet::new(rpc.clone(), k_b, &p_b, &p_a, None, ChannelRole::Merchant)?;
+    let mut wallet_a = MultisigWallet::new(
+        monero::Network::Mainnet,
+        "http://localhost:25070",
+        k_a,
+        &p_a,
+        &p_b,
+        None,
+        ChannelRole::Customer,
+    )?;
+    let mut wallet_b = MultisigWallet::new(
+        monero::Network::Mainnet,
+        "http://localhost:25070",
+        k_b,
+        &p_b,
+        &p_a,
+        None,
+        ChannelRole::Merchant,
+    )?;
 
     assert_eq!(
         wallet_a.joint_public_spend_key(),
@@ -98,38 +113,44 @@ async fn main() -> Result<(), WalletError> {
     let wallet_b_pp = wallet_b.my_pre_process_data().unwrap();
 
     info!("Partially signing ALICE's wallet with Bob's pre-process data");
-    wallet_a.partial_sign(&wallet_b_pp)?;
+    wallet_a.set_peer_process_data(wallet_b_pp);
+    wallet_a.partial_sign()?;
     println!("Partial Signing completed for Alice\n");
 
     info!("Partially signing BOB's wallet with Bob's pre-process data");
-    wallet_b.partial_sign(&wallet_a_pp)?;
+    wallet_b.set_peer_process_data(wallet_a_pp);
+    wallet_b.partial_sign()?;
     println!("Partial Signing completed for Bob\n");
 
     // Serialize and restore the wallet.
     info!("Se- and Deserializing Alice's wallet");
-    let data = wallet_a.serializable();
-    let mut wallet_a = MultisigWallet::from_serializable(rpc.clone(), data)?;
+    let data = ron::to_string(&wallet_a).expect("Wallet to serialize");
+    let mut wallet_a: MultisigWallet = ron::from_str(&data).expect("Wallet to decode");
     let mut rng_a = wallet_a.deterministic_rng();
     debug!("RNG seed: {}", hex::encode(rng_a.get_seed()));
     wallet_a.prepare(payment, &mut rng_a).await?;
-    wallet_a.partial_sign(&wallet_b_pp)?;
+    wallet_a.partial_sign()?;
     info!("Restored Alice's wallet\n");
 
     info!("Creating adaptor signatures for Alice and Bob");
     // Create adaptor signature
+    // In a real scenario, this message would be the commitment_tx_message binding
+    // the signature to the channel ID and state
+    let msg = b"Example adapter signature message";
+
     let offset_b = Curve25519Secret::random(&mut rand_core::OsRng);
-    let adapted_b = wallet_b.adapt_signature(&offset_b)?;
+    let adapted_b = wallet_b.adapt_signature(&offset_b, msg)?;
 
     let offset_a = Curve25519Secret::random(&mut rand_core::OsRng);
-    let adapted_a = wallet_a.adapt_signature(&offset_a)?;
+    let adapted_a = wallet_a.adapt_signature(&offset_a, msg)?;
 
     // Alice signs with an adaptor signature
-    wallet_b.verify_adapted_signature(&adapted_a)?;
-    wallet_a.verify_adapted_signature(&adapted_b)?;
+    wallet_b.verify_adapted_signature(&adapted_a, msg)?;
+    wallet_a.verify_adapted_signature(&adapted_b, msg)?;
     println!("Adaptor signature is valid (but can't create a valid transaction yet)");
     // Recreate the original signature share
-    let ss_a = wallet_b.extract_true_signature(&adapted_a, offset_a.as_scalar())?;
-    let ss_b = wallet_a.extract_true_signature(&adapted_b, offset_b.as_scalar())?;
+    let ss_a = wallet_b.extract_true_signature(&adapted_a, offset_a.as_scalar(), msg)?;
+    let ss_b = wallet_a.extract_true_signature(&adapted_b, offset_b.as_scalar(), msg)?;
 
     let tx_a = wallet_a.sign(ss_b)?;
     println!("Alice's transaction signed successfully");
@@ -146,7 +167,8 @@ async fn main() -> Result<(), WalletError> {
     println!("weight A: {}", tx_a.weight());
     println!("weight B: {}", tx_b.weight());
 
-    publish_transaction(wallet_a.rpc(), &tx_a).await?;
+    let rpc = wallet_a.rpc_connection().await.expect("rpc connection");
+    publish_transaction(&rpc, &tx_a).await?;
     Ok(())
 }
 

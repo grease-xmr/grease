@@ -333,7 +333,7 @@ mod tests {
     fn adapter_signature_ed25519() {
         let mut rng = rand_core::OsRng;
         let k = XmrScalar::random(&mut rng);
-        let public_key = Ed25519::generator() * &k;
+        let public_key = Ed25519::generator() * k;
         let q = XmrScalar::random(&mut rng);
 
         let msg = b"test message";

@@ -4,6 +4,7 @@ use grease_cli::config::GlobalOptions;
 use grease_cli::id_management::LocalIdentitySet;
 use grease_p2p::ConversationIdentity;
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use libgrease::wallet::wallet::MoneroWallet;
 use log::*;
 use monero::util::address::Address as MoneroAddressUtil;
 use monero_address::{AddressType, MoneroAddress, Network};
@@ -11,7 +12,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use wallet::connect_to_rpc;
-use wallet::wallet::MoneroWallet;
 
 pub const KES_PUBKEY: &str = "da591aec8b4f4509103d2098125128d1ce89df51d04de4ed8b5f757550f9db46";
 

@@ -3,19 +3,18 @@ use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::dleq::Dleq;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::CrossCurveScalar;
 use crate::grease_protocol::close_channel::{
     ChannelCloseSuccess, CloseFailureReason, CloseProtocolCommon, CloseProtocolError, CloseProtocolInitiator,
     CloseProtocolResponder, RequestChannelClose, RequestCloseFailed,
 };
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
-use crate::multisig::MultisigWalletData;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::error::LifeCycleError;
 use ciphersuite::{Ciphersuite, Ed25519};
 use modular_frost::curve::Curve as FrostCurve;
-use monero::{Address, Network};
+use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -24,7 +23,7 @@ use std::collections::HashMap;
 pub struct ChannelCloseRecord<SF: Ciphersuite = grease_grumpkin::Grumpkin> {
     pub final_balance: Balances,
     pub update_count: u64,
-    pub witness: ChannelWitness<SF>,
+    pub witness: CrossCurveScalar<SF>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,9 +32,9 @@ pub struct ClosingChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: 
     pub(crate) metadata: StaticChannelMetadata<KC>,
     pub(crate) dynamic: DynamicChannelMetadata,
     pub(crate) reason: ChannelClosedReason,
-    pub(crate) multisig_wallet: MultisigWalletData,
+    pub(crate) multisig_wallet: MultisigWallet,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) peer_witness: ChannelWitness<SF>,
+    pub(crate) peer_witness: CrossCurveScalar<SF>,
     pub(crate) last_update: UpdateRecord<SF>,
     pub(crate) final_tx: Option<TransactionId>,
 }
@@ -45,27 +44,21 @@ impl<SF: Ciphersuite, KC: Ciphersuite> ClosingChannelState<SF, KC> {
         self.dynamic.current_balances
     }
 
-    pub fn multisig_address(&self, _network: Network) -> Option<String> {
-        todo!("Implement multisig address retrieval for closing channel state")
+    pub fn multisig_address(&self) -> Option<String> {
+        Some(self.multisig_wallet.address().to_string())
     }
 
-    /// Returns the keys to be able to reconstruct the multisig wallet.
-    /// Warning! The result of this function contains wallet secrets!
-    ///
-    /// This function also includes all outputs from funding transactions
-    pub fn wallet_data(&self) -> MultisigWalletData {
-        let mut data = self.multisig_wallet.clone();
-        self.funding_transactions.values().for_each(|rec| {
-            data.known_outputs.push(rec.serialized.clone());
-        });
-        data
+    /// Returns a reference to the built-in multisig wallet.
+    pub fn wallet(&self) -> &MultisigWallet {
+        // Do we need to copy over the funding tx outputs?
+        &self.multisig_wallet
     }
 
     pub fn final_update(&self) -> UpdateRecord<SF> {
         self.last_update.clone()
     }
 
-    pub fn peer_witness(&self) -> &ChannelWitness<SF> {
+    pub fn peer_witness(&self) -> &CrossCurveScalar<SF> {
         &self.peer_witness
     }
 
@@ -86,12 +79,8 @@ impl<SF: Ciphersuite, KC: Ciphersuite> ClosingChannelState<SF, KC> {
     }
 
     pub fn with_final_tx(&mut self, final_tx: TransactionId) {
-        let prev = self.final_tx.take();
-        if prev.is_some() {
-            log::warn!(
-                "Overwriting existing final transaction {} in ClosingChannelState",
-                prev.as_ref().unwrap().id
-            );
+        if let Some(prev) = self.final_tx.take() {
+            log::warn!("Overwriting existing final transaction {} in ClosingChannelState", prev.id);
         }
         self.final_tx = Some(final_tx);
     }
@@ -99,6 +88,7 @@ impl<SF: Ciphersuite, KC: Ciphersuite> ClosingChannelState<SF, KC> {
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use crate::state_machine::open_channel::UpdateRecord;
+use crate::wallet::multisig_wallet::MultisigWallet;
 
 impl<SF: FrostCurve, KC: FrostCurve> ClosingChannelState<SF, KC>
 where
@@ -139,8 +129,8 @@ where
         self.dynamic.current_balances
     }
 
-    fn wallet_address(&self, network: Network) -> Option<String> {
-        self.multisig_address(network)
+    fn wallet_address(&self) -> Option<String> {
+        self.multisig_address()
     }
 }
 
@@ -167,11 +157,11 @@ where
         self.dynamic.update_count
     }
 
-    fn current_offset(&self) -> ChannelWitness<SF> {
+    fn current_offset(&self) -> CrossCurveScalar<SF> {
         todo!()
     }
 
-    fn verify_offset(&self, _offset: &ChannelWitness<SF>, update_count: u64) -> Result<(), CloseProtocolError> {
+    fn verify_offset(&self, _offset: &CrossCurveScalar<SF>, update_count: u64) -> Result<(), CloseProtocolError> {
         // Use direct metadata access to avoid trait method ambiguity
         let my_update_count = self.dynamic.update_count;
         if update_count != my_update_count {
@@ -224,7 +214,7 @@ where
         Err(CloseProtocolError::CloseRejected(response.reason))
     }
 
-    fn broadcast_closing_tx(&self, _peer_offset: &ChannelWitness<SF>) -> Result<TransactionId, CloseProtocolError> {
+    fn broadcast_closing_tx(&self, _peer_offset: &CrossCurveScalar<SF>) -> Result<TransactionId, CloseProtocolError> {
         // This requires actual Monero transaction creation and broadcast.
         // The implementation would use the wallet_data() and combine offsets to create the closing tx.
         Err(CloseProtocolError::MissingInformation(
@@ -255,7 +245,7 @@ where
 
     fn sign_and_broadcast(
         &mut self,
-        _initiator_offset: &ChannelWitness<SF>,
+        _initiator_offset: &CrossCurveScalar<SF>,
     ) -> Result<Option<TransactionId>, CloseProtocolError> {
         // This requires actual Monero transaction creation and broadcast.
         // Return None to indicate the initiator should broadcast.

@@ -194,7 +194,7 @@ Once the KES has received both packages, it performs the validation procedure ou
     + Are dispute windows, `dw`, values equal?
       + No? *Return* Fail(`InvalidConfiguration`)
     + Store an `OpenChannel` record in private/encrypted storage.
-    + Calculate proof-of-knowledge proofs, $PokP_C$ and $PokP_M$, for $#w0^C$ and $#w0^M$ respectively.
+    + Calculate proof-of-knowledge proofs, $PokP_C$ and $PokP_M$, for $#w0^C$ and $#w0^M$ respectively, using the per-channel key #kg (not the global key #kk).
     + Send the PoK proofs to the Merchant and/or Customer.
     + Discard $w0^C$ and $w0^M$.
   ],
@@ -217,6 +217,8 @@ Once the KES has received both packages, it performs the validation procedure ou
   Notwithstanding other checks that are required, a party *must not* allow channel opening to proceed without verifying both PoK proofs. For
   the most part, the Customer can proxy communication with the KES through the merchant, but it is *recommended* that the Client at least
   queries the KES directly to obtain these proofs.
+
+  Note that to verify the PoKs, parties only need the KES global public key #Pk, since the per-channel public key is simply $#Pg = #chs dot.c #Pk$.
 ]
 
 === Failure scenarios

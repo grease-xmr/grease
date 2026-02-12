@@ -1,20 +1,18 @@
 use crate::cryptography::keys::{Curve25519PublicKey, PublicKeyCommitment};
+use crate::cryptography::Commit;
 use crate::grease_protocol::multisig_wallet::{
     HasPublicKey, LinkedMultisigWallets, MultisigWalletError, SharedPublicKey,
 };
-use crate::grease_protocol::utils::Readable;
 use crate::payment_channel::{ChannelRole, HasRole};
 use blake2::Blake2b512;
-use modular_frost::sign::Writable;
 use std::fmt;
 use thiserror::Error;
-
 // ============================================================================
 // Error Types
 // ============================================================================
 
 /// Errors that can occur during multisig wallet setup.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum MultisigSetupError {
     #[error("Invalid state transition: cannot {action} from {state} state")]
     InvalidStateTransition { state: String, action: &'static str },
@@ -38,6 +36,9 @@ impl From<MultisigWalletError> for MultisigSetupError {
             MultisigWalletError::IncompatibleRoles => MultisigSetupError::WrongRole,
             MultisigWalletError::IncorrectPublicKey => MultisigSetupError::CommitmentMismatch,
             MultisigWalletError::MissingInformation(s) => MultisigSetupError::MissingData(s),
+            MultisigWalletError::MoneroWalletError(_) => {
+                unreachable!()
+            }
         }
     }
 }
@@ -171,31 +172,27 @@ where
 
     /// Generates and serializes a commitment to our public key.
     /// Transitions: `Initialized -> CommitmentSent`
-    pub fn send_commitment(&mut self) -> Result<Vec<u8>, MultisigSetupError> {
+    pub fn commit_to_public_key(&mut self) -> Result<PublicKeyCommitment, MultisigSetupError> {
         self.require_stage(MerchantStage::Initialized, "send_commitment")?;
-        let data = self.wallet.commit_to_public_key().serialize();
+        let data = self.wallet.commit_to_public_key();
         self.stage = MerchantStage::CommitmentSent;
         Ok(data)
     }
 
     /// Receives and stores the customer's public key.
     /// Transitions: `CommitmentSent -> AwaitingPeerKey`
-    pub fn receive_peer_key(&mut self, data: &[u8]) -> Result<(), MultisigSetupError> {
+    pub fn receive_peer_key(&mut self, public_key: SharedPublicKey) -> Result<(), MultisigSetupError> {
         self.require_stage(MerchantStage::CommitmentSent, "receive_peer_key")?;
-        let shared_key = SharedPublicKey::read(&mut &data[..])
-            .map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
-        self.wallet.set_peer_public_key(shared_key);
+        self.wallet.set_peer_public_key(public_key)?;
         self.stage = MerchantStage::AwaitingPeerKey;
         Ok(())
     }
 
     /// Serializes our public key for sending to the customer.
     /// Available in: `CommitmentSent`, `AwaitingPeerKey`
-    pub fn send_public_key(&self) -> Result<Vec<u8>, MultisigSetupError> {
+    pub fn public_key(&self) -> Result<SharedPublicKey, MultisigSetupError> {
         match self.stage {
-            MerchantStage::CommitmentSent | MerchantStage::AwaitingPeerKey => {
-                Ok(self.wallet.shared_public_key().serialize())
-            }
+            MerchantStage::CommitmentSent | MerchantStage::AwaitingPeerKey => Ok(self.wallet.shared_public_key()),
             _ => Err(self.invalid_transition("send_public_key")),
         }
     }
@@ -317,10 +314,8 @@ where
 
     /// Receives and stores the merchant's commitment.
     /// Transitions: `AwaitingPeerCommitment -> AwaitingPeerKey`
-    pub fn receive_commitment(&mut self, data: &[u8]) -> Result<(), MultisigSetupError> {
+    pub fn receive_commitment(&mut self, commitment: PublicKeyCommitment) -> Result<(), MultisigSetupError> {
         self.require_stage(CustomerStage::AwaitingPeerCommitment, "receive_commitment")?;
-        let commitment = PublicKeyCommitment::read(&mut &data[..])
-            .map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
         self.wallet.set_peer_public_key_commitment(commitment);
         self.stage = CustomerStage::AwaitingPeerKey;
         Ok(())
@@ -328,25 +323,27 @@ where
 
     /// Serializes our public key for sending to the merchant.
     /// Available in: `AwaitingPeerKey`
-    pub fn send_public_key(&self) -> Result<Vec<u8>, MultisigSetupError> {
+    pub fn public_key(&self) -> Result<SharedPublicKey, MultisigSetupError> {
         self.require_stage(CustomerStage::AwaitingPeerKey, "send_public_key")?;
-        Ok(self.wallet.shared_public_key().serialize())
+        Ok(self.wallet.shared_public_key())
     }
 
     /// Receives and stores the merchant's public key.
     /// Transitions: `AwaitingPeerKey -> AwaitingVerification`
-    pub fn receive_peer_key(&mut self, data: &[u8]) -> Result<(), MultisigSetupError> {
+    pub fn receive_peer_key(&mut self, shared_key: SharedPublicKey) -> Result<(), MultisigSetupError> {
         self.require_stage(CustomerStage::AwaitingPeerKey, "receive_peer_key")?;
-        let shared_key = SharedPublicKey::read(&mut &data[..])
-            .map_err(|e| MultisigSetupError::DeserializationError(e.to_string()))?;
-        self.wallet.set_peer_public_key(shared_key);
+        let commitment = self.wallet.peer_public_key_commitment()?;
+        if !shared_key.verify(commitment) {
+            return Err(MultisigSetupError::CommitmentMismatch);
+        }
+        self.wallet.set_peer_public_key(shared_key)?;
         self.stage = CustomerStage::AwaitingVerification;
         Ok(())
     }
 
     /// Verifies that the merchant's public key matches their commitment.
     /// Transitions: `AwaitingVerification -> Complete`
-    pub fn verify(&mut self) -> Result<(), MultisigSetupError> {
+    pub fn verify_against_commitment(&mut self) -> Result<(), MultisigSetupError> {
         self.require_stage(CustomerStage::AwaitingVerification, "verify")?;
         self.wallet.verify_peer_public_key()?;
         self.stage = CustomerStage::Complete;
@@ -434,38 +431,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::impls::multisig::MultisigWalletKeyRing;
+    use crate::cryptography::keys::PublicKey;
+    use crate::payment_channel::multisig_negotioation::MultisigWalletKeyNegotiation;
+    use monero::Network;
     use rand_core::OsRng;
 
     #[test]
     fn merchant_happy_path() {
         let mut rng = OsRng;
-        let merchant_keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Merchant);
-        let customer_keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Customer);
+        let url = "http://localhost:18082";
+        let merchant_keyring =
+            MultisigWalletKeyNegotiation::random(&mut rng, ChannelRole::Merchant, Network::Mainnet, url);
+        let customer_keyring =
+            MultisigWalletKeyNegotiation::random(&mut rng, ChannelRole::Customer, Network::Mainnet, url);
 
         let mut merchant = MerchantSetup::new(merchant_keyring).unwrap();
         let mut customer = CustomerSetup::new(customer_keyring).unwrap();
 
         // Merchant sends commitment
         assert_eq!(merchant.stage(), MerchantStage::Initialized);
-        let commitment = merchant.send_commitment().unwrap();
+        let commitment = merchant.commit_to_public_key().unwrap();
         assert_eq!(merchant.stage(), MerchantStage::CommitmentSent);
 
         // Customer receives commitment and sends key
-        customer.receive_commitment(&commitment).unwrap();
-        let customer_key = customer.send_public_key().unwrap();
+        customer.receive_commitment(commitment).unwrap();
+        let customer_key = customer.public_key().unwrap();
 
         // Merchant receives key and sends their key
-        merchant.receive_peer_key(&customer_key).unwrap();
+        merchant.receive_peer_key(customer_key).unwrap();
         assert_eq!(merchant.stage(), MerchantStage::AwaitingPeerKey);
 
-        let merchant_key = merchant.send_public_key().unwrap();
+        let merchant_key = merchant.public_key().unwrap();
         merchant.complete().unwrap();
         assert!(merchant.is_ready());
 
         // Customer receives key and verifies
-        customer.receive_peer_key(&merchant_key).unwrap();
-        customer.verify().unwrap();
+        customer.receive_peer_key(merchant_key).unwrap();
+        customer.verify_against_commitment().unwrap();
         assert!(customer.is_ready());
 
         // Finalize both
@@ -477,12 +479,17 @@ mod tests {
     #[test]
     fn merchant_invalid_transitions() {
         let mut rng = OsRng;
-        let keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Merchant);
+        let url = "http://localhost:18082";
+        let keyring = MultisigWalletKeyNegotiation::random(&mut rng, ChannelRole::Merchant, Network::Mainnet, url);
         let mut merchant = MerchantSetup::new(keyring).unwrap();
 
         // Can't receive key before sending commitment
-        let fake_data = vec![0u8; 64];
-        assert!(merchant.receive_peer_key(&fake_data).is_err());
+        let (_, key) = Curve25519PublicKey::keypair(&mut rng);
+        let fake_data = SharedPublicKey::new(ChannelRole::Customer, key);
+        assert!(matches!(
+            merchant.receive_peer_key(fake_data).unwrap_err(),
+            MultisigSetupError::InvalidStateTransition { .. }
+        ));
 
         // Can't complete before receiving peer key
         assert!(merchant.complete().is_err());
@@ -491,46 +498,27 @@ mod tests {
     #[test]
     fn customer_invalid_transitions() {
         let mut rng = OsRng;
-        let keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Customer);
+        let url = "http://localhost:18082";
+        let keyring = MultisigWalletKeyNegotiation::random(&mut rng, ChannelRole::Customer, Network::Mainnet, url);
         let mut customer = CustomerSetup::new(keyring).unwrap();
 
         // Can't send key before receiving commitment
-        assert!(customer.send_public_key().is_err());
+        assert!(customer.public_key().is_err());
 
         // Can't verify before receiving peer key
-        assert!(customer.verify().is_err());
+        assert!(customer.verify_against_commitment().is_err());
     }
 
     #[test]
     fn abort_preserves_reason() {
         let mut rng = OsRng;
-        let keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Merchant);
+        let url = "http://localhost:18082";
+        let keyring = MultisigWalletKeyNegotiation::random(&mut rng, ChannelRole::Merchant, Network::Mainnet, url);
         let mut merchant = MerchantSetup::new(keyring).unwrap();
 
         merchant.abort(MultisigSetupError::Timeout);
         assert!(merchant.has_aborted());
         assert!(matches!(merchant.abort_reason(), Some(MultisigSetupError::Timeout)));
-    }
-
-    #[test]
-    fn commitment_mismatch_detected() {
-        let mut rng = OsRng;
-        let merchant_keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Merchant);
-        let customer_keyring = MultisigWalletKeyRing::random(&mut rng, ChannelRole::Customer);
-
-        let mut merchant = MerchantSetup::new(merchant_keyring).unwrap();
-        let mut customer = CustomerSetup::new(customer_keyring).unwrap();
-
-        // Bad commitment
-        customer.receive_commitment(&[42u8; 32]).unwrap();
-        let customer_key = customer.send_public_key().unwrap();
-
-        merchant.send_commitment().unwrap();
-        merchant.receive_peer_key(&customer_key).unwrap();
-        let merchant_key = merchant.send_public_key().unwrap();
-
-        customer.receive_peer_key(&merchant_key).unwrap();
-        assert!(matches!(customer.verify(), Err(MultisigSetupError::CommitmentMismatch)));
     }
 
     #[test]

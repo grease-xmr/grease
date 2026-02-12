@@ -528,7 +528,7 @@ mod test {
     use libgrease::channel_id::ChannelIdMetadata;
     use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
     use libgrease::cryptography::zk_objects::{KesProof, PartialEncryptedKey, Proofs0, PublicProof0, ShardInfo};
-    use libgrease::cryptography::ChannelWitness;
+    use libgrease::cryptography::CrossCurveScalar;
     use libgrease::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
     use libgrease::multisig::MultisigWalletData;
     use libgrease::payment_channel::ChannelRole;
@@ -536,11 +536,11 @@ mod test {
     use libgrease::state_machine::{
         ChannelCloseRecord, ChannelProposer, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, UpdateRecord,
     };
+    use libgrease::wallet::multisig_wallet::AdaptSig;
     use libgrease::XmrScalar;
     use libp2p::{Multiaddr, PeerId};
     use monero::{Address, Network};
     use std::str::FromStr;
-    use wallet::multisig_wallet::AdaptSig;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
     const ALICE_ADDRESS: &str =
@@ -633,7 +633,7 @@ mod test {
         let key = Curve25519Secret::random(&mut rand_core::OsRng);
         let q = Curve25519Secret::random(&mut rand_core::OsRng);
         let info: UpdateRecord<BabyJubJub> = UpdateRecord {
-            my_offset: ChannelWitness::random(),
+            my_offset: CrossCurveScalar::random(),
             my_adapted_signature: AdaptSig::sign(key.as_scalar(), q.as_scalar(), b"", &mut rand_core::OsRng),
             peer_adapted_signature: AdaptSig::sign(key.as_scalar(), q.as_scalar(), b"", &mut rand_core::OsRng),
             my_preprocess: b"my_prepared_info".to_vec(),
@@ -646,7 +646,7 @@ mod test {
         let close: ChannelCloseRecord<BabyJubJub> = ChannelCloseRecord {
             final_balance: channel.state().balance(),
             update_count: 1,
-            witness: ChannelWitness::random(),
+            witness: CrossCurveScalar::random(),
         };
         let event = LifeCycleEvent::CloseChannel(Box::new(close));
         channel.handle_event(event).unwrap();
