@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 /// a production environment.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MultisigWalletData {
+    pub role: ChannelRole,
     pub my_spend_key: Curve25519Secret,
     pub my_public_key: Curve25519PublicKey,
     pub sorted_pubkeys: [Curve25519PublicKey; 2],
@@ -23,7 +24,6 @@ pub struct MultisigWalletData {
     pub joint_public_spend_key: Curve25519PublicKey,
     pub birthday: u64,
     pub known_outputs: Vec<Vec<u8>>,
-    pub role: ChannelRole,
 }
 
 impl MultisigWalletData {

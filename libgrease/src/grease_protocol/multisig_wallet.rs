@@ -148,7 +148,7 @@ pub enum MultisigTxError {
     FinalSignError(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SharedPublicKey {
     pub role: ChannelRole,
     pub public_key: Curve25519PublicKey,

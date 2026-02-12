@@ -23,7 +23,6 @@
 use std::sync::LazyLock;
 
 use acir_field::{AcirField, FieldElement};
-use ciphersuite::group::ff::PrimeField;
 use grease_grumpkin::{ArkPrimeField, BigInteger, Grumpkin, Point};
 use zkuh_rs::noir_api::artifacts::load_artifact_from_string;
 use zkuh_rs::noir_api::{InputError, Inputs, PointInput, ProgramArtifact};
@@ -32,10 +31,6 @@ use crate::cryptography::noir_prover::InputConverter;
 use crate::cryptography::vcof::{VcofPrivateData, VcofPublicData};
 use crate::cryptography::vcof_snark_dleq::{SnarkDleqPrivateData, SnarkDleqPublicData};
 use crate::cryptography::witness::ChannelWitnessPublic;
-
-// Commented out: GreaseInit circuit constants (not yet implemented)
-// pub const CHECKSUM_INIT: &str = "1234bcd";
-// pub const PATH_INIT: &str = include_str!("../../../../circuits/target/GreaseInit.json");
 
 /// SHA256 checksum of the `GreaseUpdate` circuit bytecode.
 ///

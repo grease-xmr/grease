@@ -1,17 +1,94 @@
 use crate::error::ReadError;
-use crate::grease_protocol::utils::{write_field_element, write_group_element};
+use crate::grease_protocol::utils::{write_field_element, write_group_element, Readable};
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
 use log::*;
 use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, RngCore};
+use serde::{Deserialize, Serialize};
 use std::io::Read;
 use zeroize::Zeroize;
 
+// ============================================================================
+// KesPoKProofs — aggregated proof container
+// ============================================================================
+
+/// Proof-of-knowledge from the KES demonstrating it holds the decrypted offset secrets
+/// for both channel participants.
+///
+/// Each field contains a [`KesPoK`] with two bound Schnorr proofs (one for the offset
+/// secret, one for the KES private key).
+///
+/// Use [`verify_for`](KesPoKProofs::verify_for) to verify the proofs against the
+/// expected public points.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "")]
+pub struct KesPoKProofs<KC: Ciphersuite> {
+    /// [`KesPoK`] for the customer's offset.
+    pub customer_pok: KesPoK<KC>,
+    /// [`KesPoK`] for the merchant's offset.
+    pub merchant_pok: KesPoK<KC>,
+}
+
+impl<KC: Ciphersuite> KesPoKProofs<KC> {
+    /// Verify both KES proofs against the expected public points.
+    ///
+    /// - `customer_offset_point`: The customer's public offset T0_c = w0_c · G
+    /// - `merchant_offset_point`: The merchant's public offset T0_m = w0_m · G
+    /// - `kes_pubkey`: The KES public key K = k · G
+    pub fn verify_for(
+        &self,
+        customer_offset_point: &KC::G,
+        merchant_offset_point: &KC::G,
+        kes_pubkey: &KC::G,
+    ) -> Result<(), KesProofError> {
+        if !self.customer_pok.verify(customer_offset_point, kes_pubkey) {
+            return Err(KesProofError::VerificationFailed("customer KES proof-of-knowledge".into()));
+        }
+        if !self.merchant_pok.verify(merchant_offset_point, kes_pubkey) {
+            return Err(KesProofError::VerificationFailed("merchant KES proof-of-knowledge".into()));
+        }
+        Ok(())
+    }
+}
+
+impl<KC: Ciphersuite> Writable for KesPoKProofs<KC> {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> Result<(), std::io::Error> {
+        self.customer_pok.write(writer)?;
+        self.merchant_pok.write(writer)?;
+        Ok(())
+    }
+}
+
+impl<KC: Ciphersuite> Readable for KesPoKProofs<KC> {
+    fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        let customer_pok = KesPoK::<KC>::read(reader)?;
+        let merchant_pok = KesPoK::<KC>::read(reader)?;
+        Ok(Self { customer_pok, merchant_pok })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KesProofError {
+    #[error("KES proof verification failed: {0}")]
+    VerificationFailed(String),
+}
+
+// ============================================================================
+// KesPoK — bound proof of knowledge for KES
+// ============================================================================
+
+#[derive(Clone)]
 pub struct KesPoK<C: Ciphersuite> {
     pub shard_pok: SchnorrPoK<C>,
     pub private_key_pok: SchnorrPoK<C>,
+}
+
+impl<C: Ciphersuite> std::fmt::Debug for KesPoK<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KesPoK").finish_non_exhaustive()
+    }
 }
 
 impl<C: Ciphersuite> KesPoK<C> {
@@ -66,6 +143,34 @@ impl<C: Ciphersuite> Writable for KesPoK<C> {
     }
 }
 
+impl<C: Ciphersuite> Readable for KesPoK<C> {
+    fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
+        KesPoK::<C>::read(reader)
+    }
+}
+
+impl<C: Ciphersuite> Serialize for KesPoK<C> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let bytes = Writable::serialize(self);
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+}
+
+impl<'de, C: Ciphersuite> Deserialize<'de> for KesPoK<C> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let hex_str = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        KesPoK::<C>::read(&mut &bytes[..]).map_err(|e| serde::de::Error::custom(format!("{e}")))
+    }
+}
+
+#[derive(Clone)]
 pub struct SchnorrPoK<C: Ciphersuite> {
     pub_nonce: C::G,
     s: C::F,
@@ -128,6 +233,27 @@ impl<C: Ciphersuite> Writable for SchnorrPoK<C> {
     }
 }
 
+impl<C: Ciphersuite> Serialize for SchnorrPoK<C> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let bytes = Writable::serialize(self);
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+}
+
+impl<'de, C: Ciphersuite> Deserialize<'de> for SchnorrPoK<C> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let hex_str = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        SchnorrPoK::<C>::read(&mut &bytes[..]).map_err(|e| serde::de::Error::custom(format!("{e}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,7 +281,7 @@ mod tests {
         let kes_pubkey = Ed25519::generator() * &private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
         assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
-        let data = pok.serialize();
+        let data = Writable::serialize(&pok);
         let pok = KesPoK::<Ed25519>::read(&mut &data[..]).unwrap();
         assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
         let invalid_kes_pubkey = kes_pubkey + Ed25519::generator();
@@ -191,7 +317,7 @@ mod tests {
         let public_key = Ed25519::generator() * &secret;
         let binding = b"roundtrip-test";
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding);
-        let data = pok.serialize();
+        let data = Writable::serialize(&pok);
         let deserialized = SchnorrPoK::<Ed25519>::read(&mut &data[..]).unwrap();
         assert!(deserialized.verify(&public_key, binding));
     }
@@ -207,8 +333,8 @@ mod tests {
         assert!(pok1.verify(&public_key, &[]));
         assert!(pok2.verify(&public_key, &[]));
         // But they should be different (different nonces)
-        let data1 = pok1.serialize();
-        let data2 = pok2.serialize();
+        let data1 = Writable::serialize(&pok1);
+        let data2 = Writable::serialize(&pok2);
         assert_ne!(data1, data2, "proofs must use fresh nonces and produce different outputs");
     }
 
@@ -234,7 +360,7 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
-        let data = pok.serialize();
+        let data = Writable::serialize(&pok);
         // Truncate the data
         let truncated = &data[..data.len() / 2];
         let result = SchnorrPoK::<Ed25519>::read(&mut &truncated[..]);
@@ -328,7 +454,7 @@ mod tests {
         let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
-        let data = pok.serialize();
+        let data = Writable::serialize(&pok);
         // Truncate to only contain partial second proof
         let truncated = &data[..data.len() - 10];
         let result = KesPoK::<Ed25519>::read(&mut &truncated[..]);
@@ -401,10 +527,8 @@ mod tests {
         assert!(pok2.verify(&shard2_pubkey, &kes2_pubkey));
 
         // Create a mixed proof by combining parts from different KesPoKs
-        let mixed_pok = KesPoK::<Ed25519> {
-            shard_pok: SchnorrPoK::<Ed25519>::read(&mut &pok1.shard_pok.serialize()[..]).unwrap(),
-            private_key_pok: SchnorrPoK::<Ed25519>::read(&mut &pok2.private_key_pok.serialize()[..]).unwrap(),
-        };
+        let mixed_pok =
+            KesPoK::<Ed25519> { shard_pok: pok1.shard_pok.clone(), private_key_pok: pok2.private_key_pok.clone() };
 
         // Mixed proof should fail because the binding (both pubkeys) won't match
         assert!(
@@ -415,5 +539,19 @@ mod tests {
             !mixed_pok.verify(&shard2_pubkey, &kes1_pubkey),
             "mixed proof must fail: pk2 proof was bound to (shard2, kes2), not (shard2, kes1)"
         );
+    }
+
+    #[test]
+    fn kes_pok_serde_roundtrip() {
+        let mut rng = rand_core::OsRng;
+        let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let sigma_pubkey = Ed25519::generator() * &shard;
+        let kes_pubkey = Ed25519::generator() * &private_key;
+        let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
+
+        let json = serde_json::to_string(&pok).expect("serialize KesPoK");
+        let recovered: KesPoK<Ed25519> = serde_json::from_str(&json).expect("deserialize KesPoK");
+        assert!(recovered.verify(&sigma_pubkey, &kes_pubkey), "deserialized proof should verify");
     }
 }

@@ -3,7 +3,8 @@
 //! This module contains the building blocks for the Grease Payment Channel Protocol.
 
 pub mod adapter_signature;
-pub mod kes;
+pub mod channel_keys;
+pub mod kes_establishing;
 pub mod multisig_wallet;
 pub mod utils;
 

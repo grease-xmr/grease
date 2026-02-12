@@ -1,4 +1,4 @@
-use monero::{KeyPair, PrivateKey};
+use monero::{KeyPair, Network, PrivateKey};
 use serde::{Deserialize, Deserializer};
 
 pub fn deserialize_keypair<'de, D>(de: D) -> Result<KeyPair, D::Error>
@@ -32,12 +32,16 @@ pub fn serialize_network<S>(network: &monero::Network, s: S) -> Result<S::Ok, S:
 where
     S: serde::Serializer,
 {
-    let network_str = match network {
-        monero::Network::Mainnet => "mainnet",
-        monero::Network::Stagenet => "stagenet",
-        monero::Network::Testnet => "testnet",
-    };
+    let network_str = network_to_str(*network);
     s.serialize_str(network_str)
+}
+
+pub fn network_to_str(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "mainnet",
+        Network::Stagenet => "stagenet",
+        Network::Testnet => "testnet",
+    }
 }
 
 pub fn deserialize_network<'de, D>(de: D) -> Result<monero::Network, D::Error>

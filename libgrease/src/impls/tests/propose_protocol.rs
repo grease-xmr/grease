@@ -1,430 +1,257 @@
-//! Tests for the ProposeProtocol traits.
-//!
-//! These tests verify the channel proposal flow between merchant (proposer) and customer (proposee).
+//! Tests for the channel proposal FSM.
 
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
-use crate::channel_id::ChannelIdMetadata;
-use crate::cryptography::keys::{Curve25519PublicKey, PublicKey};
-use crate::grease_protocol::propose_channel::{
-    ChannelSeedConfig, ProposeProtocolCommon, ProposeProtocolError, ProposeProtocolProposee, ProposeProtocolProposer,
-};
-use crate::monero::data_objects::ClosingAddresses;
+use crate::channel_id::ChannelId;
+use crate::grease_protocol::propose_channel::MerchantSeedBuilder;
+use crate::grease_protocol::MerchantSeedInfo;
+use crate::key_escrow_services::{KesConfiguration, KesImplementation};
 use crate::payment_channel::{ChannelRole, HasRole};
-use crate::state_machine::{ChannelSeedBuilder, ChannelSeedInfo, NewChannelProposal, RejectNewChannelReason};
-use monero::{Address, Network};
-use rand_core::{CryptoRng, OsRng, RngCore};
+use crate::state_machine::error::InvalidProposal;
+use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
+use crate::state_machine::{
+    AwaitProposal, ChannelClosedReason, ChannelProposer, EstablishingState, ProposalConfirmed, ProposalResponse,
+    RejectProposalReason, TimeoutReason,
+};
+use crate::{XmrPoint, XmrScalar};
+use ciphersuite::group::ff::Field;
+use ciphersuite::group::Group;
+use monero::Network;
 use std::str::FromStr;
+use zeroize::Zeroizing;
 
-const ALICE_ADDRESS: &str =
+const MERCHANT_ADDRESS: &str =
     "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
-const BOB_ADDRESS: &str =
+const CUSTOMER_ADDRESS: &str =
     "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
-/// Test implementation of ProposeProtocolProposer (merchant side)
-struct MerchantProposer {
-    role: ChannelRole,
-    channel_key: Curve25519PublicKey,
-    seed_info: Option<ChannelSeedInfo>,
-    channel_id: Option<ChannelIdMetadata>,
-    received_proposal: Option<NewChannelProposal>,
-    nonce: u64,
+fn test_balances() -> Balances {
+    Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("1.25").unwrap())
 }
 
-impl MerchantProposer {
-    fn new<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
-        let (_, channel_key) = Curve25519PublicKey::keypair(rng);
-        Self {
-            role: ChannelRole::Merchant,
-            channel_key,
-            seed_info: None,
-            channel_id: None,
-            received_proposal: None,
-            nonce: rng.next_u64(),
-        }
-    }
+fn zero_balances() -> Balances {
+    Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("0.0").unwrap())
 }
 
-impl HasRole for MerchantProposer {
-    fn role(&self) -> ChannelRole {
-        self.role
-    }
-}
-
-impl ProposeProtocolCommon for MerchantProposer {
-    fn channel_id(&self) -> Option<&ChannelIdMetadata> {
-        self.channel_id.as_ref()
-    }
-
-    fn seed_info(&self) -> Option<&ChannelSeedInfo> {
-        self.seed_info.as_ref()
-    }
-
-    fn validate_seed_info(&self) -> Result<(), ProposeProtocolError> {
-        let seed =
-            self.seed_info.as_ref().ok_or_else(|| ProposeProtocolError::MissingInformation("seed info".into()))?;
-        if seed.initial_balances.total().is_zero() {
-            return Err(ProposeProtocolError::BalanceValidationFailed("total balance is zero".into()));
-        }
-        Ok(())
-    }
-}
-
-impl ProposeProtocolProposer for MerchantProposer {
-    fn create_channel_seed<R: RngCore + CryptoRng>(
-        &mut self,
-        _rng: &mut R,
-        config: ChannelSeedConfig,
-    ) -> Result<ChannelSeedInfo, ProposeProtocolError> {
-        let initial_balances =
-            Balances::new(MoneroAmount::from_xmr("0.0").unwrap(), MoneroAmount::from_xmr("1.0").unwrap());
-
-        let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Stagenet)
-            .with_kes_public_key(config.kes_public_key)
-            .with_initial_balances(initial_balances)
-            .with_closing_address(config.closing_address)
-            .with_channel_key(self.channel_key.clone())
-            .with_channel_nonce(self.nonce)
-            .build()
-            .map_err(|e| ProposeProtocolError::MissingInformation(e.to_string()))?;
-
-        self.seed_info = Some(seed.clone());
-        Ok(seed)
-    }
-
-    fn receive_proposal(&mut self, proposal: &NewChannelProposal) -> Result<(), ProposeProtocolError> {
-        if self.received_proposal.is_some() {
-            return Err(ProposeProtocolError::ProposalAlreadyReceived);
-        }
-
-        // Validate the proposal matches our seed info
-        let seed = self.seed_info.as_ref().ok_or(ProposeProtocolError::MissingInformation("seed info".into()))?;
-
-        if proposal.seed.kes_public_key != seed.kes_public_key {
-            return Err(ProposeProtocolError::InvalidProposal("KES public key mismatch".into()));
-        }
-
-        if proposal.seed.initial_balances != seed.initial_balances {
-            return Err(ProposeProtocolError::InvalidProposal("balance mismatch".into()));
-        }
-
-        // Store the channel ID from the proposal
-        self.channel_id = Some(proposal.channel_id.clone());
-        self.received_proposal = Some(proposal.clone());
-        Ok(())
-    }
-
-    fn accept_proposal(&self) -> Result<NewChannelProposal, ProposeProtocolError> {
-        self.received_proposal.clone().ok_or(ProposeProtocolError::NoProposalReceived)
-    }
-
-    fn reject_proposal(&self, _reason: RejectNewChannelReason) -> Result<(), ProposeProtocolError> {
-        if self.received_proposal.is_none() {
-            return Err(ProposeProtocolError::NoProposalReceived);
-        }
-        Ok(())
-    }
-}
-
-/// Test implementation of ProposeProtocolProposee (customer side)
-struct CustomerProposee {
-    role: ChannelRole,
-    channel_key: Curve25519PublicKey,
-    seed_info: Option<ChannelSeedInfo>,
-    channel_id: Option<ChannelIdMetadata>,
-    sent_proposal: Option<NewChannelProposal>,
-    nonce: u64,
-    rejected: bool,
-}
-
-impl CustomerProposee {
-    fn new<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
-        let (_, channel_key) = Curve25519PublicKey::keypair(rng);
-        Self {
-            role: ChannelRole::Customer,
-            channel_key,
-            seed_info: None,
-            channel_id: None,
-            sent_proposal: None,
-            nonce: rng.next_u64(),
-            rejected: false,
-        }
-    }
-}
-
-impl HasRole for CustomerProposee {
-    fn role(&self) -> ChannelRole {
-        self.role
-    }
-}
-
-impl ProposeProtocolCommon for CustomerProposee {
-    fn channel_id(&self) -> Option<&ChannelIdMetadata> {
-        self.channel_id.as_ref()
-    }
-
-    fn seed_info(&self) -> Option<&ChannelSeedInfo> {
-        self.seed_info.as_ref()
-    }
-
-    fn validate_seed_info(&self) -> Result<(), ProposeProtocolError> {
-        let seed = self.seed_info.as_ref().ok_or_else(|| ProposeProtocolError::SeedInfoNotReceived)?;
-        if seed.initial_balances.total().is_zero() {
-            return Err(ProposeProtocolError::BalanceValidationFailed("total balance is zero".into()));
-        }
-        Ok(())
-    }
-}
-
-impl ProposeProtocolProposee for CustomerProposee {
-    fn receive_seed_info(&mut self, seed: ChannelSeedInfo) -> Result<(), ProposeProtocolError> {
-        if seed.initial_balances.total().is_zero() {
-            return Err(ProposeProtocolError::InvalidSeedInfo("zero total balance".into()));
-        }
-        self.seed_info = Some(seed);
-        Ok(())
-    }
-
-    fn create_proposal<R: RngCore + CryptoRng>(
-        &self,
-        _rng: &mut R,
-        closing_address: &Address,
-    ) -> Result<NewChannelProposal, ProposeProtocolError> {
-        let seed = self.seed_info.as_ref().ok_or(ProposeProtocolError::SeedInfoNotReceived)?;
-
-        let closing_addresses =
-            ClosingAddresses::new(&closing_address.to_string(), &seed.merchant_closing_address.to_string())
-                .map_err(|e| ProposeProtocolError::InvalidProposal(e.to_string()))?;
-
-        let channel_id = ChannelIdMetadata::new(
-            seed.merchant_channel_key.clone(),
-            self.channel_key.clone(),
-            seed.initial_balances,
-            closing_addresses,
-            seed.merchant_nonce,
-            self.nonce,
-        );
-
-        Ok(NewChannelProposal { network: seed.network, channel_id, seed: seed.clone() })
-    }
-
-    fn handle_acceptance(&mut self, accepted: &NewChannelProposal) -> Result<(), ProposeProtocolError> {
-        // Verify the accepted proposal matches what we sent
-        if let Some(ref sent) = self.sent_proposal {
-            if sent.channel_id.name() != accepted.channel_id.name() {
-                return Err(ProposeProtocolError::ChannelIdMismatch {
-                    expected: sent.channel_id.name().to_string(),
-                    actual: accepted.channel_id.name().to_string(),
-                });
-            }
-        }
-        self.channel_id = Some(accepted.channel_id.clone());
-        Ok(())
-    }
-
-    fn handle_rejection(&mut self, _reason: RejectNewChannelReason) -> Result<(), ProposeProtocolError> {
-        self.rejected = true;
-        Ok(())
-    }
-}
-
-#[test]
-fn test_merchant_create_seed_info() {
-    let mut rng = OsRng;
-    let mut merchant = MerchantProposer::new(&mut rng);
-
-    let config = ChannelSeedConfig {
-        kes_public_key: "test_kes_pubkey".to_string(),
-        closing_address: Address::from_str(BOB_ADDRESS).unwrap(),
-    };
-
-    let seed = merchant.create_channel_seed(&mut rng, config).expect("should create seed");
-
-    assert_eq!(seed.kes_public_key, "test_kes_pubkey");
-    assert_eq!(seed.role, ChannelRole::Customer);
-    assert!(merchant.seed_info().is_some());
-    assert!(merchant.validate_seed_info().is_ok());
-}
-
-#[test]
-fn test_customer_receive_seed_and_propose() {
-    let mut rng = OsRng;
-    let mut merchant = MerchantProposer::new(&mut rng);
-    let mut customer = CustomerProposee::new(&mut rng);
-
-    // Merchant creates seed
-    let config = ChannelSeedConfig {
-        kes_public_key: "test_kes_pubkey".to_string(),
-        closing_address: Address::from_str(BOB_ADDRESS).unwrap(),
-    };
-    let seed = merchant.create_channel_seed(&mut rng, config).expect("should create seed");
-
-    // Customer receives seed
-    customer.receive_seed_info(seed).expect("should receive seed");
-    assert!(customer.seed_info().is_some());
-    assert!(customer.validate_seed_info().is_ok());
-
-    // Customer creates proposal
-    let customer_address = Address::from_str(ALICE_ADDRESS).unwrap();
-    let proposal = customer.create_proposal(&mut rng, &customer_address).expect("should create proposal");
-
-    assert_eq!(proposal.network, Network::Stagenet);
-    assert!(proposal.channel_id.name().as_str().starts_with("XGC"));
-}
-
-#[test]
-fn test_full_proposal_flow() {
-    let mut rng = OsRng;
-    let mut merchant = MerchantProposer::new(&mut rng);
-    let mut customer = CustomerProposee::new(&mut rng);
-
-    // 1. Merchant creates seed info
-    let config = ChannelSeedConfig {
-        kes_public_key: "test_kes_pubkey".to_string(),
-        closing_address: Address::from_str(BOB_ADDRESS).unwrap(),
-    };
-    let seed = merchant.create_channel_seed(&mut rng, config).expect("should create seed");
-
-    // 2. Customer receives seed info
-    customer.receive_seed_info(seed).expect("should receive seed");
-
-    // 3. Customer creates proposal
-    let customer_address = Address::from_str(ALICE_ADDRESS).unwrap();
-    let proposal = customer.create_proposal(&mut rng, &customer_address).expect("should create proposal");
-    customer.sent_proposal = Some(proposal.clone());
-
-    // 4. Merchant receives proposal
-    merchant.receive_proposal(&proposal).expect("should receive proposal");
-
-    // 5. Merchant accepts proposal
-    let accepted = merchant.accept_proposal().expect("should accept proposal");
-
-    // 6. Customer handles acceptance
-    customer.handle_acceptance(&accepted).expect("should handle acceptance");
-
-    // Verify both have the same channel ID
-    assert_eq!(merchant.channel_id().unwrap().name(), customer.channel_id().unwrap().name());
-}
-
-#[test]
-fn test_proposal_rejection() {
-    let mut rng = OsRng;
-    let mut merchant = MerchantProposer::new(&mut rng);
-    let mut customer = CustomerProposee::new(&mut rng);
-
-    // Setup
-    let config = ChannelSeedConfig {
-        kes_public_key: "test_kes_pubkey".to_string(),
-        closing_address: Address::from_str(BOB_ADDRESS).unwrap(),
-    };
-    let seed = merchant.create_channel_seed(&mut rng, config).expect("should create seed");
-    customer.receive_seed_info(seed).expect("should receive seed");
-
-    let customer_address = Address::from_str(ALICE_ADDRESS).unwrap();
-    let proposal = customer.create_proposal(&mut rng, &customer_address).expect("should create proposal");
-
-    // Merchant receives and rejects
-    merchant.receive_proposal(&proposal).expect("should receive proposal");
-    let reason = RejectNewChannelReason::new("insufficient funds");
-    merchant.reject_proposal(reason.clone()).expect("should reject proposal");
-
-    // Customer handles rejection
-    customer.handle_rejection(reason).expect("should handle rejection");
-    assert!(customer.rejected);
-}
-
-#[test]
-fn test_duplicate_proposal_rejected() {
-    let mut rng = OsRng;
-    let mut merchant = MerchantProposer::new(&mut rng);
-    let customer = CustomerProposee::new(&mut rng);
-
-    // Setup
-    let config = ChannelSeedConfig {
-        kes_public_key: "test_kes_pubkey".to_string(),
-        closing_address: Address::from_str(BOB_ADDRESS).unwrap(),
-    };
-    let seed = merchant.create_channel_seed(&mut rng, config).expect("should create seed");
-
-    // Create a minimal valid proposal
-    let closing_addresses = ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).unwrap();
-    let channel_id = ChannelIdMetadata::new(
-        merchant.channel_key.clone(),
-        customer.channel_key.clone(),
-        seed.initial_balances,
-        closing_addresses,
-        seed.merchant_nonce,
-        12345,
-    );
-    let proposal = NewChannelProposal { network: seed.network, channel_id, seed: seed.clone() };
-
-    // First proposal succeeds
-    merchant.receive_proposal(&proposal).expect("first proposal should succeed");
-
-    // Second proposal fails
-    let result = merchant.receive_proposal(&proposal);
-    assert!(matches!(result, Err(ProposeProtocolError::ProposalAlreadyReceived)));
-}
-
-#[test]
-fn test_accept_without_proposal_fails() {
-    let mut rng = OsRng;
-    let merchant = MerchantProposer::new(&mut rng);
-
-    let result = merchant.accept_proposal();
-    assert!(matches!(result, Err(ProposeProtocolError::NoProposalReceived)));
-}
-
-#[test]
-fn test_create_proposal_without_seed_fails() {
-    let mut rng = OsRng;
-    let customer = CustomerProposee::new(&mut rng);
-
-    let customer_address = Address::from_str(ALICE_ADDRESS).unwrap();
-    let result = customer.create_proposal(&mut rng, &customer_address);
-    assert!(matches!(result, Err(ProposeProtocolError::SeedInfoNotReceived)));
-}
-
-#[test]
-fn test_invalid_seed_info_rejected() {
-    let mut rng = OsRng;
-    let mut customer = CustomerProposee::new(&mut rng);
-
-    // Create seed with zero balance
-    let seed = ChannelSeedBuilder::new(ChannelRole::Customer, Network::Stagenet)
-        .with_kes_public_key("test_kes")
-        .with_initial_balances(Balances::new(
-            MoneroAmount::from_xmr("0.0").unwrap(),
-            MoneroAmount::from_xmr("0.0").unwrap(),
-        ))
-        .with_closing_address(Address::from_str(BOB_ADDRESS).unwrap())
-        .with_channel_key(customer.channel_key.clone())
-        .with_channel_nonce(12345)
+fn build_merchant_seed_with_balances(
+    kes_private_key: &XmrScalar,
+    balances: Balances,
+) -> (MerchantSeedInfo, Zeroizing<XmrScalar>) {
+    let channel_secret = Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng));
+    let kes_pk = XmrPoint::generator() * kes_private_key;
+    let peer_pk = XmrPoint::generator() * &*channel_secret;
+    let kes_config = KesConfiguration::new_with_defaults(kes_pk, peer_pk);
+    let merchant_secret = XmrScalar::random(&mut rand_core::OsRng);
+    let seed = MerchantSeedBuilder::new(Network::Mainnet, KesImplementation::StandaloneEd25519)
+        .with_kes_config(kes_config)
+        .with_initial_balances(balances)
+        .derive_channel_pubkey(&merchant_secret)
+        .with_channel_nonce(100)
+        .with_closing_address(MERCHANT_ADDRESS.parse().unwrap())
         .build()
-        .unwrap();
+        .expect("to build merchant seed info");
+    (seed, channel_secret)
+}
 
-    let result = customer.receive_seed_info(seed);
-    assert!(matches!(result, Err(ProposeProtocolError::InvalidSeedInfo(_))));
+fn build_merchant_seed(kes_private_key: &XmrScalar) -> (MerchantSeedInfo, Zeroizing<XmrScalar>) {
+    build_merchant_seed_with_balances(kes_private_key, test_balances())
+}
+
+/// C1: Customer receives seed info, creates ChannelProposer, and generates a proposal.
+fn customer_creates_proposal(seed: MerchantSeedInfo) -> ChannelProposer {
+    let customer_secret = Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng));
+    let customer_addr = CUSTOMER_ADDRESS.parse().unwrap();
+    let proposer = ChannelProposer::new(seed, customer_secret, customer_addr, 200).expect("should create proposer");
+    assert_eq!(proposer.role(), ChannelRole::Customer);
+    proposer
+}
+
+/// Returns a ChannelId that won't match any legitimately derived channel ID.
+fn fake_channel_id() -> ChannelId {
+    ChannelId::from_str("XGC00000000000000000000000000000000000000000000000000000000000000").unwrap()
+}
+
+pub fn establish_channel() -> (EstablishingState, EstablishingState) {
+    let (merchant, customer, _kes_key) = establish_channel_with_kes_key();
+    (merchant, customer)
+}
+
+/// Like [`establish_channel`] but also returns the KES private key used during proposal setup.
+pub fn establish_channel_with_kes_key() -> (EstablishingState, EstablishingState, XmrScalar) {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (customer, proposal) = customer.into_proposal();
+    let (merchant, response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
+
+    let (customer, confirmation) =
+        customer.handle_response(response).expect("Customer should accept merchant acceptance");
+    let merchant = merchant.handle_confirmation(confirmation).expect("Merchant should accept valid proposal");
+    (merchant, customer, kes_private_key)
 }
 
 #[test]
-fn test_channel_id_calculation() {
-    let mut rng = OsRng;
-    let mut merchant = MerchantProposer::new(&mut rng);
-    let mut customer = CustomerProposee::new(&mut rng);
+fn happy_path() {
+    let (merchant, customer) = establish_channel();
+    assert_eq!(merchant.stage(), LifecycleStage::Establishing);
+    assert_eq!(customer.stage(), LifecycleStage::Establishing);
+}
 
-    let config = ChannelSeedConfig {
-        kes_public_key: "test_kes_pubkey".to_string(),
-        closing_address: Address::from_str(BOB_ADDRESS).unwrap(),
-    };
-    let seed = merchant.create_channel_seed(&mut rng, config).expect("should create seed");
-    customer.receive_seed_info(seed).expect("should receive seed");
+// ====================== M2: ReceiveProposal::receive_proposal ======================
 
-    let customer_address = Address::from_str(ALICE_ADDRESS).unwrap();
-    let proposal = customer.create_proposal(&mut rng, &customer_address).expect("should create proposal");
+/// M2: Merchant rejects a proposal with tampered seed info.
+#[test]
+fn merchant_rejects_tampered_seed() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (_customer, mut proposal) = customer.into_proposal();
+    // Tamper with the echoed seed's merchant nonce
+    proposal.seed.merchant_nonce = 999;
+    let err = merchant.receive_proposal(proposal).unwrap_err();
+    assert!(matches!(err, InvalidProposal::SeedMismatch));
+}
 
-    // Channel ID should be deterministic and start with XGC prefix
-    let channel_id = proposal.channel_id.name();
-    assert!(channel_id.as_str().starts_with("XGC"));
-    assert_eq!(channel_id.as_str().len(), 65);
+/// M2: Merchant rejects a proposal with zero total balance.
+#[test]
+fn merchant_rejects_zero_balance() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed_with_balances(&kes_private_key, zero_balances());
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (_customer, proposal) = customer.into_proposal();
+    let err = merchant.receive_proposal(proposal).unwrap_err();
+    assert!(matches!(err, InvalidProposal::ZeroTotalValue));
+}
+
+// ====================== C2: AwaitingProposalResponse::handle_response ======================
+
+/// C2: Customer handles merchant rejection, transitions to Closed.
+#[test]
+fn customer_handles_rejection() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, _merchant_secret) = build_merchant_seed(&kes_private_key);
+    let customer = customer_creates_proposal(seed);
+    let (customer, _proposal) = customer.into_proposal();
+    let response = ProposalResponse::Rejected(RejectProposalReason::new("Not interested"));
+    let closed = customer.handle_response(response).unwrap_err();
+    assert!(matches!(closed.reason(), ChannelClosedReason::Rejected(_)));
+}
+
+/// C2: Customer rejects acceptance with tampered customer_channel_key.
+///
+/// If the merchant returns an acceptance with a channel ID that doesn't match the one the
+/// customer computed (e.g. because the merchant used a different key), the customer closes.
+#[test]
+fn customer_rejects_tampered_key_in_acceptance() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, _merchant_secret) = build_merchant_seed(&kes_private_key);
+    let customer = customer_creates_proposal(seed);
+    let (customer, _proposal) = customer.into_proposal();
+    let response = ProposalResponse::Accepted(fake_channel_id());
+    let closed = customer.handle_response(response).unwrap_err();
+    assert!(matches!(closed.reason(), ChannelClosedReason::Rejected(_)));
+}
+
+/// C2: AwaitingProposalResponse can timeout to Closed.
+#[test]
+fn awaiting_response_timeout() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, _merchant_secret) = build_merchant_seed(&kes_private_key);
+    let customer = customer_creates_proposal(seed);
+    let (customer, _proposal) = customer.into_proposal();
+    let reason = TimeoutReason::new("No response from merchant", LifecycleStage::Establishing);
+    let closed = customer.timeout(reason);
+    assert!(matches!(closed.reason(), ChannelClosedReason::Timeout(_)));
+    assert_eq!(closed.final_balances(), test_balances());
+}
+
+// ====================== M3: AwaitingConfirmation ======================
+
+/// M3: Merchant rejects confirmation with mismatched channel ID.
+#[test]
+fn merchant_rejects_mismatched_confirmation() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (_customer, proposal) = customer.into_proposal();
+    let (merchant, _response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
+    let bad_confirmation = ProposalConfirmed { channel_id: fake_channel_id() };
+    let closed = merchant.handle_confirmation(bad_confirmation).unwrap_err();
+    assert!(matches!(closed.reason(), ChannelClosedReason::Rejected(_)));
+}
+
+/// AwaitingConfirmation can timeout to Closed.
+#[test]
+fn awaiting_confirmation_timeout() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (_customer, proposal) = customer.into_proposal();
+    let (merchant, _response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
+    let reason = TimeoutReason::new("Customer did not confirm", LifecycleStage::Establishing);
+    let closed = merchant.timeout(reason);
+    assert!(matches!(closed.reason(), ChannelClosedReason::Timeout(_)));
+    assert_eq!(closed.final_balances(), test_balances());
+}
+
+/// AwaitingConfirmation can reject to Closed.
+#[test]
+fn awaiting_confirmation_reject() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (_customer, proposal) = customer.into_proposal();
+    let (merchant, _response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
+    let reason = RejectProposalReason::new("Customer data is suspicious");
+    let closed = merchant.reject(reason);
+    assert!(matches!(closed.reason(), ChannelClosedReason::Rejected(_)));
+}
+
+// ====================== Additional edge cases ======================
+
+/// Both parties compute the same channel ID after a successful proposal exchange.
+#[test]
+fn established_channel_ids_match() {
+    let (merchant, customer) = establish_channel();
+    assert_eq!(merchant.metadata.channel_id().name(), customer.metadata.channel_id().name());
+}
+
+/// Merchant and customer have the correct roles after establishing.
+#[test]
+fn established_roles_are_correct() {
+    let (merchant, customer) = establish_channel();
+    assert_eq!(merchant.metadata.role(), ChannelRole::Merchant);
+    assert_eq!(customer.metadata.role(), ChannelRole::Customer);
+}
+
+/// Closing during the proposal phase preserves the initial balances as final balances.
+#[test]
+fn rejection_preserves_initial_balances() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, _merchant_secret) = build_merchant_seed(&kes_private_key);
+    let customer = customer_creates_proposal(seed);
+    let (customer, _proposal) = customer.into_proposal();
+    let response = ProposalResponse::Rejected(RejectProposalReason::new("Declined"));
+    let closed = customer.handle_response(response).unwrap_err();
+    assert_eq!(closed.final_balances(), test_balances());
+}
+
+/// Tampered seed with a modified closing address is also detected.
+#[test]
+fn merchant_rejects_tampered_closing_address() {
+    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let customer = customer_creates_proposal(seed);
+    let (_customer, mut proposal) = customer.into_proposal();
+    // Tamper with the closing address in the echoed seed
+    proposal.seed.merchant_closing_address = CUSTOMER_ADDRESS.parse().unwrap();
+    let err = merchant.receive_proposal(proposal).unwrap_err();
+    assert!(matches!(err, InvalidProposal::SeedMismatch));
 }

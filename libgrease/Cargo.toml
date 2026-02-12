@@ -9,10 +9,10 @@ default = ["mocks"]
 
 [dependencies]
 
-acir_field = { version = "1.0.0-beta.15", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "ceb43b13ab0c6039dc709067a320026bf7718e9a" }
+acir_field = { version = "1.0.0-beta.15", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "1b9f44205b" }
+aes-gcm = "0.10.3"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-bn254_blackbox_solver = { version = "1.0.0-beta.15", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "ceb43b13ab0c6039dc709067a320026bf7718e9a" }
 taceo-poseidon2 = { version = "0.2.1", features = ["bn254", "t2", "t3"] }
 ark-bn254 = "0.5"
 ark-ff = "0.5"
@@ -37,7 +37,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 subtle = "2.6.1"
 thiserror = "2.0.12"
 zeroize = {  workspace = true }
-zkuh-rs = { version = "1.15", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "ceb43b13ab0c6039dc709067a320026bf7718e9a" }
+zkuh-rs = { version = "1.16", git = "https://github.com/grease-xmr/aztec-packages.git", rev = "1b9f44205b" }
 
 # Serai dependencies
 ciphersuite = { workspace = true }

@@ -1,5 +1,6 @@
 use crate::errors::PaymentChannelError;
 use crate::ContactInfo;
+use grease_grumpkin::Grumpkin;
 use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::crypto_context::{with_crypto_context, CryptoContext};
@@ -9,8 +10,8 @@ use libgrease::multisig::MultisigWalletData;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle};
 use libgrease::state_machine::{
-    ChannelCloseRecord, ChannelSeedInfo, ClosingChannelState, EstablishedChannelState, EstablishingState,
-    LifeCycleEvent, NewChannelProposal, NewChannelState, RejectNewChannelReason, TimeoutReason, UpdateRecord,
+    ChannelCloseRecord, ClosingChannelState, EstablishedChannelState, EstablishingState, LifeCycleEvent,
+    MerchantSeedInfo, NewChannelProposal, ProposingState, RejectProposalReason, TimeoutReason, UpdateRecord,
 };
 use libp2p::PeerId;
 use log::*;
@@ -24,12 +25,12 @@ use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 #[derive(Serialize, Deserialize)]
 pub struct OutOfBandMerchantInfo {
     pub contact: ContactInfo,
-    pub seed: ChannelSeedInfo,
+    pub seed: MerchantSeedInfo,
 }
 
 impl OutOfBandMerchantInfo {
     /// Creates a new `OutOfBandMerchantInfo` with the given contact and channel seed information.
-    pub fn new(contact: ContactInfo, seed: ChannelSeedInfo) -> Self {
+    pub fn new(contact: ContactInfo, seed: MerchantSeedInfo) -> Self {
         OutOfBandMerchantInfo { contact, seed }
     }
 }
@@ -120,8 +121,8 @@ impl PaymentChannel {
         self.state.as_ref().expect("State should be present")
     }
 
-    pub fn is_new_channel(&self) -> bool {
-        matches!(self.state, Some(ChannelState::New(_)))
+    pub fn is_proposing(&self) -> bool {
+        matches!(self.state, Some(ChannelState::Proposing(_)))
     }
 
     pub fn is_establishing(&self) -> bool {
@@ -147,13 +148,14 @@ impl PaymentChannel {
 
     pub fn handle_event(&mut self, event: LifeCycleEvent) -> Result<(), LifeCycleError> {
         trace!("⚡️  Handling event: {event}");
-        if self.is_new_channel() {
+        if self.is_proposing() {
             match event {
-                LifeCycleEvent::VerifiedProposal(ack) => self.on_verified_proposal(*ack),
-                LifeCycleEvent::RejectNewChannel(reason) => self.on_reject_new_channel(*reason),
+                LifeCycleEvent::ProposalAcceptedByMerchant(ack) => self.on_proposal_accepted(*ack),
+                LifeCycleEvent::MerchantAcceptedProposal(proposal) => self.on_merchant_accepted(*proposal),
+                LifeCycleEvent::RejectProposal(reason) => self.on_reject_proposal(*reason),
                 LifeCycleEvent::Timeout(reason) => self.on_timeout(*reason),
                 _ => Err(LifeCycleError::InvalidState(format!(
-                    "Received event {event} in New state, which is not allowed"
+                    "Received event {event} in Proposing state, which is not allowed"
                 ))),
             }
         } else if self.is_establishing() {
@@ -197,32 +199,51 @@ impl PaymentChannel {
         }
     }
 
-    fn on_verified_proposal(&mut self, proposal: NewChannelProposal) -> Result<(), LifeCycleError> {
-        debug!("⚡️  Received a verified channel proposal");
-        self.update_new(|new| {
-            new.next(proposal)
+    /// Customer receives acceptance from merchant - transition to Establishing
+    fn on_proposal_accepted(&mut self, proposal: NewChannelProposal) -> Result<(), LifeCycleError> {
+        debug!("⚡️  Customer received proposal acceptance from merchant");
+        self.update_proposing(|proposing| {
+            proposing
+                .next(proposal)
                 .map(|s| {
-                    debug!("⚡️  Transitioned to Establishing state");
+                    debug!("⚡️  Customer transitioned to Establishing state");
                     s.to_channel_state()
                 })
                 .map_err(|(s, err)| {
-                    warn!("⚡️  Failed to transition from New to Establishing: {err}");
+                    warn!("⚡️  Failed to transition from Proposing to Establishing: {err}");
                     (s.to_channel_state(), err)
                 })
         })
     }
 
-    fn on_reject_new_channel(&mut self, reason: RejectNewChannelReason) -> Result<(), LifeCycleError> {
-        debug!("⚡️  Received a rejection for the new channel proposal: {}", reason.reason());
-        self.update_new(|new| {
-            let state = new.reject(reason);
+    /// Merchant accepts customer's proposal - transition to Establishing
+    fn on_merchant_accepted(&mut self, proposal: NewChannelProposal) -> Result<(), LifeCycleError> {
+        debug!("⚡️  Merchant accepted customer's proposal");
+        self.update_proposing(|proposing| {
+            proposing
+                .next(proposal)
+                .map(|s| {
+                    debug!("⚡️  Merchant transitioned to Establishing state");
+                    s.to_channel_state()
+                })
+                .map_err(|(s, err)| {
+                    warn!("⚡️  Failed to transition from Proposing to Establishing: {err}");
+                    (s.to_channel_state(), err)
+                })
+        })
+    }
+
+    fn on_reject_proposal(&mut self, reason: RejectProposalReason) -> Result<(), LifeCycleError> {
+        debug!("⚡️  Received a rejection for the channel proposal: {}", reason.reason());
+        self.update_proposing(|proposing| {
+            let state = proposing.reject(reason);
             Ok(state.to_channel_state())
         })
     }
 
     fn on_timeout(&mut self, reason: TimeoutReason) -> Result<(), LifeCycleError> {
-        debug!("⚡️  Received a rejection for the new channel proposal: {}", reason.reason());
-        self.update_new(|new| Ok(new.timeout(reason).to_channel_state()))
+        debug!("⚡️  Channel proposal has timed out: {}", reason.reason());
+        self.update_proposing(|proposing| Ok(proposing.timeout(reason).to_channel_state()))
     }
 
     fn on_wallet_created(&mut self, data: MultisigWalletData) -> Result<(), LifeCycleError> {
@@ -370,7 +391,7 @@ impl PaymentChannel {
         })
     }
 
-    update_state!(update_new, NewChannelState, to_new);
+    update_state!(update_proposing, ProposingState, to_proposing);
     update_state!(update_establishing, EstablishingState, to_establishing);
     update_state!(update_open, EstablishedChannelState, to_open);
     update_state!(update_closing, ClosingChannelState, to_closing);
@@ -501,27 +522,25 @@ impl PaymentChannels {
 mod test {
     use crate::grease::PaymentChannel;
     use crate::ContactInfo;
+    use grease_babyjubjub::BabyJubJub;
     use libgrease::amount::{MoneroAmount, MoneroDelta};
     use libgrease::balance::Balances;
     use libgrease::channel_id::ChannelIdMetadata;
     use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
-    use libgrease::cryptography::zk_objects::{
-        Comm0PrivateOutputs, GenericScalar, KesProof, PartialEncryptedKey, PrivateUpdateOutputs, Proofs0, PublicProof0,
-        ShardInfo, UpdateProofs,
-    };
+    use libgrease::cryptography::zk_objects::{KesProof, PartialEncryptedKey, Proofs0, PublicProof0, ShardInfo};
+    use libgrease::cryptography::ChannelWitness;
     use libgrease::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
     use libgrease::multisig::MultisigWalletData;
     use libgrease::payment_channel::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
     use libgrease::state_machine::{
-        ChannelCloseRecord, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, NewChannelState, UpdateRecord,
+        ChannelCloseRecord, ChannelProposer, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, UpdateRecord,
     };
-    use libgrease::{Field, XmrScalar};
+    use libgrease::XmrScalar;
     use libp2p::{Multiaddr, PeerId};
     use monero::{Address, Network};
     use std::str::FromStr;
     use wallet::multisig_wallet::AdaptSig;
-    use wallet::Zeroizing;
 
     const SECRET: &str = "0b98747459483650bb0d404e4ccc892164f88a5f1f131cee9e27f633cef6810d";
     const ALICE_ADDRESS: &str =
@@ -529,7 +548,7 @@ mod test {
     const BOB_ADDRESS: &str =
         "4BH2vFAir1iQCwi2RxgQmsL1qXmnTR9athNhpK31DoMwJgkpFUp2NykFCo4dXJnMhU7w9UZx7uC6qbNGuePkRLYcFo4N7p3";
 
-    pub fn new_channel_state() -> NewChannelState {
+    pub fn new_proposing_state() -> ChannelProposer {
         use ciphersuite::group::{Group, GroupEncoding};
         use grease_babyjubjub::BjjPoint;
         use libgrease::cryptography::keys::PublicKey;
@@ -551,7 +570,7 @@ mod test {
             .expect("Failed to build initial state");
         let channel_id = ChannelIdMetadata::new(merchant_key, customer_key, balances, closing, 1234, 4567);
         let accepted_proposal = NewChannelProposal { network: Network::Mainnet, channel_id, seed };
-        let initial_state = NewChannelState::new(ChannelRole::Customer, accepted_proposal);
+        let initial_state = ChannelProposer::new(ChannelRole::Customer, accepted_proposal);
         initial_state
     }
     #[test]
@@ -560,12 +579,12 @@ mod test {
         let peer = ContactInfo { name: "Alice".to_string(), peer_id: PeerId::random(), address: Multiaddr::empty() };
         let some_pub =
             Curve25519PublicKey::from_hex("61772c23631fa02db2fbe47515dda43fc28a471ee47719930e388d2ba5275016").unwrap();
-        let state = new_channel_state();
-        let proposal = state.for_proposal();
+        let state = new_proposing_state();
+        let proposal = state.into_proposal();
         let state = state.to_channel_state();
         let mut channel = PaymentChannel::new(peer, state);
-        assert!(channel.is_new_channel());
-        let event = LifeCycleEvent::VerifiedProposal(Box::new(proposal));
+        assert!(channel.is_proposing());
+        let event = LifeCycleEvent::ProposalAcceptedByMerchant(Box::new(proposal));
         channel.handle_event(event).unwrap();
         assert!(channel.is_establishing());
         let wallet = MultisigWalletData {
@@ -593,16 +612,8 @@ mod test {
         // Initialize the KES client (required for state transition)
         let event = LifeCycleEvent::KesClientInitialized;
         channel.handle_event(event).unwrap();
-        // Create proof0 with explicit values instead of Default (XmrScalar doesn't impl Default)
-        let proof0 = Proofs0 {
-            public_outputs: Default::default(),
-            private_outputs: Comm0PrivateOutputs {
-                witness_0: XmrScalar::random(&mut rand_core::OsRng),
-                delta_bjj: Default::default(),
-                delta_ed: Default::default(),
-            },
-            proofs: vec![],
-        };
+        // Create proof0 with explicit values
+        let proof0 = Proofs0 { public_outputs: 0, private_outputs: 0, proofs: vec![] };
         let peer_proof0 = PublicProof0::default();
         let event = LifeCycleEvent::MyProof0Generated(Box::new(proof0));
         channel.handle_event(event).unwrap();
@@ -619,35 +630,23 @@ mod test {
         let event = LifeCycleEvent::KesCreated(Box::new(KesProof { proof: vec![1, 2, 3] }));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
-        let my_proofs = UpdateProofs {
-            public_outputs: Default::default(),
-            private_outputs: PrivateUpdateOutputs {
-                update_count: 1,
-                witness_i: XmrScalar::random(&mut rand_core::OsRng),
-                delta_bjj: Default::default(),
-                delta_ed: Default::default(),
-            },
-            proof: b"my_update_proof".to_vec(),
-        };
         let key = Curve25519Secret::random(&mut rand_core::OsRng);
         let q = Curve25519Secret::random(&mut rand_core::OsRng);
-        let info = UpdateRecord {
-            my_signature: b"my_signature".to_vec(),
+        let info: UpdateRecord<BabyJubJub> = UpdateRecord {
+            my_offset: ChannelWitness::random(),
             my_adapted_signature: AdaptSig::sign(key.as_scalar(), q.as_scalar(), b"", &mut rand_core::OsRng),
             peer_adapted_signature: AdaptSig::sign(key.as_scalar(), q.as_scalar(), b"", &mut rand_core::OsRng),
             my_preprocess: b"my_prepared_info".to_vec(),
             peer_preprocess: b"peer_prepared_info".to_vec(),
-            my_proofs,
-            peer_proofs: Default::default(),
         };
         let delta = MoneroDelta::from(1000);
         let event = LifeCycleEvent::ChannelUpdate(Box::new((delta, info)));
         channel.handle_event(event).unwrap();
         assert!(channel.is_open());
-        let close = ChannelCloseRecord {
+        let close: ChannelCloseRecord<BabyJubJub> = ChannelCloseRecord {
             final_balance: channel.state().balance(),
             update_count: 1,
-            witness: Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng)),
+            witness: ChannelWitness::random(),
         };
         let event = LifeCycleEvent::CloseChannel(Box::new(close));
         channel.handle_event(event).unwrap();

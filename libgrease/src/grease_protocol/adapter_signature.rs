@@ -20,8 +20,12 @@ pub trait AdapterSignatureHandler: HasRole {
     fn adapter_signature_offset(&self) -> &XmrScalar;
 
     /// Return the message to be signed for the `update_count`-th adapter signature.
-    fn adapter_signature_message(&self, _update_count: u64) -> String {
-        todo!("Implement adapter signature message generation")
+    ///
+    /// TODO: This is a stub used by the update protocol. The establishment protocol now uses
+    /// `commitment_transaction_message` (transcript-based). This method should be replaced with
+    /// a similar transcript-based commitment message when the update protocol is refactored.
+    fn adapter_signature_message(&self, update_count: u64) -> String {
+        format!("grease-adapter-sig-v1:{update_count:016}")
     }
 
     /// Generate a new adapter signature using the current secret key and offset.

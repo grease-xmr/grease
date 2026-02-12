@@ -1,8 +1,8 @@
 use crate::cryptography::keys::PublicKeyCommitment;
 use crate::grease_protocol::multisig_wallet::{HasPublicKey, LinkedMultisigWallets};
 use crate::grease_protocol::utils::Readable;
-use crate::impls::mock_multisig_wallet::MockMultisigWallet;
 use crate::impls::multisig::MultisigWalletKeyRing;
+use crate::impls::tests::mock_multisig_wallet::MockMultisigWallet;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::multisig_setup::{
     CustomerSetup, CustomerStage, MerchantSetup, MerchantStage, MultisigSetupError, SetupState,

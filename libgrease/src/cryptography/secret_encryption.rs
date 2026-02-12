@@ -14,7 +14,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 ///
 /// `channel_role` indicates the role of the party who created the shard.
 /// Wraps [`EncryptedScalar`] with additional role metadata.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EncryptedSecret<C: Ciphersuite> {
     /// The underlying ECDH-encrypted scalar.
     inner: EncryptedScalar<C>,
@@ -118,6 +118,28 @@ impl<C: Ciphersuite> Writable for EncryptedSecret<C> {
     fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.emit_u8(self.role.as_u8())?;
         self.inner.write(writer)
+    }
+}
+
+impl<C: Ciphersuite> serde::Serialize for EncryptedSecret<C> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let bytes = Writable::serialize(self);
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+}
+
+impl<'de, C: Ciphersuite> serde::Deserialize<'de> for EncryptedSecret<C> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::Deserialize;
+        let hex_str = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        EncryptedSecret::<C>::read(&mut &bytes[..]).map_err(|e| serde::de::Error::custom(format!("{e}")))
     }
 }
 

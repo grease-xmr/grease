@@ -4,7 +4,7 @@ use crate::cryptography::vcof::{
     InvalidProof, NextWitness, ProvingError, VcofPrivateData, VcofPublicData, VerifiableConsecutiveOnewayFunction,
 };
 use crate::cryptography::vcof_impls::{NoirUpdateCircuit, PoseidonGrumpkinWitness};
-use crate::cryptography::witness::{AsXmrPoint, ChannelWitnessPublic, Offset};
+use crate::cryptography::witness::ChannelWitnessPublic;
 use crate::cryptography::ChannelWitness;
 use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
@@ -140,8 +140,7 @@ where
     ) -> Result<Self::Proof, ProvingError> {
         // generate the DLEQ proof
         let mut rng = OsRng;
-        let secret = *private_input.next().offset();
-        let (dleq, (_x, _y)) = <Ed25519 as Dleq<SF>>::generate_dleq(&mut rng, secret)
+        let (dleq, _public_points) = <Ed25519 as Dleq<SF>>::generate_dleq(&mut rng, private_input.next())
             .map_err(|e| ProvingError::prove_err(format!("DLEQ generation error: {}", e)))?;
         // generate the ZK-SNARK proof
         let snark = self
@@ -161,9 +160,7 @@ where
     ) -> Result<(), InvalidProof> {
         // Verify the DLEQ proof
         let dleq_proof = &proof.dleq;
-        let ed_point = public_in.next().as_xmr_point();
-        let snark_point = public_in.next().snark_point();
-        Ed25519::verify_dleq(dleq_proof, ed_point, snark_point).map_err(|e| {
+        Ed25519::verify_dleq(dleq_proof, public_in.next()).map_err(|e| {
             warn!("DLEQ verification failed: {e}");
             InvalidProof::new(i)
         })?;
@@ -691,7 +688,7 @@ mod security_tests {
         // Generate a DLEQ proof for a completely different secret
         let other_secret = ChannelWitness::<Grumpkin>::random();
         let mut rng = OsRng;
-        let (forged_dleq, _) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, *other_secret.offset())
+        let (forged_dleq, _) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, &other_secret)
             .expect("DLEQ generation should succeed");
 
         // Combine forged DLEQ with valid SNARK
@@ -1034,8 +1031,7 @@ mod security_tests {
 
         // Generate DLEQ for w0 (prev) instead of w1 (next)
         let mut rng = OsRng;
-        let (wrong_dleq, _) =
-            <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, *w0.offset()).expect("DLEQ should generate");
+        let (wrong_dleq, _) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, &w0).expect("DLEQ should generate");
 
         // Get the valid SNARK from a real proof
         let public_data = SnarkDleqPublicData::from_parts(w0.public_points(), w1.public_points());

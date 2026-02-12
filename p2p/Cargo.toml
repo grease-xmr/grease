@@ -8,6 +8,7 @@ libgrease = { workspace = true }
 wallet = { workspace = true }
 
 blake2 = "0.10.6"
+grease-babyjubjub = { workspace = true }
 ciphersuite = { workspace = true }
 dalek-ff-group = { workspace = true }
 futures = { workspace = true }
@@ -28,5 +29,4 @@ async-trait = "0.1.89"
 [dev-dependencies]
 ciphersuite = { workspace = true }
 env_logger = { workspace = true }
-grease-babyjubjub = { workspace = true }
 tempfile = "3.17.1"

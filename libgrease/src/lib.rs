@@ -6,6 +6,7 @@ pub mod error;
 pub mod grease_protocol;
 pub mod helpers;
 pub mod impls;
+pub mod key_escrow_services;
 pub mod monero;
 pub mod multisig;
 pub mod payment_channel;
