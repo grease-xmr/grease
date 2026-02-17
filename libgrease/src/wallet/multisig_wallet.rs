@@ -3,7 +3,7 @@ use crate::channel_id::ChannelId;
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::payment_channel::multisig_keyring::{musig_2_of_2, musig_dh_viewkey, sort_pubkeys};
-use crate::payment_channel::multisig_negotioation::MultisigWalletKeyNegotiation;
+use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::wallet::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::wallet::errors::WalletError;
@@ -190,7 +190,9 @@ impl MultisigWallet {
             Ok(Arc::clone(rpc))
         } else {
             drop(lock);
-            let mut lock = self.rpc.as_ref().write().unwrap();
+            let mut lock = self.rpc.as_ref().write().map_err(|e| {
+                WalletError::InternalError(format!("Failed to acquire write lock on RPC connection: {e}"))
+            })?;
             // Double check if another thread has already initialized the RPC connection while we were waiting for the write lock
             if let Some(rpc) = lock.as_ref() {
                 Ok(Arc::clone(rpc))
@@ -534,7 +536,7 @@ impl MultisigWallet {
     ) -> HashMap<Participant, Vec<SignatureShare<Ed25519>>> {
         let mut shares = HashMap::new();
         let (me, them) = self.participants();
-        trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
+        trace!("Assigning shares for participants: me={:?} and they={:?}", me, them);
         shares.insert(them, peer_shares);
         shares
     }

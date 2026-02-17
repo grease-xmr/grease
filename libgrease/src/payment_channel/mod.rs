@@ -1,6 +1,6 @@
 mod error;
 pub mod multisig_keyring;
-pub mod multisig_negotioation;
+pub mod multisig_negotiation;
 
 use crate::error::ReadError;
 pub use error::UpdateError;

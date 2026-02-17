@@ -8,7 +8,7 @@ pub mod wallet;
 pub mod watch_only;
 
 use monero_simple_request_rpc::SimpleRequestRpc;
-use monero_wallet::rpc::RpcError;
+use monero_rpc::RpcError;
 pub async fn connect_to_rpc(rpc_server: impl Into<String>) -> Result<SimpleRequestRpc, RpcError> {
     let rpc = SimpleRequestRpc::new(rpc_server.into()).await?;
     Ok(rpc)

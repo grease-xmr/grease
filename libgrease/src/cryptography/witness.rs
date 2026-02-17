@@ -62,7 +62,7 @@ pub fn convert_scalar_dleq<From: PrimeFieldBits + Zeroize, To: PrimeFieldBits>(s
 /// In Grease, every update's adapter signature offset is a valid scalar on both the Ed25519 curve and the SNARK-friendly curve C used in the VCOF proofs.
 /// The initial offset, is also a valid scalar on both Ed25519 and the KES's reference curve.
 ///
-/// [`CrossCurveSalar`] is an abstraction over the math and verification checks for such a scalar. An instance of this type is guaranteed
+/// [`CrossCurveScalar`] is an abstraction over the math and verification checks for such a scalar. An instance of this type is guaranteed
 /// to be a valid scalar on both Ed25519 and the Foreign curve, `C`.  
 ///
 /// ## De- and Serialization

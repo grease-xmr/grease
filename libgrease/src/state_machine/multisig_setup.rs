@@ -36,8 +36,8 @@ impl From<MultisigWalletError> for MultisigSetupError {
             MultisigWalletError::IncompatibleRoles => MultisigSetupError::WrongRole,
             MultisigWalletError::IncorrectPublicKey => MultisigSetupError::CommitmentMismatch,
             MultisigWalletError::MissingInformation(s) => MultisigSetupError::MissingData(s),
-            MultisigWalletError::MoneroWalletError(_) => {
-                unreachable!()
+            MultisigWalletError::MoneroWalletError(e) => {
+                MultisigSetupError::MissingData(format!("Underlying wallet error. {e}"))
             }
         }
     }
@@ -432,7 +432,7 @@ where
 mod tests {
     use super::*;
     use crate::cryptography::keys::PublicKey;
-    use crate::payment_channel::multisig_negotioation::MultisigWalletKeyNegotiation;
+    use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
     use monero::Network;
     use rand_core::OsRng;
 

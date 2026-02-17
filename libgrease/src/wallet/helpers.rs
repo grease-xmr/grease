@@ -2,7 +2,7 @@ use monero_wallet::WalletOutput;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serializer};
 
-/// Serialize `Vec<WalletOutput>` as a sequence of hex-encoded byte arrays.
+/// Serialize `Vec<WalletOutput>` as a sequence of byte arrays.
 /// Uses `WalletOutput::write` to serialize each output.
 pub fn serialize_outputs<S>(outputs: &Vec<WalletOutput>, s: S) -> Result<S::Ok, S::Error>
 where
@@ -16,7 +16,7 @@ where
     seq.end()
 }
 
-/// Deserialize `Vec<WalletOutput>` from a sequence of hex-encoded byte arrays.
+/// Deserialize `Vec<WalletOutput>` from a sequence of byte arrays.
 /// Uses `WalletOutput::read` to deserialize each output.
 pub fn deserialize_outputs<'de, D>(de: D) -> Result<Vec<WalletOutput>, D::Error>
 where

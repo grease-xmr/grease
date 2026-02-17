@@ -232,7 +232,7 @@ pub mod test {
     use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::cryptography::CrossCurveScalar;
     use crate::grease_protocol::multisig_wallet::LinkedMultisigWallets;
-    use crate::payment_channel::multisig_negotioation::MultisigWalletKeyNegotiation;
+    use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
     use crate::payment_channel::ChannelRole;
     use crate::state_machine::open_channel::{EstablishedChannelState, UpdateRecord};
     use crate::wallet::multisig_wallet::MultisigWallet;

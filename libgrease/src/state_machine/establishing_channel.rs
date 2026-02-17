@@ -14,7 +14,7 @@ use crate::grease_protocol::establish_channel::{payload_signature_message, Chann
 use crate::grease_protocol::kes_establishing::KesInitBundle;
 use crate::grease_protocol::multisig_wallet::{LinkedMultisigWallets, MultisigWalletError, SharedPublicKey};
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
-use crate::payment_channel::multisig_negotioation::MultisigWalletKeyNegotiation;
+use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::lifecycle::ChannelState;
