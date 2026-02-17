@@ -6,7 +6,7 @@
 use crate::channel_id::ChannelId;
 use crate::cryptography::adapter_signature::SchnorrSignature;
 use crate::cryptography::keys::Curve25519PublicKey;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::CrossCurveScalar;
 use crate::helpers::Timestamp;
 use crate::monero::data_objects::TransactionId;
 use crate::payment_channel::HasRole;
@@ -63,7 +63,7 @@ pub struct ConsensusCloseRequest<SF: Ciphersuite, K: Ciphersuite> {
     /// The update count (agreed upon)
     pub update_count_claimed: u64,
     /// Encrypted offset from the defendant (SNARK-friendly curve)
-    pub encrypted_offset: ChannelWitness<SF>,
+    pub encrypted_offset: CrossCurveScalar<SF>,
     /// Defendant's signature (signing curve)
     pub signature: SchnorrSignature<K>,
 }
@@ -91,7 +91,7 @@ pub struct DisputeChannelState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DisputeResolution<SF: Ciphersuite> {
     /// The claimant won (defendant didn't respond or dispute failed)
-    ClaimantWins { encrypted_offset: ChannelWitness<SF> },
+    ClaimantWins { encrypted_offset: CrossCurveScalar<SF> },
     /// The defendant won (proved more recent state)
     DefendantWins { penalty_applied: bool },
 }
@@ -173,7 +173,7 @@ where
     /// Process the encrypted offset received from the KES.
     ///
     /// Returns the decrypted offset needed to complete the closing transaction.
-    fn process_claimed_offset(&mut self, encrypted: &[u8]) -> Result<ChannelWitness<SF>, ForceCloseProtocolError>;
+    fn process_claimed_offset(&mut self, encrypted: &[u8]) -> Result<CrossCurveScalar<SF>, ForceCloseProtocolError>;
 
     /// Complete the closing transaction with the peer's offset.
     fn complete_closing_tx(&self, peer_offset: &XmrScalar) -> Result<Vec<u8>, ForceCloseProtocolError>;

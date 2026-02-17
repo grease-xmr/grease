@@ -1743,7 +1743,6 @@ dependencies = [
  "monero-simple-request-rpc",
  "rand_core 0.6.4",
  "tokio",
- "wallet",
 ]
 
 [[package]]
@@ -2397,7 +2396,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "wallet",
  "yaml_serde",
 ]
 
@@ -3212,6 +3210,10 @@ dependencies = [
  "log",
  "modular-frost",
  "monero",
+ "monero-rpc",
+ "monero-serai",
+ "monero-simple-request-rpc",
+ "monero-wallet",
  "num-bigint",
  "num-traits",
  "paste",
@@ -6756,34 +6758,6 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
-]
-
-[[package]]
-name = "wallet"
-version = "0.1.0"
-dependencies = [
- "blake2",
- "chrono",
- "ciphersuite",
- "dalek-ff-group",
- "env_logger",
- "futures",
- "hex",
- "libgrease",
- "log",
- "modular-frost",
- "monero",
- "monero-rpc",
- "monero-serai",
- "monero-simple-request-rpc",
- "monero-wallet",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "zeroize",
 ]
 
 [[package]]

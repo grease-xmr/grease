@@ -21,11 +21,17 @@ pub trait MonitorTransactions {
         callback: Func,
     ) -> impl Future<Output = Result<(), Self::Error>>
     where
-        Func: Fn(TransactionRecord) -> () + Send + 'static;
+        Func: Fn(TransactionRecord) + Send + 'static;
 }
 
 pub struct MockWatcher {
-    watchers: RefCell<HashMap<String, Box<dyn Fn(TransactionRecord) -> ()>>>,
+    watchers: RefCell<HashMap<String, Box<dyn Fn(TransactionRecord)>>>,
+}
+
+impl Default for MockWatcher {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockWatcher {
@@ -35,7 +41,7 @@ impl MockWatcher {
 
     pub fn add_watcher<Func>(&self, channel_name: String, callback: Func)
     where
-        Func: Fn(TransactionRecord) -> () + 'static,
+        Func: Fn(TransactionRecord) + 'static,
     {
         let mut watchers = self.watchers.borrow_mut();
         watchers.insert(channel_name, Box::new(callback));
@@ -72,7 +78,7 @@ impl MonitorTransactions for MockWatcher {
         callback: Func,
     ) -> Result<(), Self::Error>
     where
-        Func: Fn(TransactionRecord) -> () + 'static,
+        Func: Fn(TransactionRecord) + 'static,
     {
         let boxed = Box::new(callback);
         self.add_watcher(channel, boxed);

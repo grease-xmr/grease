@@ -1,5 +1,5 @@
 use crate::cryptography::witness::Offset;
-use crate::cryptography::{AsXmrPoint, ChannelWitness, ChannelWitnessPublic};
+use crate::cryptography::{AsXmrPoint, CrossCurvePoints, CrossCurveScalar};
 use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
 use ciphersuite::group::GroupEncoding;
@@ -14,7 +14,6 @@ use modular_frost::algorithm::SchnorrSignature;
 use modular_frost::curve::Curve;
 use modular_frost::sign::Writable;
 use rand_core::{CryptoRng, OsRng, RngCore};
-use serde::Deserialize;
 use std::io;
 use std::io::{Read, Write};
 use thiserror::Error;
@@ -49,12 +48,12 @@ pub trait Dleq<SF: Curve>: Curve {
     /// Returns the proof and the public points corresponding to the witness.
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-        witness: &ChannelWitness<SF>,
-    ) -> Result<(Self::Proof, ChannelWitnessPublic<SF>), DleqError>;
+        witness: &CrossCurveScalar<SF>,
+    ) -> Result<(Self::Proof, CrossCurvePoints<SF>), DleqError>;
 
     /// Verify that the provided proof shows that the discrete log of the Ed25519 point is the same as the discrete log
     /// of the SF curve point, AND that the prover possesses knowledge of both discrete logs.
-    fn verify_dleq(proof: &Self::Proof, public_points: &ChannelWitnessPublic<SF>) -> Result<(), DleqError>;
+    fn verify_dleq(proof: &Self::Proof, public_points: &CrossCurvePoints<SF>) -> Result<(), DleqError>;
 
     /// Read the proof from a reader
     fn read<R: Read>(reader: &mut R) -> Result<Self::Proof, DleqError>;
@@ -65,8 +64,8 @@ impl Dleq<Ed25519> for Ed25519 {
 
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-        witness: &ChannelWitness<Ed25519>,
-    ) -> Result<(Self::Proof, ChannelWitnessPublic<Ed25519>), DleqError> {
+        witness: &CrossCurveScalar<Ed25519>,
+    ) -> Result<(Self::Proof, CrossCurvePoints<Ed25519>), DleqError> {
         let secret = *witness.offset();
         let nonce = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut *rng);
         let nonce_pub = Ed25519::generator() * nonce;
@@ -78,9 +77,9 @@ impl Dleq<Ed25519> for Ed25519 {
         Ok((EdSchnorrSignature(proof), witness.public_points()))
     }
 
-    fn verify_dleq(proof: &Self::Proof, public_points: &ChannelWitnessPublic<Ed25519>) -> Result<(), DleqError> {
+    fn verify_dleq(proof: &Self::Proof, public_points: &CrossCurvePoints<Ed25519>) -> Result<(), DleqError> {
         // For Ed25519<>Ed25519, both points should be identical since they're on the same curve
-        let valid = public_points.as_xmr_point().eq(public_points.snark_point()) && {
+        let valid = public_points.as_xmr_point().eq(public_points.foreign_point()) && {
             let challenge = ownership_challenge(&proof.0.R, public_points.as_xmr_point());
             proof.0.verify(*public_points.as_xmr_point(), challenge)
         };
@@ -117,8 +116,8 @@ impl Dleq<BabyJubJub> for Ed25519 {
 
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-        witness: &ChannelWitness<BabyJubJub>,
-    ) -> Result<(Self::Proof, ChannelWitnessPublic<BabyJubJub>), DleqError> {
+        witness: &CrossCurveScalar<BabyJubJub>,
+    ) -> Result<(Self::Proof, CrossCurvePoints<BabyJubJub>), DleqError> {
         let secret = *witness.offset();
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
         // ChannelWitness guarantees the scalar is valid in both fields, so this should not fail
@@ -128,17 +127,17 @@ impl Dleq<BabyJubJub> for Ed25519 {
         // Compute public points from the scalars returned by the proof
         let xmr_point = Ed25519::generator() * *xmr_scalar;
         let snark_point = BabyJubJub::generator() * *snark_scalar;
-        Ok((DleqMoneroBjj(proof), ChannelWitnessPublic::new(xmr_point, snark_point)))
+        Ok((DleqMoneroBjj(proof), CrossCurvePoints::new(xmr_point, snark_point)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, public_points: &ChannelWitnessPublic<BabyJubJub>) -> Result<(), DleqError> {
+    fn verify_dleq(proof: &Self::Proof, public_points: &CrossCurvePoints<BabyJubJub>) -> Result<(), DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/BabyJubJub DLEQ");
         let mut rng = OsRng;
         let (x_rec, y_rec) = proof
             .0
             .verify(&mut rng, &mut transcript, xmr_bjj_generators())
             .map_err(|_| DleqError::VerificationFailure)?;
-        match public_points.as_xmr_point().eq(&x_rec) && public_points.snark_point().eq(&y_rec) {
+        match public_points.as_xmr_point().eq(&x_rec) && public_points.foreign_point().eq(&y_rec) {
             true => Ok(()),
             false => Err(DleqError::VerificationFailure),
         }
@@ -187,8 +186,8 @@ impl Dleq<Secp256k1> for Ed25519 {
 
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-        witness: &ChannelWitness<Secp256k1>,
-    ) -> Result<(Self::Proof, ChannelWitnessPublic<Secp256k1>), DleqError> {
+        witness: &CrossCurveScalar<Secp256k1>,
+    ) -> Result<(Self::Proof, CrossCurvePoints<Secp256k1>), DleqError> {
         let secret = *witness.offset();
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
         let (proof, (xmr_scalar, snark_scalar)) =
@@ -197,17 +196,17 @@ impl Dleq<Secp256k1> for Ed25519 {
         // Compute public points from the scalars returned by the proof
         let xmr_point = Ed25519::generator() * *xmr_scalar;
         let snark_point = Secp256k1::generator() * *snark_scalar;
-        Ok((DleqMoneroBitcoin(proof), ChannelWitnessPublic::new(xmr_point, snark_point)))
+        Ok((DleqMoneroBitcoin(proof), CrossCurvePoints::new(xmr_point, snark_point)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, public_points: &ChannelWitnessPublic<Secp256k1>) -> Result<(), DleqError> {
+    fn verify_dleq(proof: &Self::Proof, public_points: &CrossCurvePoints<Secp256k1>) -> Result<(), DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Secp256k1 DLEQ");
         let mut rng = OsRng;
         let (x_rec, y_rec) = proof
             .0
             .verify(&mut rng, &mut transcript, xmr_btc_generators())
             .map_err(|_| DleqError::VerificationFailure)?;
-        match public_points.as_xmr_point().eq(&x_rec) && public_points.snark_point().eq(&y_rec) {
+        match public_points.as_xmr_point().eq(&x_rec) && public_points.foreign_point().eq(&y_rec) {
             true => Ok(()),
             false => Err(DleqError::VerificationFailure),
         }
@@ -224,8 +223,8 @@ impl Dleq<Grumpkin> for Ed25519 {
 
     fn generate_dleq<R: RngCore + CryptoRng>(
         rng: &mut R,
-        witness: &ChannelWitness<Grumpkin>,
-    ) -> Result<(Self::Proof, ChannelWitnessPublic<Grumpkin>), DleqError> {
+        witness: &CrossCurveScalar<Grumpkin>,
+    ) -> Result<(Self::Proof, CrossCurvePoints<Grumpkin>), DleqError> {
         let secret = *witness.offset();
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Grumpkin DLEQ");
         let (proof, (xmr_scalar, snark_scalar)) = ConciseLinearDLEq::prove_without_bias(
@@ -238,17 +237,17 @@ impl Dleq<Grumpkin> for Ed25519 {
         // Compute public points from the scalars returned by the proof
         let xmr_point = Ed25519::generator() * *xmr_scalar;
         let snark_point = Grumpkin::generator() * *snark_scalar;
-        Ok((DleqMoneroGrumpkin(proof), ChannelWitnessPublic::new(xmr_point, snark_point)))
+        Ok((DleqMoneroGrumpkin(proof), CrossCurvePoints::new(xmr_point, snark_point)))
     }
 
-    fn verify_dleq(proof: &Self::Proof, public_points: &ChannelWitnessPublic<Grumpkin>) -> Result<(), DleqError> {
+    fn verify_dleq(proof: &Self::Proof, public_points: &CrossCurvePoints<Grumpkin>) -> Result<(), DleqError> {
         let mut transcript = RecommendedTranscript::new(b"Ed25519/Grumpkin DLEQ");
         let mut rng = OsRng;
         let (x_rec, y_rec) = proof
             .0
             .verify(&mut rng, &mut transcript, xmr_grumpkin_generators())
             .map_err(|_| DleqError::VerificationFailure)?;
-        match public_points.as_xmr_point().eq(&x_rec) && public_points.snark_point().eq(&y_rec) {
+        match public_points.as_xmr_point().eq(&x_rec) && public_points.foreign_point().eq(&y_rec) {
             true => Ok(()),
             false => Err(DleqError::VerificationFailure),
         }
@@ -269,12 +268,11 @@ fn xmr_bjj_generators() -> (Generators<XmrPoint>, Generators<BjjPoint>) {
 }
 
 fn monero_generators() -> Generators<EdwardsPoint> {
-    let monero_gen = Generators::new(
+    Generators::new(
         Ed25519::generator(),
         str_to_g("8b655970153799af2aeadc9ff1add0ea6c7251d54154cfa92c173a0dd39c1f94"),
     )
-    .expect("Hardcoded generators for Monero failed to generate");
-    monero_gen
+    .expect("Hardcoded generators for Monero failed to generate")
 }
 
 fn xmr_btc_generators() -> (Generators<XmrPoint>, Generators<ProjectivePoint>) {
@@ -317,7 +315,7 @@ where
     D: Dleq<SF>,
 {
     pub proof: D::Proof,
-    pub public_points: ChannelWitnessPublic<SF>,
+    pub public_points: CrossCurvePoints<SF>,
 }
 
 impl<SF, D> std::fmt::Debug for DleqProof<SF, D>
@@ -328,7 +326,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DleqProof")
             .field("xmr_point", self.public_points.as_xmr_point())
-            .field("foreign_point", self.public_points.snark_point())
+            .field("foreign_point", self.public_points.foreign_point())
             .finish()
     }
 }
@@ -338,7 +336,7 @@ where
     SF: Curve,
     D: Dleq<SF>,
 {
-    pub fn new(proof: D::Proof, public_points: ChannelWitnessPublic<SF>) -> Self {
+    pub fn new(proof: D::Proof, public_points: CrossCurvePoints<SF>) -> Self {
         Self { proof, public_points }
     }
 
@@ -348,7 +346,7 @@ where
 
     pub fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError> {
         let proof = D::read(reader).map_err(|e| ReadError::new("DLEQ Proof", format!("Failed to read proof: {e}")))?;
-        let public_points = ChannelWitnessPublic::read(reader)?;
+        let public_points = CrossCurvePoints::read(reader)?;
         Ok(DleqProof { proof, public_points })
     }
 }
@@ -408,10 +406,10 @@ pub enum DleqError {
 #[cfg(test)]
 mod test {
     use crate::cryptography::dleq::{Dleq, DleqError};
-    use crate::cryptography::witness::ChannelWitnessPublic;
-    use crate::cryptography::{AsXmrPoint, ChannelWitness};
+    use crate::cryptography::witness::CrossCurvePoints;
+    use crate::cryptography::{AsXmrPoint, CrossCurveScalar};
     use ciphersuite::group::GroupEncoding;
-    use ciphersuite::{Ciphersuite, Ed25519, Secp256k1};
+    use ciphersuite::{Ed25519, Secp256k1};
     use grease_babyjubjub::BabyJubJub;
     use grease_grumpkin::Grumpkin;
     use modular_frost::sign::Writable;
@@ -421,10 +419,10 @@ mod test {
     #[test]
     fn test_equivalence_ed25519_ed25519() {
         let mut rng = OsRng;
-        let witness = ChannelWitness::<Ed25519>::random();
+        let witness = CrossCurveScalar::<Ed25519>::random();
         let (proof, public_points) = <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng, &witness).unwrap();
         let x_point = *public_points.as_xmr_point();
-        let y_point = *public_points.snark_point();
+        let y_point = *public_points.foreign_point();
         println!("x: {}, y: {}", hex::encode(x_point.to_bytes()), hex::encode(y_point.to_bytes()));
         assert_eq!(x_point, y_point);
         assert!(
@@ -437,7 +435,7 @@ mod test {
             "Proof is not 64 bytes, but {}",
             proof.serialize().len()
         );
-        let bad_points = ChannelWitnessPublic::new(x_point, x_point.add(&x_point));
+        let bad_points = CrossCurvePoints::new(x_point, x_point.add(&x_point));
         assert!(matches!(
             <Ed25519 as Dleq<Ed25519>>::verify_dleq(&proof, &bad_points),
             Err(DleqError::VerificationFailure)
@@ -447,10 +445,10 @@ mod test {
     #[test]
     fn test_equivalence_ed25519_secp256k() {
         let mut rng = OsRng;
-        let witness = ChannelWitness::<Secp256k1>::random();
+        let witness = CrossCurveScalar::<Secp256k1>::random();
         let (proof, public_points) = <Ed25519 as Dleq<Secp256k1>>::generate_dleq(&mut rng, &witness).unwrap();
         let x_point = *public_points.as_xmr_point();
-        let y_point = *public_points.snark_point();
+        let y_point = *public_points.foreign_point();
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
         proof.write(&mut v).expect("Writing proof to vec cannot fail");
         assert_eq!(v.len(), 44607);
@@ -464,7 +462,7 @@ mod test {
             <Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &public_points).is_ok(),
             "XMR<>BTC DLEQ Proof did not verify"
         );
-        let bad_points = ChannelWitnessPublic::new(x_point.add(&x_point), y_point);
+        let bad_points = CrossCurvePoints::new(x_point.add(&x_point), y_point);
         assert!(matches!(
             <Ed25519 as Dleq<Secp256k1>>::verify_dleq(&proof, &bad_points),
             Err(DleqError::VerificationFailure)
@@ -475,11 +473,11 @@ mod test {
     fn test_equivalence_ed25519_babyjubjub() {
         let mut rng = OsRng;
         // ChannelWitness guarantees the scalar is valid in both Ed25519 and BabyJubJub fields
-        let witness = ChannelWitness::<BabyJubJub>::random();
+        let witness = CrossCurveScalar::<BabyJubJub>::random();
         let (proof, public_points) = <Ed25519 as Dleq<BabyJubJub>>::generate_dleq(&mut rng, &witness)
             .expect("ChannelWitness guarantees valid scalar in both fields");
         let x_point = *public_points.as_xmr_point();
-        let y_point = *public_points.snark_point();
+        let y_point = *public_points.foreign_point();
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
         proof.write(&mut v).expect("Writing proof to vec cannot fail");
         assert_eq!(v.len(), 44128);
@@ -493,7 +491,7 @@ mod test {
             <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &public_points).is_ok(),
             "XMR<>BJJ DLEQ Proof did not verify"
         );
-        let bad_points = ChannelWitnessPublic::new(x_point.add(&x_point), y_point);
+        let bad_points = CrossCurvePoints::new(x_point.add(&x_point), y_point);
         assert!(matches!(
             <Ed25519 as Dleq<BabyJubJub>>::verify_dleq(&proof, &bad_points),
             Err(DleqError::VerificationFailure)
@@ -503,10 +501,10 @@ mod test {
     #[test]
     fn test_equivalence_ed25519_grumpkin() {
         let mut rng = OsRng;
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
         let (proof, public_points) = <Ed25519 as Dleq<Grumpkin>>::generate_dleq(&mut rng, &witness).unwrap();
         let x_point = *public_points.as_xmr_point();
-        let y_point = *public_points.snark_point();
+        let y_point = *public_points.foreign_point();
         let mut v = Vec::<u8>::with_capacity(64 * 1024);
         proof.write(&mut v).expect("Writing proof to vec cannot fail");
         assert_eq!(v.len(), 44480);
@@ -527,7 +525,7 @@ mod test {
             <Ed25519 as Dleq<Grumpkin>>::verify_dleq(&proof_roundtrip, &public_points).is_ok(),
             "XMR<>Grumpkin DLEQ Proof roundtrip did not verify"
         );
-        let bad_points = ChannelWitnessPublic::new(x_point.add(&x_point), y_point);
+        let bad_points = CrossCurvePoints::new(x_point.add(&x_point), y_point);
         assert!(matches!(
             <Ed25519 as Dleq<Grumpkin>>::verify_dleq(&proof, &bad_points),
             Err(DleqError::VerificationFailure)

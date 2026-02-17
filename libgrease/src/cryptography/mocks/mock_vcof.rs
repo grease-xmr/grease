@@ -6,8 +6,8 @@
 use crate::cryptography::vcof::{
     InvalidProof, ProvingError, VcofPrivateData, VcofPublicData, VerifiableConsecutiveOnewayFunction,
 };
-use crate::cryptography::witness::{AsXmrPoint, ChannelWitnessPublic};
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::witness::{AsXmrPoint, CrossCurvePoints};
+use crate::cryptography::CrossCurveScalar;
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
 use crate::{XmrPoint, XmrScalar};
@@ -48,12 +48,12 @@ impl MockVCOF {
 
 #[derive(Clone, Debug, Zeroize)]
 pub struct MockVcofPrivateData {
-    pub prev: ChannelWitness<Ed25519>,
-    pub next: ChannelWitness<Ed25519>,
+    pub prev: CrossCurveScalar<Ed25519>,
+    pub next: CrossCurveScalar<Ed25519>,
 }
 
 impl VcofPrivateData for MockVcofPrivateData {
-    type W = ChannelWitness<Ed25519>;
+    type W = CrossCurveScalar<Ed25519>;
 
     fn from_parts(prev: Self::W, next: Self::W) -> Self {
         Self { prev, next }
@@ -70,12 +70,12 @@ impl VcofPrivateData for MockVcofPrivateData {
 
 #[derive(Clone, Debug)]
 pub struct MockVcofPublicData {
-    pub prev: ChannelWitnessPublic<Ed25519>,
-    pub next: ChannelWitnessPublic<Ed25519>,
+    pub prev: CrossCurvePoints<Ed25519>,
+    pub next: CrossCurvePoints<Ed25519>,
 }
 
 impl VcofPublicData for MockVcofPublicData {
-    type G = ChannelWitnessPublic<Ed25519>;
+    type G = CrossCurvePoints<Ed25519>;
 
     fn from_parts(prev: Self::G, next: Self::G) -> Self {
         Self { prev, next }
@@ -117,7 +117,7 @@ impl Readable for MockVcofProof {
 }
 
 impl VerifiableConsecutiveOnewayFunction for MockVCOF {
-    type Witness = ChannelWitness<Ed25519>;
+    type Witness = CrossCurveScalar<Ed25519>;
     type PrivateData = MockVcofPrivateData;
     type PublicData = MockVcofPublicData;
     type Proof = MockVcofProof;
@@ -126,12 +126,12 @@ impl VerifiableConsecutiveOnewayFunction for MockVCOF {
     fn compute_next(
         &self,
         update_count: u64,
-        _: &ChannelWitness<Ed25519>,
+        _: &CrossCurveScalar<Ed25519>,
         _ctx: &Self::Context,
-    ) -> Result<ChannelWitness<Ed25519>, ProvingError> {
+    ) -> Result<CrossCurveScalar<Ed25519>, ProvingError> {
         // Compute next as H(seed_pub || update_count)
         let next = self.witness_i(update_count);
-        let next = ChannelWitness::try_from_snark_scalar(next).unwrap();
+        let next = CrossCurveScalar::try_from_foreign_scalar(next).unwrap();
         Ok(next)
     }
 
@@ -189,12 +189,12 @@ impl VerifiableConsecutiveOnewayFunction for MockVCOF {
 mod tests {
     use super::*;
     use crate::cryptography::witness::Offset;
-    use crate::cryptography::ChannelWitness;
+    use crate::cryptography::CrossCurveScalar;
 
     #[test]
     fn test_mock_vcof_consecutiveness() {
         // Create initial seed
-        let seed = ChannelWitness::random();
+        let seed = CrossCurveScalar::random();
         let pub0 = Ed25519::generator() * seed.offset();
 
         let vcof = MockVCOF::new(pub0);
@@ -204,7 +204,7 @@ mod tests {
         vcof.verify(1, &pub1, &proof1, &()).unwrap();
 
         // Compute the witness for index 1 to use as prev for next call
-        let witness1 = ChannelWitness::try_from_snark_scalar(vcof.witness_i(1)).unwrap();
+        let witness1 = CrossCurveScalar::try_from_foreign_scalar(vcof.witness_i(1)).unwrap();
 
         // Advance again
         let (proof2, pub2) = vcof.next(2, &witness1, &()).unwrap();
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_mock_vcof_invalid_proof() {
-        let seed = ChannelWitness::random();
+        let seed = CrossCurveScalar::random();
         let pub0 = Ed25519::generator() * seed.offset();
         let vcof = MockVCOF::new(pub0);
 

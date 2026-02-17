@@ -66,7 +66,7 @@ pub trait VerifiableConsecutiveOnewayFunction {
         let mut private_input = <Self::PrivateData as VcofPrivateData>::from_parts(prev_witness.clone(), next_witness);
         let prev_public = prev_witness.as_public();
         let public_input = <Self::PublicData as VcofPublicData>::from_parts(prev_public, next_public);
-        let proof = self.create_proof(index, &private_input, &public_input, ctx).map_err(|e| e.into())?;
+        let proof = self.create_proof(index, &private_input, &public_input, ctx)?;
         private_input.zeroize();
         Ok((proof, public_input))
     }

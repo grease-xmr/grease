@@ -3,6 +3,7 @@
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
+use crate::cryptography::keys::Curve25519Secret;
 use crate::grease_protocol::propose_channel::MerchantSeedBuilder;
 use crate::grease_protocol::MerchantSeedInfo;
 use crate::key_escrow_services::{KesConfiguration, KesImplementation};
@@ -17,6 +18,7 @@ use crate::{XmrPoint, XmrScalar};
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::Group;
 use monero::Network;
+use rand_core::OsRng;
 use std::str::FromStr;
 use zeroize::Zeroizing;
 
@@ -39,7 +41,7 @@ fn build_merchant_seed_with_balances(
 ) -> (MerchantSeedInfo, Zeroizing<XmrScalar>) {
     let channel_secret = Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng));
     let kes_pk = XmrPoint::generator() * kes_private_key;
-    let peer_pk = XmrPoint::generator() * &*channel_secret;
+    let peer_pk = XmrPoint::generator() * *channel_secret;
     let kes_config = KesConfiguration::new_with_defaults(kes_pk, peer_pk);
     let merchant_secret = XmrScalar::random(&mut rand_core::OsRng);
     let seed = MerchantSeedBuilder::new(Network::Mainnet, KesImplementation::StandaloneEd25519)
@@ -59,9 +61,11 @@ fn build_merchant_seed(kes_private_key: &XmrScalar) -> (MerchantSeedInfo, Zeroiz
 
 /// C1: Customer receives seed info, creates ChannelProposer, and generates a proposal.
 fn customer_creates_proposal(seed: MerchantSeedInfo) -> ChannelProposer {
-    let customer_secret = Zeroizing::new(XmrScalar::random(&mut rand_core::OsRng));
+    let customer_secret = Zeroizing::new(XmrScalar::random(&mut OsRng));
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
     let customer_addr = CUSTOMER_ADDRESS.parse().unwrap();
-    let proposer = ChannelProposer::new(seed, customer_secret, customer_addr, 200).expect("should create proposer");
+    let proposer = ChannelProposer::new(seed, customer_secret, partial_spend_key, customer_addr, 200)
+        .expect("should create proposer");
     assert_eq!(proposer.role(), ChannelRole::Customer);
     proposer
 }
@@ -71,16 +75,14 @@ fn fake_channel_id() -> ChannelId {
     ChannelId::from_str("XGC00000000000000000000000000000000000000000000000000000000000000").unwrap()
 }
 
-pub fn establish_channel() -> (EstablishingState, EstablishingState) {
-    let (merchant, customer, _kes_key) = establish_channel_with_kes_key();
-    (merchant, customer)
-}
-
-/// Like [`establish_channel`] but also returns the KES private key used during proposal setup.
-pub fn establish_channel_with_kes_key() -> (EstablishingState, EstablishingState, XmrScalar) {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+/// Creates a new set of EstablishingState for the merchant and customer by simulating a successful proposal exchange.
+///
+/// Private keys are random. The initial channel balance is fixed at 1.25-0 for customer-merchant.
+pub fn propose_channel() -> (EstablishingState, EstablishingState, XmrScalar) {
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let merchant_partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, merchant_partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (customer, proposal) = customer.into_proposal();
     let (merchant, response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
@@ -93,7 +95,7 @@ pub fn establish_channel_with_kes_key() -> (EstablishingState, EstablishingState
 
 #[test]
 fn happy_path() {
-    let (merchant, customer) = establish_channel();
+    let (merchant, customer, _) = propose_channel();
     assert_eq!(merchant.stage(), LifecycleStage::Establishing);
     assert_eq!(customer.stage(), LifecycleStage::Establishing);
 }
@@ -103,9 +105,10 @@ fn happy_path() {
 /// M2: Merchant rejects a proposal with tampered seed info.
 #[test]
 fn merchant_rejects_tampered_seed() {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (_customer, mut proposal) = customer.into_proposal();
     // Tamper with the echoed seed's merchant nonce
@@ -117,9 +120,10 @@ fn merchant_rejects_tampered_seed() {
 /// M2: Merchant rejects a proposal with zero total balance.
 #[test]
 fn merchant_rejects_zero_balance() {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed_with_balances(&kes_private_key, zero_balances());
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (_customer, proposal) = customer.into_proposal();
     let err = merchant.receive_proposal(proposal).unwrap_err();
@@ -173,9 +177,10 @@ fn awaiting_response_timeout() {
 /// M3: Merchant rejects confirmation with mismatched channel ID.
 #[test]
 fn merchant_rejects_mismatched_confirmation() {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (_customer, proposal) = customer.into_proposal();
     let (merchant, _response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
@@ -187,9 +192,10 @@ fn merchant_rejects_mismatched_confirmation() {
 /// AwaitingConfirmation can timeout to Closed.
 #[test]
 fn awaiting_confirmation_timeout() {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (_customer, proposal) = customer.into_proposal();
     let (merchant, _response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
@@ -202,9 +208,10 @@ fn awaiting_confirmation_timeout() {
 /// AwaitingConfirmation can reject to Closed.
 #[test]
 fn awaiting_confirmation_reject() {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (_customer, proposal) = customer.into_proposal();
     let (merchant, _response) = merchant.receive_proposal(proposal).expect("Merchant should accept valid proposal");
@@ -218,14 +225,14 @@ fn awaiting_confirmation_reject() {
 /// Both parties compute the same channel ID after a successful proposal exchange.
 #[test]
 fn established_channel_ids_match() {
-    let (merchant, customer) = establish_channel();
+    let (merchant, customer, _) = propose_channel();
     assert_eq!(merchant.metadata.channel_id().name(), customer.metadata.channel_id().name());
 }
 
 /// Merchant and customer have the correct roles after establishing.
 #[test]
 fn established_roles_are_correct() {
-    let (merchant, customer) = establish_channel();
+    let (merchant, customer, _) = propose_channel();
     assert_eq!(merchant.metadata.role(), ChannelRole::Merchant);
     assert_eq!(customer.metadata.role(), ChannelRole::Customer);
 }
@@ -245,9 +252,10 @@ fn rejection_preserves_initial_balances() {
 /// Tampered seed with a modified closing address is also detected.
 #[test]
 fn merchant_rejects_tampered_closing_address() {
-    let kes_private_key = XmrScalar::random(&mut rand_core::OsRng);
+    let kes_private_key = XmrScalar::random(&mut OsRng);
     let (seed, merchant_secret) = build_merchant_seed(&kes_private_key);
-    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret);
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, partial_spend_key);
     let customer = customer_creates_proposal(seed);
     let (_customer, mut proposal) = customer.into_proposal();
     // Tamper with the closing address in the echoed seed

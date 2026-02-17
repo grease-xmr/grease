@@ -1,12 +1,12 @@
-use crate::common::scan_wallet;
-use crate::errors::WalletError;
-use crate::{AddressType, MoneroAddress, Network};
-use libgrease::amount::MoneroAmount;
-use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
-use log::debug;
+use crate::amount::MoneroAmount;
+use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use crate::wallet::common::scan_wallet;
+use crate::wallet::errors::WalletError;
+use log::*;
 use monero_rpc::{Rpc, RpcError};
 use monero_serai::block::Block;
 use monero_simple_request_rpc::SimpleRequestRpc;
+use monero_wallet::address::{AddressType, MoneroAddress, Network};
 use monero_wallet::WalletOutput;
 
 #[derive(Clone, Debug)]
@@ -20,7 +20,7 @@ pub struct WatchOnlyWallet {
 }
 
 impl WatchOnlyWallet {
-    pub(crate) fn remove_outputs(&mut self, spent: Vec<WalletOutput>) {
+    pub fn remove_outputs(&mut self, spent: Vec<WalletOutput>) {
         debug!("removing {} spent outputs from wallet", spent.len());
         spent.iter().for_each(|stxo| {
             if let Some(i) = self.known_outputs.iter().position(|o| o == stxo) {

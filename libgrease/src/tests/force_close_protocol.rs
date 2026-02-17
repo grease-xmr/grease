@@ -62,7 +62,7 @@ fn test_pending_channel_close_struct() {
 #[test]
 fn test_pending_close_status_values() {
     // Verify all status variants exist and are distinct
-    let statuses = vec![
+    let statuses = [
         PendingCloseStatus::Pending,
         PendingCloseStatus::Claimable,
         PendingCloseStatus::Abandoned,
@@ -85,10 +85,10 @@ fn test_pending_close_status_default() {
 
 #[test]
 fn test_dispute_resolution_claimant_wins() {
-    use crate::cryptography::ChannelWitness;
+    use crate::cryptography::CrossCurveScalar;
 
     let offset =
-        ChannelWitness::<Ed25519>::try_from(XmrScalar::default()).expect("should create witness from default scalar");
+        CrossCurveScalar::<Ed25519>::try_from(XmrScalar::default()).expect("should create witness from default scalar");
 
     let resolution: DisputeResolution<Ed25519> = DisputeResolution::ClaimantWins { encrypted_offset: offset };
 
@@ -202,21 +202,21 @@ fn test_has_more_recent_state_logic() {
 
     // Same state - no dispute possible
     let same_count = 5u64;
-    assert!(!(same_count > claimed_count));
+    assert!(same_count <= claimed_count);
 
     // Defendant has older state - no dispute possible
     let older_count = 3u64;
-    assert!(!(older_count > claimed_count));
+    assert!(older_count <= claimed_count);
 }
 
 #[test]
 fn test_update_count_comparison() {
     // Verify update count comparison edge cases
     assert!(10u64 > 5u64); // Normal case
-    assert!(!(5u64 > 5u64)); // Equal case
-    assert!(!(3u64 > 5u64)); // Less than case
+    assert!(5u64 <= 5u64); // Equal case
+    assert!(3u64 <= 5u64); // Less than case
     assert!(u64::MAX > 0u64); // Max value
-    assert!(!(0u64 > u64::MAX)); // Zero vs max
+    assert!(0u64 <= u64::MAX); // Zero vs max
 }
 
 #[test]

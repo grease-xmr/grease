@@ -18,7 +18,6 @@ mod commitment_tx;
 pub use closed_channel::{ChannelClosedReason, ClosedChannelState};
 pub use closing_channel::{ChannelCloseRecord, ClosingChannelState};
 pub use disputing_channel::{DisputeReason, DisputingChannelState, DEFAULT_DISPUTE_WINDOW};
-pub(crate) use establishing_channel::commitment_transaction_message;
 pub use establishing_channel::{
     CustomerEstablishing, DefaultEstablishingState, EstablishingState, MerchantEstablishing,
 };

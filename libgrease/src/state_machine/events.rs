@@ -1,11 +1,11 @@
 use crate::amount::MoneroDelta;
 use crate::cryptography::pok::KesPoKProofs;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
-use crate::multisig::MultisigWalletData;
 use crate::state_machine::closing_channel::ChannelCloseRecord;
 use crate::state_machine::open_channel::UpdateRecord;
 use crate::state_machine::proposing_channel::{NewChannelProposal, RejectProposalReason};
 use crate::state_machine::timeouts::TimeoutReason;
+use crate::wallet::multisig_wallet::MultisigWallet;
 use ciphersuite::{Ciphersuite, Ed25519};
 use std::fmt::{Display, Formatter};
 
@@ -17,7 +17,7 @@ pub enum LifeCycleEvent<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphers
     /// Proposal rejected by peer
     RejectProposal(Box<RejectProposalReason>),
     Timeout(Box<TimeoutReason>),
-    MultiSigWalletCreated(Box<MultisigWalletData>),
+    MultiSigWalletCreated(Box<MultisigWallet>),
     FundingTxWatcher(Vec<u8>),
     /// The KES client has been initialized with cryptographic secrets for this channel.
     KesClientInitialized,

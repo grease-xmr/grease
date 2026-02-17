@@ -9,11 +9,11 @@ use libgrease::monero::data_objects::{
 };
 use libgrease::state_machine::error::{InvalidProposal, LifeCycleError};
 use libgrease::state_machine::{ChannelCloseRecord, MerchantSeedInfo, NewChannelProposal};
+use libgrease::wallet::multisig_wallet::AdaptSig;
 use log::*;
 use monero::Network;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
-use wallet::multisig_wallet::AdaptSig;
 
 /// Requests that one peer can make to another peer in the Grease p2p network to create, update or close a payment
 /// channel.

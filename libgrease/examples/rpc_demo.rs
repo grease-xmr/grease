@@ -1,10 +1,10 @@
 use chrono::DateTime;
+use libgrease::wallet::connect_to_rpc;
 use monero_rpc::Rpc;
 use monero_serai::block::Block;
 use monero_simple_request_rpc::SimpleRequestRpc;
 use monero_wallet::address::{MoneroAddress, Network};
 use tokio;
-use wallet::connect_to_rpc;
 
 /// Create a new RPC connection, print the block height, and exit.
 #[tokio::main]

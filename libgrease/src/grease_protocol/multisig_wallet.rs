@@ -1,17 +1,15 @@
-use crate::amount::MoneroAmount;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::cryptography::{Commit, HashCommitment256};
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
-use crate::multisig::sort_pubkeys;
+use crate::payment_channel::multisig_keyring::sort_pubkeys;
 use crate::payment_channel::{ChannelRole, HasRole};
+use crate::wallet::errors::WalletError;
 use ciphersuite::Ed25519;
 use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
 use log::*;
 use modular_frost::sign::Writable;
 use monero::Address;
-use rand_core::{CryptoRng, RngCore};
-use std::future::Future;
 use std::io::{Read, Write};
 use thiserror::Error;
 
@@ -59,7 +57,7 @@ pub trait LinkedMultisigWallets<D: SecureDigest>: HasPublicKey + HasRole {
         -> Result<&<Self::SharedKeyType as Commit<D>>::Committed, MultisigWalletError>;
 
     /// Sets the peer's public key information, which at minimum includes their public key and role.
-    fn set_peer_public_key(&mut self, public_key: Self::SharedKeyType);
+    fn set_peer_public_key(&mut self, public_key: Self::SharedKeyType) -> Result<(), MultisigWalletError>;
 
     /// Retrieves the peer's public key information, which at minimum includes their public key and role.
     fn peer_shared_public_key(&self) -> Result<&Self::SharedKeyType, MultisigWalletError>;
@@ -94,39 +92,12 @@ pub trait LinkedMultisigWallets<D: SecureDigest>: HasPublicKey + HasRole {
             false => Err(MultisigWalletError::IncorrectPublicKey),
         }
     }
+
+    /// The Monero address associated with this multisignature wallet.
+    fn shared_address(&self) -> Result<Address, MultisigWalletError>;
 }
 
-/// A trait that describes a Monero payment to one or more recipients.
-pub trait MoneroPayment {
-    fn new<A: Into<Address>, V: Into<MoneroAmount>>(recipient: A, amount: V) -> Self;
-    fn amount(&self) -> MoneroAmount;
-    fn recipient(&self) -> Address;
-}
-
-/// A trait that describes the behavior for collaboratively creating and signing a multisignature Monero transaction.
-/// using a 2-round communication protocol.
-pub trait MultisigTransaction: HasRole {
-    type Context;
-    type Preprocess: Writable;
-    type PartialSignature: Writable;
-    type Transaction: Sized;
-    type PaymentType: MoneroPayment;
-    fn prepare_transaction<R: Send + Sync + RngCore + CryptoRng>(
-        &mut self,
-        payments: &[Self::PaymentType],
-        ctx: &Self::Context,
-        rng: &mut R,
-    ) -> impl Future<Output = Result<(), MultisigTxError>>;
-    fn partial_sign(&mut self, preparatory_data: &Self::Preprocess, ctx: &Self::Context)
-        -> Result<(), MultisigTxError>;
-    fn sign(
-        &mut self,
-        peer_sig: Self::PartialSignature,
-        ctx: &Self::Context,
-    ) -> Result<Self::Transaction, MultisigTxError>;
-}
-
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum MultisigWalletError {
     #[error("Missing information: {0}")]
     MissingInformation(String),
@@ -134,6 +105,8 @@ pub enum MultisigWalletError {
     IncorrectPublicKey,
     #[error("We cannot open a channel with both parties playing the same role")]
     IncompatibleRoles,
+    #[error("Monero RPC wallet error: {0}")]
+    MoneroWalletError(#[from] WalletError),
 }
 
 #[derive(Debug, Error)]
@@ -157,6 +130,10 @@ pub struct SharedPublicKey {
 impl SharedPublicKey {
     pub fn new(role: ChannelRole, public_key: Curve25519PublicKey) -> Self {
         Self { role, public_key }
+    }
+
+    pub fn public_key_ref(&self) -> &Curve25519PublicKey {
+        &self.public_key
     }
 }
 

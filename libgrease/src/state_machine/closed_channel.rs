@@ -6,7 +6,6 @@ use crate::state_machine::timeouts::TimeoutReason;
 use ciphersuite::Ed25519;
 use grease_grumpkin::Grumpkin;
 use modular_frost::curve::Curve;
-use monero::Network;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +37,7 @@ where
         ChannelState::Closed(self)
     }
 
-    pub fn multisig_address(&self, _network: Network) -> Option<String> {
+    pub fn multisig_address(&self) -> Option<String> {
         None
     }
 
@@ -72,8 +71,8 @@ where
         self.final_balances
     }
 
-    fn wallet_address(&self, network: Network) -> Option<String> {
-        self.multisig_address(network)
+    fn wallet_address(&self) -> Option<String> {
+        self.multisig_address()
     }
 }
 

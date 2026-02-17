@@ -65,7 +65,7 @@
 //! | [`vcof`]         | Trait definitions for Verifiable Consecutive Oneway Functions    |
 //! | [`vcof_impls`]   | Production implementations using Grumpkin curve + Poseidon2 hash |
 //! | [`noir_prover`]  | Noir circuit execution and proof generation                      |
-//! | [`witness`]      | [`ChannelWitness`] - scalars valid in both Ed25519 and SNARK fields |
+//! | [`witness`]      | [`CrossCurveScalar`] - scalars valid in both Ed25519 and SNARK fields |
 //!
 //! ## Cross-Curve Cryptography
 //!
@@ -126,4 +126,4 @@ pub mod vcof_impls;
 mod vcof_snark_dleq;
 mod witness;
 pub use commit::{Commit, HashCommitment256};
-pub use witness::{convert_scalar_dleq, AsXmrPoint, ChannelWitness, ChannelWitnessPublic, Offset, WitnessError};
+pub use witness::{convert_scalar_dleq, AsXmrPoint, CrossCurveError, CrossCurvePoints, CrossCurveScalar, Offset};

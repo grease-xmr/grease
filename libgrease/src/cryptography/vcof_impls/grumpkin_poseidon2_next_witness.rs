@@ -32,7 +32,7 @@
 
 use crate::cryptography::vcof::NextWitness;
 use crate::cryptography::witness::Offset;
-use crate::cryptography::ChannelWitness;
+use crate::cryptography::CrossCurveScalar;
 use crate::{Field, XmrScalar};
 use acir_field::{AcirField, FieldElement};
 use ark_bn254::Fr as Bn254Fr;
@@ -88,8 +88,8 @@ const ED25519_ORDER_LE: [u8; 32] = [
 /// - [`GrumpkinPoseidonVcofError::RangeError`] if using native path and hash exceeds Ed25519 order
 pub fn next_witness_auto<F: PrimeField>(
     update_count: u64,
-    prev: &ChannelWitness<Grumpkin>,
-) -> Result<ChannelWitness<Grumpkin>, GrumpkinPoseidonVcofError> {
+    prev: &CrossCurveScalar<Grumpkin>,
+) -> Result<CrossCurveScalar<Grumpkin>, GrumpkinPoseidonVcofError> {
     if update_count == 0 {
         return Err(GrumpkinPoseidonVcofError::ZeroUpdateCount);
     }
@@ -218,15 +218,15 @@ fn field_element_to_scalar(fe: FieldElement) -> Result<Scalar, GrumpkinPoseidonV
 /// - [`GrumpkinPoseidonVcofError::Other`] if the Poseidon hash computation fails
 pub fn next_witness_native(
     update_count: u64,
-    prev: &ChannelWitness<Grumpkin>,
-) -> Result<ChannelWitness<Grumpkin>, GrumpkinPoseidonVcofError> {
+    prev: &CrossCurveScalar<Grumpkin>,
+) -> Result<CrossCurveScalar<Grumpkin>, GrumpkinPoseidonVcofError> {
     let update_count_fe = FieldElement::from(update_count);
-    let prev_fe = scalar_to_field_element(prev.as_snark_scalar());
+    let prev_fe = scalar_to_field_element(prev.as_foreign_scalar());
 
     // Hash using direct permutation matching Noir's poseidon2::bn254::hash_2
     let hash = poseidon2_hash_2(update_count_fe, prev_fe)?;
     let fr_grumpkin = field_element_to_scalar(hash)?;
-    ChannelWitness::try_from_snark_scalar(fr_grumpkin).map_err(|_| {
+    CrossCurveScalar::try_from_foreign_scalar(fr_grumpkin).map_err(|_| {
         GrumpkinPoseidonVcofError::RangeError(
             "Hash result exceeds Ed25519 order - use next_witness_wide for Grumpkin".to_string(),
         )
@@ -265,10 +265,10 @@ pub fn next_witness_native(
 /// - [`GrumpkinPoseidonVcofError::RangeError`] if byte conversion fails (should not occur)
 pub fn next_witness_wide(
     update_count: u64,
-    prev: &ChannelWitness<Grumpkin>,
-) -> Result<ChannelWitness<Grumpkin>, GrumpkinPoseidonVcofError> {
+    prev: &CrossCurveScalar<Grumpkin>,
+) -> Result<CrossCurveScalar<Grumpkin>, GrumpkinPoseidonVcofError> {
     let update_count_fe = FieldElement::from(update_count);
-    let prev_fe = scalar_to_field_element(prev.as_snark_scalar());
+    let prev_fe = scalar_to_field_element(prev.as_foreign_scalar());
 
     // Two Poseidon2 hashes with domain separation matching Noir's poseidon2::bn254::hash_3
     let h0 = poseidon2_hash_3(update_count_fe, prev_fe, FieldElement::zero())?;
@@ -291,7 +291,7 @@ pub fn next_witness_wide(
     let copy_len = reduced_bytes.len().min(32);
     result_bytes[..copy_len].copy_from_slice(&reduced_bytes[..copy_len]);
 
-    ChannelWitness::try_from_le_bytes(&result_bytes).map_err(|_| {
+    CrossCurveScalar::try_from_le_bytes(&result_bytes).map_err(|_| {
         GrumpkinPoseidonVcofError::RangeError("Failed to create ChannelWitness from reduced hash".to_string())
     })
 }
@@ -317,7 +317,7 @@ pub fn next_witness_wide(
 pub struct PoseidonGrumpkinWitness;
 
 impl NextWitness for PoseidonGrumpkinWitness {
-    type W = ChannelWitness<Grumpkin>;
+    type W = CrossCurveScalar<Grumpkin>;
     type Err = GrumpkinPoseidonVcofError;
 
     /// Derives the next channel witness from the previous one.
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn next_witness_native_error_message_suggests_wide() {
         // When native fails, the error message should guide users to use wide
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
 
         // Keep trying until we get a failure (should happen quickly)
         for i in 1..100 {
@@ -520,7 +520,7 @@ mod tests {
         let mut successes = 0;
 
         for i in 0..1000 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             if next_witness_native(i + 1, &witness).is_ok() {
                 successes += 1;
             }
@@ -538,7 +538,7 @@ mod tests {
     fn next_witness_wide_always_succeeds() {
         // The wide version should always succeed
         for i in 0..1000 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let result = next_witness_wide(i + 1, &witness);
             assert!(
                 result.is_ok(),
@@ -551,7 +551,7 @@ mod tests {
     fn next_witness_wide_produces_valid_ed25519_scalars() {
         // Results should always be valid Ed25519 scalars (< Ed25519 order)
         for i in 0..100 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let result = next_witness_wide(i + 1, &witness).expect("Should succeed");
 
             // The ChannelWitness type guarantees validity in both fields
@@ -569,7 +569,7 @@ mod tests {
     fn next_witness_wide_produces_nonzero_results() {
         // The wide version handles zero defensively, but zero should be extremely unlikely
         for i in 0..1000 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let result = next_witness_wide(i + 1, &witness).expect("Should succeed");
             let bytes = result.to_le_bytes();
             let value = BigUint::from_bytes_le(&bytes);
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn next_witness_wide_is_deterministic() {
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
 
         for update_count in 1..10 {
             let result1 = next_witness_wide(update_count, &witness).expect("Should succeed");
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn different_update_counts_produce_different_results() {
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
 
         let result1 = next_witness_wide(1, &witness).expect("Should succeed");
         let result2 = next_witness_wide(2, &witness).expect("Should succeed");
@@ -623,8 +623,8 @@ mod tests {
 
     #[test]
     fn different_witnesses_produce_different_results() {
-        let witness1 = ChannelWitness::<Grumpkin>::random();
-        let witness2 = ChannelWitness::<Grumpkin>::random();
+        let witness1 = CrossCurveScalar::<Grumpkin>::random();
+        let witness2 = CrossCurveScalar::<Grumpkin>::random();
 
         // Very unlikely to be equal
         if witness1.to_le_bytes() != witness2.to_le_bytes() {
@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn can_derive_chain_of_witnesses() {
         // Test that we can derive a chain of witnesses
-        let mut current = ChannelWitness::<Grumpkin>::random();
+        let mut current = CrossCurveScalar::<Grumpkin>::random();
         let mut witnesses = vec![current.clone()];
 
         for i in 1..=100 {
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn chain_derivation_is_deterministic() {
-        let initial = ChannelWitness::<Grumpkin>::random();
+        let initial = CrossCurveScalar::<Grumpkin>::random();
 
         // Derive chain twice
         let mut chain1 = vec![initial.clone()];
@@ -693,14 +693,14 @@ mod tests {
 
     #[test]
     fn update_count_max_works() {
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
         let result = next_witness_wide(u64::MAX, &witness);
         assert!(result.is_ok(), "update_count=u64::MAX should work");
     }
 
     #[test]
     fn update_count_zero_is_rejected() {
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
         // update_count=0 should work (no validation in the current implementation)
         let result = next_witness_auto::<Scalar>(0, &witness);
         assert!(result.is_err(), "update_count=0 should not work");
@@ -711,7 +711,7 @@ mod tests {
         // Create a witness from a small scalar value
         let small_scalar = Scalar::from(42u64);
         let witness =
-            ChannelWitness::<Grumpkin>::try_from_snark_scalar(small_scalar).expect("Small scalar should be valid");
+            CrossCurveScalar::<Grumpkin>::try_from_foreign_scalar(small_scalar).expect("Small scalar should be valid");
 
         let result = next_witness_wide(1, &witness);
         assert!(result.is_ok(), "Witness from small value should work");
@@ -723,9 +723,9 @@ mod tests {
     fn wide_reduction_uses_domain_separation() {
         // The wide function uses two hashes with different domain separators (0 and 1)
         // This test verifies the domain separation works by checking that h0 != h1 for same input
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
         let update_count_fe = FieldElement::from(1u64);
-        let prev_fe = scalar_to_field_element(witness.as_snark_scalar());
+        let prev_fe = scalar_to_field_element(witness.as_foreign_scalar());
 
         let h0 = poseidon2_hash_3(update_count_fe, prev_fe, FieldElement::zero()).expect("Hash should succeed");
         let h1 = poseidon2_hash_3(update_count_fe, prev_fe, FieldElement::one()).expect("Hash should succeed");
@@ -740,7 +740,7 @@ mod tests {
         let mut high_bytes = std::collections::HashSet::new();
 
         for i in 0..100 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let result = next_witness_wide(i + 1, &witness).expect("Should succeed");
             let bytes = result.to_le_bytes();
             high_bytes.insert(bytes[31]);
@@ -771,13 +771,13 @@ mod tests {
             bytes
         };
 
-        let witness = ChannelWitness::<Grumpkin>::try_from_le_bytes(&str_to_bytes(w0_be))
+        let witness = CrossCurveScalar::<Grumpkin>::try_from_le_bytes(&str_to_bytes(w0_be))
             .expect("Should create witness from bytes");
-        println!("{}", xmr_scalar_as_be_hex(&witness.offset()));
+        println!("{}", xmr_scalar_as_be_hex(witness.offset()));
         let result = next_witness_wide(1, &witness).expect("Should succeed");
         let mut result_bytes = result.to_le_bytes();
         result_bytes.reverse();
-        let actual = format!("0x{}", hex::encode(&result_bytes));
+        let actual = format!("0x{}", hex::encode(result_bytes));
         assert_eq!(actual, w1_be);
     }
 
@@ -788,7 +788,7 @@ mod tests {
         // Grumpkin scalar has 254 bits > Ed25519's 253 bits, so should use wide path
         // Wide path always succeeds
         for i in 1..=100 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let result = next_witness_auto::<Scalar>(i, &witness);
             assert!(result.is_ok(), "next_witness<Scalar> should always succeed (uses wide path)");
 
@@ -808,7 +808,7 @@ mod tests {
         use grease_babyjubjub::Scalar as BjjScalar;
 
         for i in 1..100 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let auto_result = next_witness_auto::<BjjScalar>(i, &witness);
             let native_result = next_witness_native(i, &witness);
 
@@ -835,7 +835,7 @@ mod tests {
         // Ed25519 scalar has 253 bits = Ed25519's 253 bits (equal, not less than)
         // So it should use the wide path (>= threshold)
         for i in 1..=100 {
-            let witness = ChannelWitness::<Grumpkin>::random();
+            let witness = CrossCurveScalar::<Grumpkin>::random();
             let result = next_witness_auto::<XmrScalar>(i, &witness);
 
             // Wide path always succeeds
@@ -854,7 +854,7 @@ mod tests {
     #[test]
     fn next_witness_rejects_zero_update_count() {
         // The new validation should reject update_count == 0
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
 
         let result = next_witness_auto::<Scalar>(0, &witness);
         assert!(matches!(result.unwrap_err(), GrumpkinPoseidonVcofError::ZeroUpdateCount));
@@ -864,7 +864,7 @@ mod tests {
     fn next_witness_zero_rejection_applies_to_all_field_types() {
         // Zero rejection should apply regardless of field type parameter
         use grease_babyjubjub::Scalar as BjjScalar;
-        let witness = ChannelWitness::<Grumpkin>::random();
+        let witness = CrossCurveScalar::<Grumpkin>::random();
 
         // With Grumpkin scalar (wide path)
         assert!(

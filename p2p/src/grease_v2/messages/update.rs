@@ -12,9 +12,9 @@ use libgrease::amount::MoneroDelta;
 use libgrease::channel_id::ChannelId;
 use libgrease::cryptography::zk_objects::PublicUpdateProof;
 use libgrease::monero::data_objects::FinalizedUpdate;
+use libgrease::wallet::multisig_wallet::AdaptSig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
-use wallet::multisig_wallet::AdaptSig;
 
 /// Request messages for the update protocol.
 ///

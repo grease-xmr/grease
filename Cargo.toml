@@ -7,7 +7,6 @@ members = [
     "grumpkin",
     "libgrease",
     "p2p",
-    "wallet",
 ]
 
 [workspace.dependencies]
@@ -15,7 +14,6 @@ grease-babyjubjub = { version = "0.1.0", path = "./babyjubjub" }
 grease-grumpkin = { version = "0.1.0", path = "./grumpkin" }
 grease-p2p = { version = "0.1.0", path = "./p2p" }
 libgrease = { version = "0.1.0", path = "./libgrease" }
-wallet = { version = "0.1.0", path = "./wallet" }
 
 anyhow = { version = "1.0.96" }
 async-trait = { version = "0.1" }

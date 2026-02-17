@@ -10,7 +10,8 @@ use crate::cryptography::dleq::{Dleq, DleqError, DleqProof};
 use crate::cryptography::pok::KesProofError;
 use crate::cryptography::secret_encryption::EncryptedSecret;
 use crate::error::ReadError;
-use crate::grease_protocol::multisig_wallet::MultisigWalletError;
+use crate::grease_protocol::multisig_wallet::{MultisigTxError, MultisigWalletError};
+use crate::state_machine::MultisigSetupError;
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::{Ciphersuite, Ed25519};
 use modular_frost::curve::Curve as FrostCurve;
@@ -47,13 +48,17 @@ pub enum EstablishError {
     #[error("AdapterSigOffset error: {0}")]
     AdapterSigOffsetError(#[from] DleqError),
     #[error("DLEQ proof generation failed: {0}")]
-    DleqGenerationError(crate::cryptography::dleq::DleqError),
+    DleqGenerationError(DleqError),
     #[error("The provided KES public key is invalid for the given curve.")]
     InvalidKesPublicKey,
     #[error("Could not provide result because the {0} is missing.")]
     MissingInformation(String),
-    #[error("Multisig wallet error: {0}")]
-    MultisigWalletError(#[from] MultisigWalletError),
+    #[error("Multisig wallet setup error: {0}")]
+    MultisigSetupError(#[from] MultisigSetupError),
+    #[error("Error initializing wallet: {0}")]
+    WalletError(#[from] MultisigWalletError),
+    #[error("Error setting up initial transaction: {0}")]
+    Tx0Error(#[from] MultisigTxError),
     #[error("Could not deserialize a binary data structure: {0}")]
     ReadError(#[from] ReadError),
     #[error("KES proof verification failed: {0}")]

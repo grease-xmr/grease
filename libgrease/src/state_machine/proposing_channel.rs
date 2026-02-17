@@ -1,6 +1,7 @@
 use crate::channel_id::{ChannelId, ChannelIdMetadata};
 use crate::channel_metadata::StaticChannelMetadata;
 use crate::cryptography::dleq::Dleq;
+use crate::cryptography::keys::Curve25519Secret;
 use crate::cryptography::serializable_secret::SerializableSecret;
 pub use crate::grease_protocol::MerchantSeedInfo;
 use crate::monero::data_objects::ClosingAddresses;
@@ -78,6 +79,8 @@ where
     pub seed_info: MerchantSeedInfo<KC>,
     /// The customer's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
     channel_secret: SerializableSecret<KC::F>,
+    /// The partial wallet spend key for this (to-be-created) channel
+    pub(crate) partial_spend_key: Curve25519Secret,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -106,12 +109,13 @@ where
     pub fn new(
         seed: MerchantSeedInfo<KC>,
         channel_secret: Zeroizing<KC::F>,
+        partial_spend_key: Curve25519Secret,
         customer_closing_address: Address,
         customer_nonce: u64,
     ) -> Result<Self, ProposeProtocolError> {
         let closing_addresses =
             ClosingAddresses::new_from_addresses(customer_closing_address, seed.merchant_closing_address)?;
-        let customer_channel_key = seed.merchant_channel_key * &*channel_secret;
+        let customer_channel_key = seed.merchant_channel_key * *channel_secret;
         let channel_id = ChannelIdMetadata::new(
             seed.merchant_channel_key,
             customer_channel_key,
@@ -123,7 +127,13 @@ where
         );
         let metadata =
             StaticChannelMetadata::new(seed.network, ChannelRole::Customer, channel_id, seed.kes_type.clone());
-        Ok(ChannelProposer { metadata, seed_info: seed, channel_secret: channel_secret.into(), _sf: PhantomData })
+        Ok(ChannelProposer {
+            metadata,
+            seed_info: seed,
+            partial_spend_key,
+            channel_secret: channel_secret.into(),
+            _sf: PhantomData,
+        })
     }
 
     /// Generate a NewChannelProposal payload to send to the merchant.
@@ -134,6 +144,7 @@ where
             metadata: self.metadata,
             seed_info: self.seed_info,
             channel_secret: self.channel_secret,
+            partial_spend_key: self.partial_spend_key,
             _sf: PhantomData,
         };
         (awaiting_response, proposal)
@@ -153,6 +164,8 @@ where
     pub seed_info: MerchantSeedInfo<KC>,
     /// The customer's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
     pub(crate) channel_secret: SerializableSecret<KC::F>,
+    /// The partial wallet spend key for this (to-be-created) channel
+    pub(crate) partial_spend_key: Curve25519Secret,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -191,7 +204,15 @@ where
                     ));
                 }
                 info!("Proposal accepted by merchant, transitioning to Establishing");
-                let establishing: EstablishingState<SF, KC> = self.into();
+                let closing_balance = self.metadata.initial_balance();
+                let metadata_backup = self.metadata.clone();
+                let establishing: EstablishingState<SF, KC> = EstablishingState::try_from(self).map_err(|e| {
+                    ClosedChannelState::new(
+                        ChannelClosedReason::Rejected(RejectProposalReason::new(e.to_string())),
+                        metadata_backup,
+                        closing_balance,
+                    )
+                })?;
                 Ok((establishing, ProposalConfirmed { channel_id: id }))
             }
             ProposalResponse::Rejected(reason) => {
@@ -222,6 +243,8 @@ where
     initial_seed_info: MerchantSeedInfo<KC>,
     /// The merchant's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
     channel_secret: Zeroizing<KC::F>,
+    /// The partial wallet spend key for this (to-be-created) channel
+    partial_spend_key: Curve25519Secret,
     _sf: PhantomData<SF>,
 }
 
@@ -231,8 +254,12 @@ where
     KC: Ciphersuite,
     Ed25519: Dleq<SF>,
 {
-    pub fn new(initial_seed_info: MerchantSeedInfo<KC>, channel_secret: Zeroizing<KC::F>) -> Self {
-        Self { initial_seed_info, channel_secret, _sf: PhantomData }
+    pub fn new(
+        initial_seed_info: MerchantSeedInfo<KC>,
+        channel_secret: Zeroizing<KC::F>,
+        partial_spend_key: Curve25519Secret,
+    ) -> Self {
+        Self { initial_seed_info, channel_secret, partial_spend_key, _sf: PhantomData }
     }
 
     /// Verify and accept an incoming proposal from a customer (M2).
@@ -258,6 +285,7 @@ where
             metadata,
             seed_info: self.initial_seed_info,
             channel_secret: self.channel_secret.into(),
+            partial_spend_key: self.partial_spend_key,
             _sf: PhantomData,
         };
         Ok((awaiting, response))
@@ -310,6 +338,8 @@ where
     pub seed_info: MerchantSeedInfo<KC>,
     /// The merchant's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
     pub(crate) channel_secret: SerializableSecret<KC::F>,
+    /// The partial wallet spend key for this (to-be-created) channel
+    pub(crate) partial_spend_key: Curve25519Secret,
     #[serde(skip)]
     _sf: PhantomData<SF>,
 }
@@ -353,7 +383,15 @@ where
             ));
         }
         info!("Customer confirmed proposal, transitioning to Establishing");
-        let establishing: EstablishingState<SF, KC> = self.into();
+        let closing_balance = self.metadata.initial_balance();
+        let metadata_backup = self.metadata.clone();
+        let establishing: EstablishingState<SF, KC> = EstablishingState::try_from(self).map_err(|e| {
+            ClosedChannelState::new(
+                ChannelClosedReason::Rejected(RejectProposalReason::new(e.to_string())),
+                metadata_backup,
+                closing_balance,
+            )
+        })?;
         Ok(establishing)
     }
 }

@@ -20,7 +20,7 @@ use zeroize::Zeroize;
 struct TestUpdateProposer {
     role: ChannelRole,
     secret_key: Curve25519Secret,
-    public_key: Curve25519PublicKey,
+    _public_key: Curve25519PublicKey,
     vcof: MockVCOF,
     update_count: u64,
     current_offset: XmrScalar,
@@ -35,7 +35,7 @@ impl TestUpdateProposer {
         Self {
             role,
             secret_key,
-            public_key,
+            _public_key: public_key,
             vcof,
             update_count: 0,
             current_offset: XmrScalar::default(),
@@ -189,7 +189,7 @@ impl UpdateProtocolProposer<Ed25519> for TestUpdateProposer {
 struct TestUpdateProposee {
     role: ChannelRole,
     secret_key: Curve25519Secret,
-    public_key: Curve25519PublicKey,
+    _public_key: Curve25519PublicKey,
     vcof: MockVCOF,
     update_count: u64,
     current_offset: XmrScalar,
@@ -205,7 +205,7 @@ impl TestUpdateProposee {
         Self {
             role,
             secret_key,
-            public_key,
+            _public_key: public_key,
             vcof,
             update_count: 0,
             current_offset: XmrScalar::default(),

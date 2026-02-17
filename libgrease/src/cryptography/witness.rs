@@ -39,9 +39,9 @@ pub trait AsXmrPoint {
 
 /// Error type for witness operations.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum WitnessError {
-    /// The provided scalar is not valid in the target SNARK curve's scalar field.
-    #[error("The scalar is not valid in the SNARK curve's scalar field")]
+pub enum CrossCurveError {
+    /// The provided scalar is not valid in the target foreign curve's scalar field.
+    #[error("The scalar is not valid in the foreign curve's scalar field")]
     InvalidScalar,
 }
 
@@ -59,17 +59,18 @@ pub fn convert_scalar_dleq<From: PrimeFieldBits + Zeroize, To: PrimeFieldBits>(s
     dleq_scalar_convert::<From, To>(scalar_copy)
 }
 
-/// A channel witness is the adapter signature offset represented in a form that is valid in a ZK-SNARK context.
+/// In Grease, every update's adapter signature offset is a valid scalar on both the Ed25519 curve and the SNARK-friendly curve C used in the VCOF proofs.
+/// The initial offset, is also a valid scalar on both Ed25519 and the KES's reference curve.
 ///
-/// Specifically, it is an Ed25519 scalar that is also guaranteed to be a valid scalar in the SNARK-friendly curve SF.
-/// This dual validity is required for cross-curve operations in the payment channel protocol.
+/// [`CrossCurveScalar`] is an abstraction over the math and verification checks for such a scalar. An instance of this type is guaranteed
+/// to be a valid scalar on both Ed25519 and the Foreign curve, `C`.  
 ///
 /// ## De- and Serialization
 ///
-/// The ChannelWitness serializes and deserializes via its Ed25519 scalar representation, which encrypts the
+/// The [`CrossCurveScalar`] serializes and deserializes via its Ed25519 scalar representation, which encrypts the
 /// value at rest.
 ///
-/// On deserialization, the scalar is validated to ensure it is also valid in the SNARK curve's scalar field.
+/// On deserialization, the scalar is validated to ensure it is also valid in the foreign curve's scalar field.
 ///
 /// # Panics
 ///
@@ -77,84 +78,84 @@ pub fn convert_scalar_dleq<From: PrimeFieldBits + Zeroize, To: PrimeFieldBits>(s
 /// [`with_encryption_context`](crate::cryptography::encryption_context::with_encryption_context)
 /// to wrap serialization operations.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ChannelWitness<SF: Ciphersuite> {
+pub struct CrossCurveScalar<C: Ciphersuite> {
     offset: Zeroizing<XmrScalar>,
-    _snark_curve: PhantomData<SF>,
+    _foreign_curve: PhantomData<C>,
 }
 
-impl<SF: Ciphersuite> Debug for ChannelWitness<SF> {
+impl<C: Ciphersuite> Debug for CrossCurveScalar<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ChannelWitness(***hidden***)")
+        f.write_str("CrossCurveScalar(***hidden***)")
     }
 }
 
-impl<SF: Ciphersuite> Serialize for ChannelWitness<SF> {
+impl<C: Ciphersuite> Serialize for CrossCurveScalar<C> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let secret = Curve25519Secret::from(*self.offset);
         secret.serialize(serializer)
     }
 }
 
-impl<'de, SF: Ciphersuite> Deserialize<'de> for ChannelWitness<SF>
+impl<'de, C: Ciphersuite> Deserialize<'de> for CrossCurveScalar<C>
 where
-    SF::F: PrimeFieldBits,
+    C::F: PrimeFieldBits,
 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let offset = Curve25519Secret::deserialize(deserializer)?;
-        // Validate that it's also valid in SF using DLEQ-compatible conversion
-        if convert_scalar_dleq::<XmrScalar, SF::F>(&offset.as_scalar()).is_none() {
-            return Err(serde::de::Error::custom("Scalar is not valid in the SNARK curve"));
+        // Validate that it's also valid in C using DLEQ-compatible conversion
+        if convert_scalar_dleq::<XmrScalar, C::F>(offset.as_scalar()).is_none() {
+            return Err(serde::de::Error::custom("Scalar is not valid in the FOREIGN curve"));
         }
-        Ok(Self { offset: offset.to_scalar(), _snark_curve: PhantomData })
+        Ok(Self { offset: offset.to_scalar(), _foreign_curve: PhantomData })
     }
 }
 
-impl<SF: Ciphersuite> ChannelWitness<SF> {
-    /// Create a new random ChannelWitness that is valid in both Ed25519 and SF's scalar field.
+impl<C: Ciphersuite> CrossCurveScalar<C> {
+    /// Create a new random [`CrossCurveScalar`] that is valid in both Ed25519 and C's scalar field.
     ///
-    /// The strategy is to sample random scalars from SF's field until we find one whose byte
+    /// The strategy is to sample random scalars from C's field until we find one whose byte
     /// representation is also a valid Ed25519 scalar. For most curve combinations this succeeds
     /// on the first attempt.
     pub fn random() -> Self {
         Self::random_with_rng(&mut OsRng)
     }
 
-    /// Try to create a ChannelWitness from a SNARK curve scalar.
+    /// Try to create a [`CrossCurveScalar`] from a foreign curve scalar.
     ///
-    /// This will fail if the scalar is not mutually valid in both Ed25519 and SF fields.
-    pub fn try_from_snark_scalar(scalar: SF::F) -> Result<Self, WitnessError>
+    /// This will fail if the scalar is not mutually valid in both Ed25519 and C fields.
+    pub fn try_from_foreign_scalar(scalar: C::F) -> Result<Self, CrossCurveError>
     where
-        SF::F: PrimeFieldBits,
+        C::F: PrimeFieldBits,
     {
-        let offset = convert_scalar_dleq::<SF::F, XmrScalar>(&scalar).ok_or(WitnessError::InvalidScalar)?;
-        Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
+        let offset = convert_scalar_dleq::<C::F, XmrScalar>(&scalar).ok_or(CrossCurveError::InvalidScalar)?;
+        Ok(Self { offset: Zeroizing::new(offset), _foreign_curve: PhantomData })
     }
 
-    /// Try to create a ChannelWitness from little-endian bytes.
+    /// Try to create a [`CrossCurveScalar`] from little-endian bytes.
     ///
-    /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and SF.
-    pub fn try_from_le_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError>
+    /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and C.
+    pub fn try_from_le_bytes(bytes: &[u8; 32]) -> Result<Self, CrossCurveError>
     where
-        SF::F: PrimeFieldBits,
+        C::F: PrimeFieldBits,
     {
         let mut repr = <XmrScalar as PrimeField>::Repr::default();
         repr.as_mut().copy_from_slice(bytes);
-        let offset = XmrScalar::from_repr(repr).into_option().ok_or(WitnessError::InvalidScalar)?;
+        let offset = XmrScalar::from_repr(repr).into_option().ok_or(CrossCurveError::InvalidScalar)?;
 
-        // Also validate it's mutually valid in SF using DLEQ-compatible conversion
-        if convert_scalar_dleq::<XmrScalar, SF::F>(&offset).is_none() {
-            return Err(WitnessError::InvalidScalar);
+        // Also validate it's mutually valid in C using DLEQ-compatible conversion
+        if convert_scalar_dleq::<XmrScalar, C::F>(&offset).is_none() {
+            return Err(CrossCurveError::InvalidScalar);
         }
 
-        Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
+        Ok(Self { offset: Zeroizing::new(offset), _foreign_curve: PhantomData })
     }
 
-    /// Try to create a ChannelWitness from big-endian bytes.
+    /// Try to create a [`CrossCurveScalar`] from big-endian bytes.
     ///
-    /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and SF.
-    pub fn try_from_be_bytes(bytes: &[u8; 32]) -> Result<Self, WitnessError>
+    /// This will fail if the bytes do not represent a valid scalar in both Ed25519 and C.
+    pub fn try_from_be_bytes(bytes: &[u8; 32]) -> Result<Self, CrossCurveError>
     where
-        SF::F: PrimeFieldBits,
+        C::F: PrimeFieldBits,
     {
         let mut bytes = *bytes;
         bytes.reverse();
@@ -173,14 +174,14 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
         bytes
     }
 
-    /// Create a new random ChannelWitness using the provided RNG.
+    /// Create a new random [`CrossCurveScalar`] using the provided RNG.
     ///
-    /// Uses rejection sampling to find a scalar that is mutually valid in both Ed25519 and SF
+    /// Uses rejection sampling to find a scalar that is mutually valid in both Ed25519 and C
     /// according to the DLEQ proof library's requirements. This ensures the generated witness
     /// can be used with `generate_dleq` without failure.
     pub fn random_with_rng<R: RngCore + CryptoRng>(rng: &mut R) -> Self
     where
-        SF::F: PrimeFieldBits,
+        C::F: PrimeFieldBits,
     {
         // Loop until we find a scalar that passes DLEQ-compatible conversion in both directions.
         // For most curve pairs, this succeeds quickly since the mutual capacity is close to both fields.
@@ -189,47 +190,47 @@ impl<SF: Ciphersuite> ChannelWitness<SF> {
         loop {
             iters += 1;
             let offset = XmrScalar::random(&mut *rng);
-            if convert_scalar_dleq::<XmrScalar, SF::F>(&offset).is_some() {
-                return Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData };
+            if convert_scalar_dleq::<XmrScalar, C::F>(&offset).is_some() {
+                return Self { offset: Zeroizing::new(offset), _foreign_curve: PhantomData };
             }
             // If this fails it means that there is probably than an 8-bit difference in security between the curves.
             if iters >= MAX_ITERS {
                 panic!(
-                    "Failed to generate a valid ChannelWitness after {MAX_ITERS} attempts. Are the two curves \
+                    "Failed to generate a valid CrossCurveScalar after {MAX_ITERS} attempts. Are the two curves \
                 close enough in field order?"
                 );
             }
         }
     }
 
-    /// Get the offset scalar converted to curve SF's scalar field.
+    /// Get the offset scalar converted to curve C's scalar field.
     ///
     /// This is guaranteed to succeed since the witness was constructed to be valid in both fields.
-    pub fn as_snark_scalar(&self) -> SF::F
+    pub fn as_foreign_scalar(&self) -> C::F
     where
-        SF::F: PrimeFieldBits,
+        C::F: PrimeFieldBits,
     {
-        convert_scalar_dleq::<XmrScalar, SF::F>(&self.offset)
-            .expect("ChannelWitness invariant violated: offset should be valid in SF")
+        convert_scalar_dleq::<XmrScalar, C::F>(&self.offset)
+            .expect("CrossCurveScalar invariant violated: offset should be valid on the foreign curve")
     }
 
     /// Get the public points corresponding to this witness.
-    pub fn public_points(&self) -> ChannelWitnessPublic<SF>
+    pub fn public_points(&self) -> CrossCurvePoints<C>
     where
-        SF::F: PrimeFieldBits,
+        C::F: PrimeFieldBits,
     {
-        let xmr_point = EdwardsPoint::generator() * &*self.offset;
-        let snark_scalar = self.as_snark_scalar();
-        let snark_point = SF::G::generator() * &snark_scalar;
-        ChannelWitnessPublic { xmr_point, snark_point }
+        let xmr_point = EdwardsPoint::generator() * *self.offset;
+        let foreign_scalar = self.as_foreign_scalar();
+        let foreign_point = C::G::generator() * foreign_scalar;
+        CrossCurvePoints { xmr_point, foreign_point }
     }
 }
 
-impl<SF: Ciphersuite> Offset for ChannelWitness<SF>
+impl<C: Ciphersuite> Offset for CrossCurveScalar<C>
 where
-    SF::F: PrimeFieldBits,
+    C::F: PrimeFieldBits,
 {
-    type Public = ChannelWitnessPublic<SF>;
+    type Public = CrossCurvePoints<C>;
 
     /// Get the offset scalar as an Ed25519 scalar.
     fn offset(&self) -> &XmrScalar {
@@ -241,74 +242,74 @@ where
     }
 }
 
-impl<SF: Ciphersuite> TryFrom<XmrScalar> for ChannelWitness<SF>
+impl<C: Ciphersuite> TryFrom<XmrScalar> for CrossCurveScalar<C>
 where
-    SF::F: PrimeFieldBits,
+    C::F: PrimeFieldBits,
 {
-    type Error = WitnessError;
+    type Error = CrossCurveError;
 
-    /// Try to create a ChannelWitness from an Ed25519 scalar.
+    /// Try to create a [`CrossCurveScalar`] from an Ed25519 scalar.
     ///
-    /// This will fail if the scalar is not mutually valid in both Ed25519 and SF fields.
+    /// This will fail if the scalar is not mutually valid in both Ed25519 and C fields.
     fn try_from(offset: XmrScalar) -> Result<Self, Self::Error> {
-        if convert_scalar_dleq::<XmrScalar, SF::F>(&offset).is_some() {
-            Ok(Self { offset: Zeroizing::new(offset), _snark_curve: PhantomData })
+        if convert_scalar_dleq::<XmrScalar, C::F>(&offset).is_some() {
+            Ok(Self { offset: Zeroizing::new(offset), _foreign_curve: PhantomData })
         } else {
-            Err(WitnessError::InvalidScalar)
+            Err(CrossCurveError::InvalidScalar)
         }
     }
 }
 
-impl<SF: Ciphersuite> Zeroize for ChannelWitness<SF> {
+impl<C: Ciphersuite> Zeroize for CrossCurveScalar<C> {
     fn zeroize(&mut self) {
         self.offset.zeroize();
     }
 }
 
-/// The public point counterpart to ChannelWitness. It holds both the Ed25519 point and the SNARK curve point.
+/// The public point counterpart to [`CrossCurveScalar`]. It holds both the Ed25519 point and the foreign curve point.
 ///
 /// The points are *NOT* guaranteed to be equivalent, however. This can only be proved via a corresponding DLEQ proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChannelWitnessPublic<SF: Ciphersuite> {
+pub struct CrossCurvePoints<C: Ciphersuite> {
     xmr_point: XmrPoint,
-    snark_point: SF::G,
+    foreign_point: C::G,
 }
 
-impl<SF: Ciphersuite> ChannelWitnessPublic<SF> {
-    /// Create a new `ChannelWitnessPublic` from the given points.
+impl<C: Ciphersuite> CrossCurvePoints<C> {
+    /// Create new `CrossCurvePoints` from the given points.
     ///
     /// Note: This does not verify that the points are equivalent - that requires a DLEQ proof.
-    pub fn new(xmr_point: XmrPoint, snark_point: SF::G) -> Self {
-        Self { xmr_point, snark_point }
+    pub fn new(xmr_point: XmrPoint, foreign_point: C::G) -> Self {
+        Self { xmr_point, foreign_point }
     }
 
-    /// Get the SNARK curve point.
-    pub fn snark_point(&self) -> &SF::G {
-        &self.snark_point
+    /// Get the foreign curve point.
+    pub fn foreign_point(&self) -> &C::G {
+        &self.foreign_point
     }
 }
 
-impl<SF: Ciphersuite> AsXmrPoint for ChannelWitnessPublic<SF> {
+impl<C: Ciphersuite> AsXmrPoint for CrossCurvePoints<C> {
     fn as_xmr_point(&self) -> &XmrPoint {
         &self.xmr_point
     }
 }
 
-impl<SF: Ciphersuite> Writable for ChannelWitnessPublic<SF> {
+impl<C: Ciphersuite> Writable for CrossCurvePoints<C> {
     fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         write_group_element::<Ed25519, W>(writer, &self.xmr_point)?;
-        write_group_element::<SF, W>(writer, &self.snark_point)?;
+        write_group_element::<C, W>(writer, &self.foreign_point)?;
         Ok(())
     }
 }
 
-impl<SF: Ciphersuite> Readable for ChannelWitnessPublic<SF> {
+impl<C: Ciphersuite> Readable for CrossCurvePoints<C> {
     fn read<R: std::io::Read>(reader: &mut R) -> Result<Self, ReadError> {
         let xmr_point = read_group_element::<Ed25519, R>(reader)
-            .map_err(|e| ReadError::new("ChannelWitnessPublic", format!("Failed to read XMR point: {e}")))?;
-        let snark_point = read_group_element::<SF, R>(reader)
-            .map_err(|e| ReadError::new("ChannelWitnessPublic", format!("Failed to read SNARK point: {e}")))?;
-        Ok(Self::new(xmr_point, snark_point))
+            .map_err(|e| ReadError::new("CrossCurvePoints", format!("Failed to read XMR point: {e}")))?;
+        let foreign_point = read_group_element::<C, R>(reader)
+            .map_err(|e| ReadError::new("CrossCurvePoints", format!("Failed to read foreign point: {e}")))?;
+        Ok(Self::new(xmr_point, foreign_point))
     }
 }
 
@@ -328,16 +329,16 @@ mod tests {
     fn random_witness_ed25519_is_valid() {
         // Ed25519 -> Ed25519 should always work since they're the same curve
         for _ in 0..100 {
-            let witness = ChannelWitness::<Ed25519>::random();
+            let witness = CrossCurveScalar::<Ed25519>::random();
             let offset = witness.offset();
 
             // Should be able to convert back
-            let witness2 = ChannelWitness::<Ed25519>::try_from(*offset).expect("Should be valid");
+            let witness2 = CrossCurveScalar::<Ed25519>::try_from(*offset).expect("Should be valid");
             assert_eq!(witness.offset(), witness2.offset());
 
-            // Should be able to get as SNARK scalar
-            let snark_scalar = witness.as_snark_scalar();
-            assert_eq!(*offset, snark_scalar, "Ed25519 scalar should round-trip");
+            // Should be able to get as foreign scalar
+            let foreign_scalar = witness.as_foreign_scalar();
+            assert_eq!(*offset, foreign_scalar, "Ed25519 scalar should round-trip");
         }
     }
 
@@ -345,15 +346,15 @@ mod tests {
     fn random_witness_babyjubjub_is_valid() {
         // BabyJubJub has a smaller order than Ed25519, so random witnesses should be valid in both
         for _ in 0..100 {
-            let witness = ChannelWitness::<BabyJubJub>::random();
+            let witness = CrossCurveScalar::<BabyJubJub>::random();
             let offset = witness.offset();
-            // Should be able to get as SNARK scalar
-            let snark_scalar = witness.as_snark_scalar();
+            // Should be able to get as foreign scalar
+            let foreign_scalar = witness.as_foreign_scalar();
 
             // Should be able to convert back
-            let witness2 = ChannelWitness::<BabyJubJub>::try_from(*offset).expect("Should be valid");
+            let witness2 = CrossCurveScalar::<BabyJubJub>::try_from(*offset).expect("Should be valid");
             assert_eq!(witness.offset(), witness2.offset());
-            assert_eq!(snark_scalar, witness.as_snark_scalar());
+            assert_eq!(foreign_scalar, witness.as_foreign_scalar());
         }
     }
 
@@ -361,22 +362,22 @@ mod tests {
     fn random_witness_secp256k1_is_valid() {
         // Secp256k1 has a larger order than Ed25519, so all Ed25519 scalars should be valid
         for _ in 0..100 {
-            let witness = ChannelWitness::<Secp256k1>::random();
+            let witness = CrossCurveScalar::<Secp256k1>::random();
             let offset = witness.offset();
 
             // Should be able to convert back
-            let witness2 = ChannelWitness::<Secp256k1>::try_from(*offset).expect("Should be valid");
+            let witness2 = CrossCurveScalar::<Secp256k1>::try_from(*offset).expect("Should be valid");
             assert_eq!(witness.offset(), witness2.offset());
 
-            // Should be able to get as SNARK scalar
-            let _snark_scalar = witness.as_snark_scalar();
+            // Should be able to get as foreign scalar
+            let _foreign_scalar = witness.as_foreign_scalar();
         }
     }
 
     #[test]
     fn try_from_valid_scalar_ed25519() {
         let scalar = XmrScalar::random(&mut OsRng);
-        let witness = ChannelWitness::<Ed25519>::try_from(scalar);
+        let witness = CrossCurveScalar::<Ed25519>::try_from(scalar);
         assert!(witness.is_ok(), "Any Ed25519 scalar should be valid for Ed25519");
         assert_eq!(*witness.unwrap().offset(), scalar);
     }
@@ -386,7 +387,7 @@ mod tests {
         // Secp256k1's order is larger than Ed25519's, so any Ed25519 scalar should be valid
         for _ in 0..100 {
             let scalar = XmrScalar::random(&mut OsRng);
-            let witness = ChannelWitness::<Secp256k1>::try_from(scalar);
+            let witness = CrossCurveScalar::<Secp256k1>::try_from(scalar);
             assert!(witness.is_ok(), "Any Ed25519 scalar should be valid for Secp256k1");
         }
     }
@@ -412,9 +413,9 @@ mod tests {
             bytes[31] = high_byte;
 
             if let Some(large_scalar) = XmrScalar::from_repr(bytes).into_option() {
-                let witness = ChannelWitness::<BabyJubJub>::try_from(large_scalar);
-                if witness.is_err() {
-                    assert_eq!(witness.unwrap_err(), WitnessError::InvalidScalar);
+                let witness = CrossCurveScalar::<BabyJubJub>::try_from(large_scalar);
+                if let Err(e) = witness {
+                    assert_eq!(e, CrossCurveError::InvalidScalar);
                     found_invalid = true;
                     break;
                 }
@@ -430,10 +431,10 @@ mod tests {
     #[test]
     fn witness_serialization_roundtrip() {
         let ctx = test_encryption_context();
-        let witness = ChannelWitness::<BabyJubJub>::random();
+        let witness = CrossCurveScalar::<BabyJubJub>::random();
         let serialized =
             with_encryption_context(ctx.clone(), || ron::to_string(&witness).expect("Serialization should succeed"));
-        let deserialized: ChannelWitness<BabyJubJub> =
+        let deserialized: CrossCurveScalar<BabyJubJub> =
             with_encryption_context(ctx, || ron::from_str(&serialized).expect("Deserialization should succeed"));
         assert_eq!(witness.offset(), deserialized.offset());
     }
@@ -443,13 +444,13 @@ mod tests {
         // Zero should be valid in all curves
         let zero = XmrScalar::from(0u64);
 
-        let witness_ed = ChannelWitness::<Ed25519>::try_from(zero);
+        let witness_ed = CrossCurveScalar::<Ed25519>::try_from(zero);
         assert!(witness_ed.is_ok(), "Zero should be valid for Ed25519");
 
-        let witness_bjj = ChannelWitness::<BabyJubJub>::try_from(zero);
+        let witness_bjj = CrossCurveScalar::<BabyJubJub>::try_from(zero);
         assert!(witness_bjj.is_ok(), "Zero should be valid for BabyJubJub");
 
-        let witness_secp = ChannelWitness::<Secp256k1>::try_from(zero);
+        let witness_secp = CrossCurveScalar::<Secp256k1>::try_from(zero);
         assert!(witness_secp.is_ok(), "Zero should be valid for Secp256k1");
     }
 
@@ -458,14 +459,14 @@ mod tests {
         // One should be valid in all curves
         let one = XmrScalar::from(1u64);
 
-        let witness_ed = ChannelWitness::<Ed25519>::try_from(one);
+        let witness_ed = CrossCurveScalar::<Ed25519>::try_from(one);
         assert!(witness_ed.is_ok(), "One should be valid for Ed25519");
-        assert_eq!(witness_ed.unwrap().as_snark_scalar(), XmrScalar::from(1u64));
+        assert_eq!(witness_ed.unwrap().as_foreign_scalar(), XmrScalar::from(1u64));
 
-        let witness_bjj = ChannelWitness::<BabyJubJub>::try_from(one);
+        let witness_bjj = CrossCurveScalar::<BabyJubJub>::try_from(one);
         assert!(witness_bjj.is_ok(), "One should be valid for BabyJubJub");
 
-        let witness_secp = ChannelWitness::<Secp256k1>::try_from(one);
+        let witness_secp = CrossCurveScalar::<Secp256k1>::try_from(one);
         assert!(witness_secp.is_ok(), "One should be valid for Secp256k1");
     }
 
@@ -475,27 +476,31 @@ mod tests {
         for i in 0u64..1000 {
             let scalar = XmrScalar::from(i);
 
-            assert!(ChannelWitness::<Ed25519>::try_from(scalar).is_ok());
-            assert!(ChannelWitness::<BabyJubJub>::try_from(scalar).is_ok());
-            assert!(ChannelWitness::<Secp256k1>::try_from(scalar).is_ok());
+            assert!(CrossCurveScalar::<Ed25519>::try_from(scalar).is_ok());
+            assert!(CrossCurveScalar::<BabyJubJub>::try_from(scalar).is_ok());
+            assert!(CrossCurveScalar::<Secp256k1>::try_from(scalar).is_ok());
         }
     }
 
     #[test]
-    fn as_snark_scalar_roundtrip() {
-        // Test that as_snark_scalar returns a value that, when converted back to bytes,
+    fn as_foreign_scalar_roundtrip() {
+        // Test that as_foreign_scalar returns a value that, when converted back to bytes,
         // matches the original offset bytes
         for _ in 0..100 {
-            let witness = ChannelWitness::<BabyJubJub>::random();
+            let witness = CrossCurveScalar::<BabyJubJub>::random();
             let offset = witness.offset();
-            let snark_scalar = witness.as_snark_scalar();
+            let foreign_scalar = witness.as_foreign_scalar();
 
-            // Convert snark scalar back to bytes
-            let snark_bytes = snark_scalar.to_repr();
+            // Convert foreign scalar back to bytes
+            let foreign_bytes = foreign_scalar.to_repr();
             let offset_bytes = offset.to_repr();
 
             // The bytes should match (at least for the overlapping portion)
-            assert_eq!(&snark_bytes[..], &offset_bytes[..], "Scalar bytes should match after roundtrip");
+            assert_eq!(
+                &foreign_bytes[..],
+                &offset_bytes[..],
+                "Scalar bytes should match after roundtrip"
+            );
         }
     }
 
@@ -504,9 +509,9 @@ mod tests {
         // A small value should produce equivalent witnesses across curves
         let value = XmrScalar::from(42u64);
 
-        let witness_ed = ChannelWitness::<Ed25519>::try_from(value).unwrap();
-        let witness_bjj = ChannelWitness::<BabyJubJub>::try_from(value).unwrap();
-        let witness_secp = ChannelWitness::<Secp256k1>::try_from(value).unwrap();
+        let witness_ed = CrossCurveScalar::<Ed25519>::try_from(value).unwrap();
+        let witness_bjj = CrossCurveScalar::<BabyJubJub>::try_from(value).unwrap();
+        let witness_secp = CrossCurveScalar::<Secp256k1>::try_from(value).unwrap();
 
         // All should have the same offset
         assert_eq!(witness_ed.offset(), witness_bjj.offset());
@@ -515,12 +520,12 @@ mod tests {
 
     #[test]
     fn witness_equality() {
-        let witness1 = ChannelWitness::<BabyJubJub>::random();
-        let witness2 = ChannelWitness::<BabyJubJub>::try_from(*witness1.offset()).unwrap();
+        let witness1 = CrossCurveScalar::<BabyJubJub>::random();
+        let witness2 = CrossCurveScalar::<BabyJubJub>::try_from(*witness1.offset()).unwrap();
 
         assert_eq!(witness1, witness2, "Witnesses with same offset should be equal");
 
-        let witness3 = ChannelWitness::<BabyJubJub>::random();
+        let witness3 = CrossCurveScalar::<BabyJubJub>::random();
         // Very unlikely to be equal due to randomness
         if witness1.offset() != witness3.offset() {
             assert_ne!(witness1, witness3, "Witnesses with different offsets should not be equal");
@@ -529,7 +534,7 @@ mod tests {
 
     #[test]
     fn witness_clone() {
-        let witness = ChannelWitness::<BabyJubJub>::random();
+        let witness = CrossCurveScalar::<BabyJubJub>::random();
         let cloned = witness.clone();
         assert_eq!(witness.offset(), cloned.offset());
     }
@@ -547,14 +552,14 @@ mod tests {
         under_order_bytes[0] = 0xff;
 
         if let Some(under_order) = XmrScalar::from_repr(under_order_bytes).into_option() {
-            let witness = ChannelWitness::<BabyJubJub>::try_from(under_order);
+            let witness = CrossCurveScalar::<BabyJubJub>::try_from(under_order);
             assert!(witness.is_ok(), "Value under BabyJubJub order should be valid");
         }
     }
 
     #[test]
     fn error_display() {
-        let err = WitnessError::InvalidScalar;
+        let err = CrossCurveError::InvalidScalar;
         let display = format!("{err}");
         assert!(display.contains("not valid"), "Error message should mention validity");
     }
@@ -564,13 +569,13 @@ mod tests {
         let ctx = test_encryption_context();
         // Test that serialization and deserialization preserve the validity invariant
         for _ in 0..10 {
-            let witness = ChannelWitness::<BabyJubJub>::random();
+            let witness = CrossCurveScalar::<BabyJubJub>::random();
 
             // Serialize and deserialize with RON
             let ron_str = with_encryption_context(ctx.clone(), || {
                 ron::to_string(&witness).expect("RON serialization should succeed")
             });
-            let from_ron: ChannelWitness<BabyJubJub> = with_encryption_context(ctx.clone(), || {
+            let from_ron: CrossCurveScalar<BabyJubJub> = with_encryption_context(ctx.clone(), || {
                 ron::from_str(&ron_str).expect("RON deserialization should succeed")
             });
 
@@ -587,7 +592,7 @@ mod tests {
         // Test that deserialization rejects a value >= Ed25519 order
         // 0xffffffff... is > Ed25519 order, so Ed25519::from_repr should reject it
         let invalid = "\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"";
-        let result: Result<ChannelWitness<BabyJubJub>, _> = ron::from_str(invalid);
+        let result: Result<CrossCurveScalar<BabyJubJub>, _> = ron::from_str(invalid);
         assert!(result.is_err(), "Should reject value >= Ed25519 order during deserialization");
     }
 
@@ -604,7 +609,7 @@ mod tests {
 
         // Try to deserialize - should fail because it's invalid in BabyJubJub
         let ron_str = format!("\"{large_for_bjj}\"");
-        let result: Result<ChannelWitness<BabyJubJub>, _> = ron::from_str(&ron_str);
+        let result: Result<CrossCurveScalar<BabyJubJub>, _> = ron::from_str(&ron_str);
         assert!(
             result.is_err(),
             "Should reject value valid in Ed25519 but invalid in BabyJubJub"

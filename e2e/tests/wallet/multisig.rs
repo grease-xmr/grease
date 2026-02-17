@@ -5,10 +5,10 @@ use e2e::MONEROD_RPC;
 use libgrease::amount::{MoneroAmount, MoneroDelta};
 use libgrease::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use libgrease::payment_channel::ChannelRole;
+use libgrease::wallet::multisig_wallet::signature_share_to_bytes;
 use log::*;
 use monero_rpc::Rpc;
 use rand_core::OsRng;
-use wallet::multisig_wallet::signature_share_to_bytes;
 use wallet::{connect_to_rpc, publish_transaction, MultisigWallet};
 
 // ============ Wallet Creation ============

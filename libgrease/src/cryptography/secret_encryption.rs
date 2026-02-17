@@ -136,7 +136,6 @@ impl<'de, C: Ciphersuite> serde::Deserialize<'de> for EncryptedSecret<C> {
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::Deserialize;
         let hex_str = String::deserialize(deserializer)?;
         let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
         EncryptedSecret::<C>::read(&mut &bytes[..]).map_err(|e| serde::de::Error::custom(format!("{e}")))
@@ -159,7 +158,7 @@ mod tests {
     fn encrypt_decrypt_ed25519() {
         let mut rng = rand_core::OsRng;
         let recipient_secret = EdScalar::random(&mut rng);
-        let recipient_public = EdwardsPoint::generator() * &recipient_secret;
+        let recipient_public = EdwardsPoint::generator() * recipient_secret;
         let shard = SecretWithRole::new(EdScalar::random(rng), ChannelRole::Customer);
         let encrypted = EncryptedSecret::<Ed25519>::encrypt(shard.clone(), &recipient_public, &mut rng, "test");
         let decrypted_shard = encrypted.decrypt(&recipient_secret, "test");
@@ -173,7 +172,7 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let shard = SecretWithRole::new(BjjScalar::random(rng), ChannelRole::Customer);
         let recipient_secret = BjjScalar::random(&mut rng);
-        let recipient_public = BabyJubJub::generator() * &recipient_secret;
+        let recipient_public = BabyJubJub::generator() * recipient_secret;
         let encrypted = EncryptedSecret::<BabyJubJub>::encrypt(shard.clone(), &recipient_public, &mut rng, "test");
         let decrypted_shard = encrypted.decrypt(&recipient_secret, "test");
         assert_eq!(shard.ct_eq(&decrypted_shard).unwrap_u8(), 1);

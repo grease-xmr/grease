@@ -30,7 +30,7 @@ use zkuh_rs::noir_api::{InputError, Inputs, PointInput, ProgramArtifact};
 use crate::cryptography::noir_prover::InputConverter;
 use crate::cryptography::vcof::{VcofPrivateData, VcofPublicData};
 use crate::cryptography::vcof_snark_dleq::{SnarkDleqPrivateData, SnarkDleqPublicData};
-use crate::cryptography::witness::ChannelWitnessPublic;
+use crate::cryptography::witness::CrossCurvePoints;
 
 /// SHA256 checksum of the `GreaseUpdate` circuit bytecode.
 ///
@@ -161,7 +161,7 @@ impl InputConverter for NoirUpdateCircuit {
             .map_err(|(_, e)| e)?;
         // Private inputs, if supplied
         if let Some(prv) = private {
-            let wn_prev = scalar_to_be_bytes(prv.prev().as_snark_scalar());
+            let wn_prev = scalar_to_be_bytes(prv.prev().as_foreign_scalar());
             inputs = inputs.add_field("wn_prev", wn_prev);
         }
         Ok(inputs)
@@ -208,7 +208,7 @@ fn fq_to_field_element(fq: grease_grumpkin::Fq) -> FieldElement {
     FieldElement::from_le_bytes_reduce(&bytes)
 }
 
-/// Converts a [`ChannelWitnessPublic`] Grumpkin point to a Noir [`PointInput`].
+/// Converts a [`CrossCurvePoints`] Grumpkin point to a Noir [`PointInput`].
 ///
 /// Extracts the affine (x, y) coordinates from the witness's SNARK-compatible
 /// point representation and converts each coordinate to a [`FieldElement`].
@@ -221,7 +221,7 @@ fn fq_to_field_element(fq: grease_grumpkin::Fq) -> FieldElement {
 ///
 /// A [`PointInput`] struct containing the x and y coordinates as [`FieldElement`]s,
 /// ready for use as a Noir circuit input.
-fn grumpkin_pt_to_point_input(p: &ChannelWitnessPublic<Grumpkin>) -> PointInput {
-    let affine: Point = (*p.snark_point()).into();
+fn grumpkin_pt_to_point_input(p: &CrossCurvePoints<Grumpkin>) -> PointInput {
+    let affine: Point = (*p.foreign_point()).into();
     PointInput { x: fq_to_field_element(affine.x), y: fq_to_field_element(affine.y), is_infinite: Some(false) }
 }

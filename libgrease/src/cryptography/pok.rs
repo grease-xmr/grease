@@ -264,7 +264,7 @@ mod tests {
     fn schnorr_pok_on_ed25519() {
         let mut rng = rand_core::OsRng;
         let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let public_key = Ed25519::generator() * &secret;
+        let public_key = Ed25519::generator() * secret;
         let binding = b"test-context";
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding);
         assert!(pok.verify(&public_key, binding));
@@ -277,8 +277,8 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let sigma_pubkey = Ed25519::generator() * &shard;
-        let kes_pubkey = Ed25519::generator() * &private_key;
+        let sigma_pubkey = Ed25519::generator() * shard;
+        let kes_pubkey = Ed25519::generator() * private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
         assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
         let data = Writable::serialize(&pok);
@@ -301,7 +301,7 @@ mod tests {
     fn schnorr_pok_with_zero_secret() {
         let mut rng = rand_core::OsRng;
         let zero = <Ed25519 as Ciphersuite>::F::ZERO;
-        let public_key = Ed25519::generator() * &zero; // identity
+        let public_key = Ed25519::generator() * zero; // identity
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &zero, &[]);
         // Zero secret produces identity public key, which should be rejected
         assert!(
@@ -314,7 +314,7 @@ mod tests {
     fn schnorr_pok_serialization_roundtrip() {
         let mut rng = rand_core::OsRng;
         let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let public_key = Ed25519::generator() * &secret;
+        let public_key = Ed25519::generator() * secret;
         let binding = b"roundtrip-test";
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding);
         let data = Writable::serialize(&pok);
@@ -326,7 +326,7 @@ mod tests {
     fn schnorr_pok_proofs_are_non_deterministic() {
         let mut rng = rand_core::OsRng;
         let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let public_key = Ed25519::generator() * &secret;
+        let public_key = Ed25519::generator() * secret;
         let pok1 = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
         let pok2 = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
         // Both should verify
@@ -371,7 +371,7 @@ mod tests {
     fn schnorr_pok_binding_mismatch_fails() {
         let mut rng = rand_core::OsRng;
         let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let public_key = Ed25519::generator() * &secret;
+        let public_key = Ed25519::generator() * secret;
         let binding_a = b"context-a";
         let binding_b = b"context-b";
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding_a);
@@ -394,7 +394,7 @@ mod tests {
         // that only verify with their respective bindings
         let pok_a = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding_a);
         let pok_b = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding_b);
-        let public_key = Ed25519::generator() * &secret;
+        let public_key = Ed25519::generator() * secret;
         // Each proof should only verify with its own binding
         assert!(pok_a.verify(&public_key, binding_a));
         assert!(!pok_a.verify(&public_key, binding_b));
@@ -407,8 +407,8 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let sigma_pubkey = Ed25519::generator() * &shard;
-        let kes_pubkey = Ed25519::generator() * &private_key;
+        let sigma_pubkey = Ed25519::generator() * shard;
+        let kes_pubkey = Ed25519::generator() * private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
         // Valid verification
         assert!(pok.verify(&sigma_pubkey, &kes_pubkey));
@@ -422,8 +422,8 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let sigma_pubkey = Ed25519::generator() * &shard;
-        let kes_pubkey = Ed25519::generator() * &private_key;
+        let sigma_pubkey = Ed25519::generator() * shard;
+        let kes_pubkey = Ed25519::generator() * private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
         // Swapping pubkeys should fail (unless shard == private_key by chance)
         if shard != private_key {
@@ -439,8 +439,8 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let sigma_pubkey = Ed25519::generator() * &shard;
-        let kes_pubkey = Ed25519::generator() * &private_key;
+        let sigma_pubkey = Ed25519::generator() * shard;
+        let kes_pubkey = Ed25519::generator() * private_key;
         let identity = <Ed25519 as Ciphersuite>::G::identity();
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
         assert!(!pok.verify(&identity, &kes_pubkey), "identity shard pubkey must be rejected");
@@ -517,10 +517,10 @@ mod tests {
         let pok1 = KesPoK::<Ed25519>::prove(&mut rng, &shard1, &pk1);
         let pok2 = KesPoK::<Ed25519>::prove(&mut rng, &shard2, &pk2);
 
-        let shard1_pubkey = Ed25519::generator() * &shard1;
-        let kes1_pubkey = Ed25519::generator() * &pk1;
-        let shard2_pubkey = Ed25519::generator() * &shard2;
-        let kes2_pubkey = Ed25519::generator() * &pk2;
+        let shard1_pubkey = Ed25519::generator() * shard1;
+        let kes1_pubkey = Ed25519::generator() * pk1;
+        let shard2_pubkey = Ed25519::generator() * shard2;
+        let kes2_pubkey = Ed25519::generator() * pk2;
 
         // Valid verifications
         assert!(pok1.verify(&shard1_pubkey, &kes1_pubkey));
@@ -546,8 +546,8 @@ mod tests {
         let mut rng = rand_core::OsRng;
         let shard = <Ed25519 as Ciphersuite>::F::random(&mut rng);
         let private_key = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let sigma_pubkey = Ed25519::generator() * &shard;
-        let kes_pubkey = Ed25519::generator() * &private_key;
+        let sigma_pubkey = Ed25519::generator() * shard;
+        let kes_pubkey = Ed25519::generator() * private_key;
         let pok = KesPoK::<Ed25519>::prove(&mut rng, &shard, &private_key);
 
         let json = serde_json::to_string(&pok).expect("serialize KesPoK");
