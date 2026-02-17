@@ -35,8 +35,8 @@ use super::propose_channel_tests::propose_channel;
 
 pub(crate) fn establish_wallet(merchant: &mut MerchantEstablishing, customer: &mut CustomerEstablishing) {
     // Merchant commits to their shared public key, customer stores the commitment
-    let commitment = merchant.wallet_public_key_commitment();
-    customer.set_merchant_wallet_public_key_commitment(commitment);
+    let commitment = merchant.wallet_public_key_commitment().expect("merchant commitment should succeed");
+    customer.set_merchant_wallet_public_key_commitment(commitment).expect("customer should accept commitment");
     let customer_pubkey = customer.wallet_public_key();
 
     merchant.set_customer_wallet_public_key(customer_pubkey).expect("merchant should accept customer's public key");
@@ -910,7 +910,7 @@ fn test_merchant_rejects_merchant_role_wallet_key() {
     let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
     let customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
 
-    let _ = merchant.wallet_public_key_commitment();
+    let _ = merchant.wallet_public_key_commitment().expect("merchant commitment should succeed");
     // Get merchant's own key (which has Merchant role)
     let merchant_key = merchant.wallet_public_key();
 

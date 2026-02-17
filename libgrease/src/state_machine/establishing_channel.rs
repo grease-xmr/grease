@@ -570,13 +570,9 @@ where
 
         let initial_witness = Curve25519Secret::from(*self.initial_adapter_offset.offset());
         let adapted_sig = wallet.adapt_signature(&initial_witness, &msg).map_err(MultisigWalletError::from)?;
-        self.adapted_sig = Some(adapted_sig.clone());
+        let adapted_signature = adapted_sig.clone();
+        self.adapted_sig = Some(adapted_sig);
         let dleq_proof = self.dleq_proof.clone();
-
-        let adapted_signature = self
-            .adapted_sig
-            .clone()
-            .ok_or_else(|| EstablishError::MissingInformation("Adapted signature not available".into()))?;
         // Sign the payload with the raw nonce key to bind the package to channel parameters
         let payload_signature = self.sign_init_package(rng, &dleq_proof);
         self.payload_sig = Some(payload_signature.clone());
@@ -717,10 +713,10 @@ where
     }
 
     /// Generate and return a commitment to the merchant's public key.
-    pub fn wallet_public_key_commitment(&mut self) -> PublicKeyCommitment {
-        self.wallet_setup
-            .commit_to_public_key()
-            .expect("MerchantEstablishing is always in valid state for send_commitment")
+    ///
+    /// Must only be called once (transitions the wallet setup from `Initialized` to `CommitmentSent`).
+    pub fn wallet_public_key_commitment(&mut self) -> Result<PublicKeyCommitment, EstablishError> {
+        self.wallet_setup.commit_to_public_key().map_err(|e| EstablishError::MissingInformation(e.to_string()))
     }
 
     /// Returns the merchant's "partial" public key for the multisig wallet
@@ -922,10 +918,13 @@ where
     }
 
     /// Store the merchant's public key commitment.
-    pub fn set_merchant_wallet_public_key_commitment(&mut self, commitment: PublicKeyCommitment) {
-        self.wallet_setup
-            .receive_commitment(commitment)
-            .expect("CustomerEstablishing is always in valid state for receive_commitment");
+    ///
+    /// Must only be called once (transitions the wallet setup from `AwaitingPeerCommitment` to `AwaitingPeerKey`).
+    pub fn set_merchant_wallet_public_key_commitment(
+        &mut self,
+        commitment: PublicKeyCommitment,
+    ) -> Result<(), EstablishError> {
+        self.wallet_setup.receive_commitment(commitment).map_err(|e| EstablishError::MissingInformation(e.to_string()))
     }
 
     /// Returns the customer's "partial" public key for the multisig wallet

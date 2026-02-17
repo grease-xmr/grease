@@ -59,7 +59,7 @@ impl ChannelRole {
     }
 
     pub fn read<R: Read + ?Sized>(reader: &mut R) -> Result<Self, ReadError> {
-        let v = reader.read_u8().map_err(|e| ReadError::new("ChannelRole", format!("Failed to read u8: {}", e)))?;
+        let v = reader.read_u8().map_err(|e| ReadError::new("ChannelRole", format!("Failed to read u8: {e}")))?;
         ChannelRole::try_from(v)
     }
 }

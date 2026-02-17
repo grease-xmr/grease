@@ -30,7 +30,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
 pub type AdaptSig = AdaptedSignature<Ed25519>;
@@ -182,26 +183,21 @@ impl MultisigWallet {
 
     /// Lazily connect to the Monero RPC if not already connected and return a thread-safe reference to it.
     pub async fn rpc_connection(&self) -> Result<Arc<SimpleRequestRpc>, WalletError> {
-        let lock =
-            self.rpc.as_ref().read().map_err(|e| {
-                WalletError::InternalError(format!("Failed to acquire read lock on RPC connection: {e}"))
-            })?;
+        {
+            let lock = self.rpc.read().await;
+            if let Some(rpc) = lock.as_ref() {
+                return Ok(Arc::clone(rpc));
+            }
+        }
+        let mut lock = self.rpc.write().await;
+        // Double check if another task has already initialized the RPC connection while we were waiting for the write lock
         if let Some(rpc) = lock.as_ref() {
             Ok(Arc::clone(rpc))
         } else {
-            drop(lock);
-            let mut lock = self.rpc.as_ref().write().map_err(|e| {
-                WalletError::InternalError(format!("Failed to acquire write lock on RPC connection: {e}"))
-            })?;
-            // Double check if another thread has already initialized the RPC connection while we were waiting for the write lock
-            if let Some(rpc) = lock.as_ref() {
-                Ok(Arc::clone(rpc))
-            } else {
-                let rpc = SimpleRequestRpc::new(self.rpc_url.clone()).await?;
-                let rpc = Arc::new(rpc);
-                *lock = Some(Arc::clone(&rpc));
-                Ok(rpc)
-            }
+            let rpc = SimpleRequestRpc::new(self.rpc_url.clone()).await?;
+            let rpc = Arc::new(rpc);
+            *lock = Some(Arc::clone(&rpc));
+            Ok(rpc)
         }
     }
 
@@ -290,8 +286,8 @@ impl MultisigWallet {
         Ok(found)
     }
 
-    pub fn import_output(&mut self, serialized: &Vec<u8>) -> Result<(), WalletError> {
-        let mut reader = serialized.as_slice();
+    pub fn import_output(&mut self, serialized: &[u8]) -> Result<(), WalletError> {
+        let mut reader = serialized;
         let output = WalletOutput::read(&mut reader).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
         self.known_outputs.push(output);
         Ok(())
@@ -306,19 +302,22 @@ impl MultisigWallet {
     }
 
     pub fn find_spendable_outputs(&self, min_amount: u64) -> Result<Vec<WalletOutput>, WalletError> {
-        if self.known_outputs.is_empty() {
-            return Err(WalletError::InsufficientFunds);
+        let mut total = 0u64;
+        let result: Vec<WalletOutput> = self
+            .known_outputs
+            .iter()
+            .take_while(|output| {
+                let needs_more = total < min_amount;
+                total += output.commitment().amount;
+                needs_more
+            })
+            .cloned()
+            .collect();
+        if total >= min_amount {
+            Ok(result)
+        } else {
+            Err(WalletError::InsufficientFunds)
         }
-        let mut result = Vec::new();
-        let mut total = 0;
-        for output in &self.known_outputs {
-            result.push(output.clone());
-            total += output.commitment().amount;
-            if total >= min_amount {
-                return Ok(result);
-            }
-        }
-        Err(WalletError::InsufficientFunds)
     }
 
     pub fn joint_public_spend_key(&self) -> &Curve25519PublicKey {
@@ -648,22 +647,19 @@ pub fn translate_payments(
     ])
 }
 
+// Compile-time guard: SignatureShare<Ed25519> must be layout-compatible with DScalar
+const _: () = assert!(std::mem::size_of::<SignatureShare<Ed25519>>() == std::mem::size_of::<DScalar>());
+
 pub fn signature_share_to_secret(signature: SignatureShare<Ed25519>) -> Curve25519Secret {
-    // Safety: SignatureShare<Ed25519> is a wrapper around a DScalar, as is Curve25519Secret
-    let sig = unsafe {
-        let scalar: DScalar = mem::transmute(signature);
-        scalar
-    };
-    Curve25519Secret::from(sig)
+    // Safety: SignatureShare<Ed25519> is a newtype around Ed25519::F (Scalar), which is DScalar
+    let scalar: DScalar = unsafe { mem::transmute(signature) };
+    Curve25519Secret::from(scalar)
 }
 
 pub fn signature_share_to_scalar(signature: SignatureShare<Ed25519>) -> XmrScalar {
-    // Safety: SignatureShare<Ed25519> is a wrapper around a DScalar, as is XmrScalar
-    let val = unsafe {
-        let scalar: DScalar = mem::transmute(signature);
-        scalar
-    };
-    XmrScalar(val)
+    // Safety: SignatureShare<Ed25519> is a newtype around Ed25519::F (Scalar), which is DScalar
+    let scalar: DScalar = unsafe { mem::transmute(signature) };
+    XmrScalar(scalar)
 }
 
 pub fn signature_share_to_bytes(secret: &SignatureShare<Ed25519>) -> Vec<u8> {
