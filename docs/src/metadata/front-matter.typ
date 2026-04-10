@@ -33,8 +33,7 @@
 #let algo(caption: none, title: none, list) = {
   figure(
     caption: caption,
-    kind: "algorithm",
-    supplement: [Algorithm],
+    kind: image,
     placement: auto,
     pseudocode-list(booktabs: true, title: title)[#list],
   )

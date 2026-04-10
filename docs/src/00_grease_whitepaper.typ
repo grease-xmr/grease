@@ -37,6 +37,7 @@
 #include "16_cooperative_close.typ"
 #include "18_channel_dispute.typ"
 #include "40_kes.typ"
+#include "42_trustless_kes.typ"
 #include "50_limitations.typ"
 
 #outline(title: "Table of Algorithms", target: figure.where(kind: "algorithm"))
