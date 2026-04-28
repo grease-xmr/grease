@@ -80,7 +80,7 @@ plus À la carte options which is standard in legacy subscription models.
 
 ### Why does another chain have to be involved?
 
-Offline payment channels necessarily require a trustless state management mechanism. Typically, the scripting features
+Offline payment channels necessarily require a state management mechanism. Typically, the scripting features
 for a given blockchain allow for this state to be managed directly. However, Monero's primary design goals are privacy
 and fungibility. Attaching state to UTXOs would create a heterogeneity that threatens these goals. (Fungibility is more
 important than specialty for maintaining privacy.)
@@ -89,16 +89,15 @@ The state does not have to be managed on the same chain though. Any place where 
 
 - available,
 - reliable and verifiable,
-- trustless,
+- trustless/trust-minimized,
 
 will suffice.
 
-The [AuxChannel] and [MoNet] papers (summarized in [Payment Channel Network for Scriptless Blockchains]) provide a
-workable demonstration of this, using Ethereum as the state management chain. However, by using Ethereum, the channel
+The [AuxChannel] and [MoNet] papers (summarized in [Payment Channel Network for Scriptless Blockchains]) provide an
+outline of this, using Ethereum as the state management chain. However, by using Ethereum, the channel
 metadata, including the peer's public keys and the channel state (open, disputed) is scrutable by the public.
 
-Grease aims to improve on this by making the payment channel metadata private as well. Zero knowledge proofs provide a
-way to do this.
+Grease aims to improve on this by making the payment channel metadata private as well. 
 
 [AuxChannel]: https://eprint.iacr.org/2022/117.pdf
 [MoNet]: https://eprint.iacr.org/2022/744.pdf
