@@ -42,7 +42,9 @@ proof-of-concept Monero payment channel for Monero.
 The Grease protocol is a new bi-directional payment channel design with unlimited lifetime for Monero. It is fully compatible with the
 current Monero implementation and is also fully compatible with the upcoming FCMP++ update.
 
-Using the Grease protocol, two peers may trustlessly cooperate to share, divide and reclaim a common locked amount of Monero XMR while
+Using the Grease protocol, two peers may trustlessly #footnote[No trust is needed between the channel parties. The degree of trust given 
+to the escrow service is dependent on the specific KES used. Different implementations are possible carrying different trade-offs.] 
+cooperate to share, divide and reclaim a common locked amount of Monero XMR while
 minimizing the online transaction costs and with minimal use of outside trusted third parties.
 
 The Grease protocol maintains all of Monero's security. No identifiable information about the peers' privately owned Monero wallets is
@@ -61,7 +63,7 @@ platform satisfies this requirement while also providing the privacy-focused eth
 
 === Why does another chain have to be involved?
 
-Offline payment channels necessarily _require_ a trustless state management mechanism. Typically, the scripting features for a given
+Offline payment channels necessarily _require_ a state management mechanism. Typically, the scripting features for a given
 blockchain allow for this state to be managed directly. However, Monero's primary design goals are privacy and fungibility. Attaching state
 to UTXOs would create a heterogeneity that threatens these goals. Fungibility is more important than features when it comes to privacy.
 
@@ -69,7 +71,7 @@ The state does not have to be managed on the same chain though. Any place where 
 
 - available,
 - reliable,
-- trustless,
+- has trust assumptions appropriate for the value involved,
 
 will suffice.
 
