@@ -12,12 +12,10 @@ use crate::state_machine::establishing_channel::EstablishingState;
 use crate::state_machine::timeouts::TimeoutReason;
 use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
 use ciphersuite::{Ciphersuite, Ed25519};
-use grease_grumpkin::Grumpkin;
 use log::*;
 use modular_frost::curve::Curve as FrostCurve;
 use monero::Address;
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
 use thiserror::Error;
 use zeroize::Zeroizing;
 // ====================== Message types ======================
@@ -69,11 +67,9 @@ impl RejectProposalReason {
 /// and prepares a proposal to send to the merchant.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct ChannelProposer<SF = Grumpkin, KC = Ed25519>
+pub struct ChannelProposer<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
@@ -81,26 +77,20 @@ where
     channel_secret: SerializableSecret<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     pub(crate) partial_spend_key: Curve25519Secret,
-    #[serde(skip)]
-    _sf: PhantomData<SF>,
 }
 
-impl<SF, KC> HasRole for ChannelProposer<SF, KC>
+impl<KC> HasRole for ChannelProposer<KC>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }
 }
 
-impl<SF, KC> ChannelProposer<SF, KC>
+impl<KC> ChannelProposer<KC>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     /// Create a new `ChannelProposer` from the merchant's seed info and the customer's own parameters.
     ///
@@ -132,12 +122,11 @@ where
             seed_info: seed,
             partial_spend_key,
             channel_secret: channel_secret.into(),
-            _sf: PhantomData,
         })
     }
 
     /// Generate a NewChannelProposal payload to send to the merchant.
-    pub fn into_proposal(self) -> (AwaitingProposalResponse<SF, KC>, NewChannelProposal<KC>) {
+    pub fn into_proposal(self) -> (AwaitingProposalResponse<KC>, NewChannelProposal<KC>) {
         let proposal =
             NewChannelProposal { channel_id: self.metadata.channel_id().clone(), seed: self.seed_info.clone() };
         let awaiting_response = AwaitingProposalResponse {
@@ -145,7 +134,6 @@ where
             seed_info: self.seed_info,
             channel_secret: self.channel_secret,
             partial_spend_key: self.partial_spend_key,
-            _sf: PhantomData,
         };
         (awaiting_response, proposal)
     }
@@ -154,11 +142,9 @@ where
 /// C2: Customer is waiting for the merchant's response to their proposal.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct AwaitingProposalResponse<SF = Grumpkin, KC = Ed25519>
+pub struct AwaitingProposalResponse<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
@@ -166,18 +152,15 @@ where
     pub(crate) channel_secret: SerializableSecret<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     pub(crate) partial_spend_key: Curve25519Secret,
-    #[serde(skip)]
-    _sf: PhantomData<SF>,
 }
 
-impl<SF, KC> AwaitingProposalResponse<SF, KC>
+impl<KC> AwaitingProposalResponse<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     /// Close the channel due to a lack of response from the peer.
-    pub fn timeout(self, reason: TimeoutReason) -> ClosedChannelState<SF, KC> {
+    pub fn timeout(self, reason: TimeoutReason) -> ClosedChannelState<KC> {
         let msg = format!("Awaiting proposal response has timed out: {}", reason.reason());
         info!("{msg}. The channel will be closed");
         let final_balances = self.metadata.initial_balance();
@@ -192,7 +175,7 @@ where
     pub fn handle_response(
         self,
         response: ProposalResponse,
-    ) -> Result<(EstablishingState<SF, KC>, ProposalConfirmed), ClosedChannelState<SF, KC>> {
+    ) -> Result<(EstablishingState<KC>, ProposalConfirmed), ClosedChannelState<KC>> {
         match response {
             ProposalResponse::Accepted(id) => {
                 if self.metadata.channel_id().name() != id {
@@ -206,7 +189,7 @@ where
                 info!("Proposal accepted by merchant, transitioning to Establishing");
                 let closing_balance = self.metadata.initial_balance();
                 let metadata_backup = self.metadata.clone();
-                let establishing: EstablishingState<SF, KC> = EstablishingState::try_from(self).map_err(|e| {
+                let establishing: EstablishingState<KC> = EstablishingState::try_from(self).map_err(|e| {
                     ClosedChannelState::new(
                         ChannelClosedReason::Rejected(RejectProposalReason::new(e.to_string())),
                         metadata_backup,
@@ -234,32 +217,27 @@ where
 /// M1: Merchant has shared seed info and is waiting for a customer to submit a proposal.
 ///
 /// This state is standalone and NOT part of `ChannelState`, because no channel exists yet.
-pub struct AwaitProposal<SF = Grumpkin, KC = Ed25519>
+pub struct AwaitProposal<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     initial_seed_info: MerchantSeedInfo<KC>,
     /// The merchant's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
     channel_secret: Zeroizing<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     partial_spend_key: Curve25519Secret,
-    _sf: PhantomData<SF>,
 }
 
-impl<SF, KC> AwaitProposal<SF, KC>
+impl<KC> AwaitProposal<KC>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     pub fn new(
         initial_seed_info: MerchantSeedInfo<KC>,
         channel_secret: Zeroizing<KC::F>,
         partial_spend_key: Curve25519Secret,
     ) -> Self {
-        Self { initial_seed_info, channel_secret, partial_spend_key, _sf: PhantomData }
+        Self { initial_seed_info, channel_secret, partial_spend_key }
     }
 
     /// Verify and accept an incoming proposal from a customer (M2).
@@ -269,7 +247,7 @@ where
     pub fn receive_proposal(
         self,
         proposal: NewChannelProposal<KC>,
-    ) -> Result<(AwaitingConfirmation<SF, KC>, ProposalResponse), InvalidProposal> {
+    ) -> Result<(AwaitingConfirmation<KC>, ProposalResponse), InvalidProposal> {
         self.verify_seed_info(&proposal.seed)?;
         self.review_proposal(&proposal)?;
         let metadata = StaticChannelMetadata::new(
@@ -286,7 +264,6 @@ where
             seed_info: self.initial_seed_info,
             channel_secret: self.channel_secret.into(),
             partial_spend_key: self.partial_spend_key,
-            _sf: PhantomData,
         };
         Ok((awaiting, response))
     }
@@ -328,11 +305,9 @@ where
 /// M2: Merchant has accepted the proposal and is waiting for the customer's confirmation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct AwaitingConfirmation<SF = Grumpkin, KC = Ed25519>
+pub struct AwaitingConfirmation<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: Ciphersuite,
-    Ed25519: Dleq<SF>,
 {
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
@@ -340,25 +315,22 @@ where
     pub(crate) channel_secret: SerializableSecret<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     pub(crate) partial_spend_key: Curve25519Secret,
-    #[serde(skip)]
-    _sf: PhantomData<SF>,
 }
 
-impl<SF, KC> AwaitingConfirmation<SF, KC>
+impl<KC> AwaitingConfirmation<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     /// Close the channel because the customer rejected the proposal or timed out.
-    pub fn timeout(self, reason: TimeoutReason) -> ClosedChannelState<SF, KC> {
+    pub fn timeout(self, reason: TimeoutReason) -> ClosedChannelState<KC> {
         let msg = format!("Awaiting confirmation has timed out: {}", reason.reason());
         info!("{msg}. The channel will be closed");
         let final_balances = self.metadata.initial_balance();
         ClosedChannelState::new(ChannelClosedReason::Timeout(reason), self.metadata, final_balances)
     }
 
-    pub fn reject(self, reason: RejectProposalReason) -> ClosedChannelState<SF, KC> {
+    pub fn reject(self, reason: RejectProposalReason) -> ClosedChannelState<KC> {
         let msg = format!("Channel proposal was rejected by customer: {}", reason.reason());
         info!("{msg}. The channel will be closed");
         let final_balances = self.metadata.initial_balance();
@@ -373,7 +345,7 @@ where
     pub fn handle_confirmation(
         self,
         confirmed: ProposalConfirmed,
-    ) -> Result<EstablishingState<SF, KC>, ClosedChannelState<SF, KC>> {
+    ) -> Result<EstablishingState<KC>, ClosedChannelState<KC>> {
         if self.metadata.channel_id().name() != confirmed.channel_id {
             let final_balances = self.metadata.initial_balance();
             return Err(ClosedChannelState::new(
@@ -385,7 +357,7 @@ where
         info!("Customer confirmed proposal, transitioning to Establishing");
         let closing_balance = self.metadata.initial_balance();
         let metadata_backup = self.metadata.clone();
-        let establishing: EstablishingState<SF, KC> = EstablishingState::try_from(self).map_err(|e| {
+        let establishing: EstablishingState<KC> = EstablishingState::try_from(self).map_err(|e| {
             ClosedChannelState::new(
                 ChannelClosedReason::Rejected(RejectProposalReason::new(e.to_string())),
                 metadata_backup,

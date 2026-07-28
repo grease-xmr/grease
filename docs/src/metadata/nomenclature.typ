@@ -1,42 +1,34 @@
-#let pubOf(k, P) = { $#P = #k dot.op G$ }
 #let hashOf(alg, input) = { $H_(#alg)(#input)$ }
 
-
-#let bjj = $"BJJ"$
 #let ed = $"Ed"$
 #let merchant = $"M"$
 #let cust = $"C"$
 #let initr = $"Initiator"$
 #let respr = $"Responder"$
-#let Gbjj = $GG_2$
-#let Ged = $G_1$
-#let Lbjj = $L_2$
-#let Led = $L_1$
+#let Ged = $G$
+#let Led = $N$
 #let witness = $omega$
 
 // Wallet protocol nomenclature
 #let pre(actor) = $C^#actor$
 #let preC = $pre(cust)$
 #let preM = $pre(merchant)$
-#let partialSig(actor,sub) = $(R^(#actor)_(#sub), s^(#actor)_(#sub))$
-#let adapterSig(actor,sub) = $(R^(#actor)_(#sub), Q^(#actor)_(#sub), hat(s)^(#actor)_(#sub))$
-
-// Baby Jubjub points
-#let PubBjj(k) = $T_#k$
+#let partialSig(actor, sub) = $(R^(#actor)_(#sub), s^(#actor)_(#sub))$
+#let adapterSig(actor, sub) = $(R^(#actor)_(#sub), Q^(#actor)_(#sub), hat(s)^(#actor)_(#sub))$
 
 #let nomenclature = {
-
-  table(columns: 2, align: (left, left),
-    table.header( [*Symbol*], [*Description*]),
-    Gbjj, [Generator point for curve Baby JubJub],
-    Ged, [Generator point for curve Ed25519],
-    Lbjj, [The prime order of curve Baby JubJub],
-    Led, [The prime order for curve Ed25519],
-    $witness_i$, [The witness value for party $i$],
-    $T_i$, [The public point corresponding to $witness_i$ on curve Baby JubJub],
-    $S_i$, [The public point corresponding to $witness_i$ on curve Ed25519],
+  table(
+    columns: 2,
+    align: (left, left),
+    table.header([*Symbol*], [*Description*]),
+    Ged, [Generator point for the Ed25519 curve],
+    Led, [The prime order of the Ed25519 group],
+    $omega_i$, [The secret adapter-signature offset for channel state $i$],
+    $Q_i$, [The public adapter point corresponding to $omega_i$ on Ed25519, $Q_i = omega_i dot.c G$],
+    $m_i$, [The dispute statement for state $i$ ("on channel id, state $i$ is the latest")],
+    $Z$, [The arbiter committee's stable threshold-BLS master public key, $Z = z dot.c G_2$],
+    $sigma_m$, [The arbiter's attestation of a statement $m$: a threshold-BLS signature that acts as the decryption key for $m$],
   )
-
 }
 
 #let subscripts = {
@@ -44,46 +36,32 @@
     "merchant": merchant,
     "customer": cust,
     "initiator": initr,
-    "responder": respr
+    "responder": respr,
   )
 
-  let rows = peer_types.pairs().map(((s,v)) => {
+  let rows = peer_types
+    .pairs()
+    .map(((s, v)) => {
       (v, [The peer playing the role of #s])
-  }).flatten()
+    })
+    .flatten()
 
-table(columns: 2, align: (left, left),
-    table.header( [*Subscript*], [*Referent*]),
-    bjj, [Curve Baby JubJub],
+  table(
+    columns: 2,
+    align: (left, left),
+    table.header([*Subscript*], [*Referent*]),
     ed, [Curve Ed25519],
-    ..rows
-
+    ..rows,
   )
 }
 
-// Defined in KES.typ
-// master private keys
-#let kk = $k_K$
-#let kc = $k_C$
-#let km = $k_M$
-// master public keys
-#let Pk = $P_K$
+// Party keys
 #let Pm = $P_B$
 #let Pc = $P_A$
 
-// shared channel secret
-#let chs = $kappa$
-// kes grease channel secret key
-#let kg = $k_g$
-// kes grease channel public key
-#let Pg = $P_g$
 #let hash(alg, input) = { $H_(#alg)(#input)$ }
 #let H2F(input) = { $H_F (#input)$ }
 #let H2P(input) = { $H_P (#input)$ }
-#let Pvcof(sub) = { $Pi^V_(#sub)$ }
 
 #let wn(sub) = { if sub == none { $witness_0$ } else { $witness_#sub$ } }
-#let w0 = wn(0)
 #let PubWEd(sub) = { $Q_#sub$ }
-#let PubWBjj(sub) = { $T_#sub$ }
-#let DleqP = $Pi$
-#let PokP = $Gamma$

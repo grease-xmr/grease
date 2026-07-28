@@ -1,6 +1,7 @@
 # Grease Payment Channel FSM
 
-This document describes the complete Finite State Machine (FSM) for Grease payment channels, showing all states, transitions, and the protocol traits implemented by each state.
+This document describes the finite state machine (FSM) for a Grease payment channel: its states, the transitions between them, and each
+party's responsibilities in every state. It complements the lifecycle overview in `10_channel_design` and the arbiter design in `40_arbiter`.
 
 ## State Machine Diagram
 
@@ -10,50 +11,48 @@ stateDiagram-v2
 
     state Proposing {
         note right of Proposing
-            <b>Protocol Traits:</b>
-            - ProposeProtocolCommon
-            - ProposeProtocolProposer (Merchant)
-            - ProposeProtocolProposee (Customer)
+            <b>Responsibilities:</b>
+            - Exchange seed, proposal, confirmation
+            - Agree channel parameters and the arbiter
+            - Derive the provisional channel id
         end note
     }
 
-    Proposing --> Establishing: ProposalAcceptedByMerchant
+    Proposing --> Establishing: ProposalAccepted
     Proposing --> Closed: RejectProposal / Timeout
 
     state Establishing {
         note right of Establishing
-            <b>Protocol Traits:</b>
-            - EstablishProtocolCommon&lt;C, D&gt;
-            - EstablishProtocolMerchant&lt;C, D&gt;
-            - EstablishProtocolCustomer&lt;C, D&gt;
-            - PeerInfo&lt;C&gt;
-            - HasRole, HasPublicKey, HasSecretKey
+            <b>Responsibilities:</b>
+            - Create the 2-of-2 multisig wallet
+            - Finalize the channel id (commits to L_F)
+            - Exchange the initial adapter signature,
+              verifiably encrypted offset and binding proof
+            - Fund and confirm the funding transaction
         end note
     }
 
-    Establishing --> Open: requirements_met() = true
-    Establishing --> Closed: timeout
+    Establishing --> Open: funding_confirmed()
+    Establishing --> Closed: timeout / abort
 
     state Open {
         note right of Open
-            <b>Protocol Traits:</b>
-            - UpdateProtocolCommon&lt;C&gt;
-            - UpdateProtocolProposer&lt;C&gt;
-            - UpdateProtocolProposee&lt;C&gt;
-            - HasRole
+            <b>Responsibilities:</b>
+            - Per update: fresh offset, adapter sign,
+              verifiably encrypted offset, binding proof,
+              cross-signed update record
+            - Watch the arbiter log for disputes
         end note
     }
 
     Open --> Closing: cooperative_close()
-    Open --> Disputing: force_close()
+    Open --> Disputing: unilateral_close()
 
     state Closing {
         note right of Closing
-            <b>Protocol Traits:</b>
-            - CloseProtocolCommon
-            - CloseProtocolInitiator
-            - CloseProtocolResponder
-            - HasRole
+            <b>Responsibilities:</b>
+            - Exchange the latest offsets
+            - Complete and broadcast the closing tx
         end note
     }
 
@@ -61,11 +60,10 @@ stateDiagram-v2
 
     state Disputing {
         note right of Disputing
-            <b>Protocol Traits:</b>
-            - ForceCloseProtocolCommon
-            - ForceCloseProtocolClaimant
-            - ForceCloseProtocolDefendant
-            - HasRole
+            <b>Responsibilities:</b>
+            - Present latest record to the arbiter
+            - Answer a stale record with a newer one
+            - On attestation, decrypt offset and close
         end note
     }
 
@@ -73,127 +71,89 @@ stateDiagram-v2
 
     state Closed {
         note right of Closed
-            <b>Reasons:</b>
-            - Normal (cooperative close)
-            - Timeout (channel expired)
-            - ForceClosed
-            - Disputed
-            - Rejected (proposal rejected)
+            <b>Reasons:</b> Normal, Timeout,
+            UnilateralClose, Disputed, Rejected
         end note
     }
 
     Closed --> [*]
 ```
 
-## State Descriptions
+## State descriptions
 
-### Proposing (ProposingState)
+### Proposing
 
-The initial state when a channel is being proposed. The customer scans a merchant's QR code and initiates channel creation.
+The initial state, entered when a customer takes a merchant's out-of-band seed and sends a channel proposal. The parties agree the channel
+parameters — initial balances, public keys, closing addresses, dispute-window duration, and the arbiter to be used — and derive the
+provisional channel id from that metadata.
 
-**Events:**
-- `ProposalAcceptedByMerchant` - Customer receives acceptance from merchant, transitions to Establishing
-- `MerchantAcceptedProposal` - Merchant accepts customer's proposal, transitions to Establishing
-- `RejectProposal` - Proposal rejected, transition to Closed
-- `Timeout` - Negotiation timeout, transition to Closed
+**Events:** `ProposalAccepted`, `RejectProposal`, `Timeout`
 
-**Protocol Traits:**
-- `ProposeProtocolCommon` - Common proposal operations
-- `ProposeProtocolProposer` - Merchant-side operations
-- `ProposeProtocolProposee` - Customer-side operations
+### Establishing
 
-### Establishing (EstablishingState&lt;C&gt;)
-
-The state where both parties set up the 2-of-2 multisig wallet, exchange keys, generate ZK proofs, and establish the KES (Key Encryption Server).
+The parties create the 2-of-2 multisig wallet, finalize the channel id (which commits to the funding output's linking tag `L_F`), and
+exchange the initial channel state. The initial state is built exactly like a later update: each party adapter-signs the counterparty's
+closing transaction with a fresh secret offset and hands over a *verifiably encrypted offset* together with a binding proof. No
+zero-knowledge circuit is involved, and the arbiter is not contacted — it holds no state for the channel until a dispute is opened.
 
 **Requirements for transition to Open:**
 1. Multisig wallet created
-2. KES client initialized
-3. KES proof received
+2. Channel id finalized (commits to `L_F`)
+3. Initial verifiably encrypted offsets and binding proofs exchanged and verified
 4. Funding transaction confirmed
 
-**Events:**
-- `MultiSigWalletCreated` - Wallet keys exchanged
-- `KesClientInitialized` - KES client set up
-- `KesShards` - Secret shards exchanged
-- `KesCreated` - KES proof received
-- `FundingTxConfirmed` - Funding transaction on-chain
-- `MyProof0Generated` / `PeerProof0Received` - Initial ZK proofs
+**Events:** `MultisigWalletCreated`, `ChannelIdFinalized`, `InitialStateExchanged`, `FundingTxConfirmed`
 
-**Protocol Traits:**
-- `EstablishProtocolCommon<C, D>` - Common establishment operations
-- `EstablishProtocolMerchant<C, D>` - Merchant-specific operations
-- `EstablishProtocolCustomer<C, D>` - Customer-specific operations (reads wallet commitment)
-- `PeerInfo<C>` - Access to peer's DLEQ proof and adapted signature
+### Open
 
-### Open (EstablishedChannelState)
+The active state. Any number of updates may occur, and the channel can remain here indefinitely. At each update, both parties agree a new
+balance, jointly build a new partially-signed closing transaction, and each hands the other a fresh offset sealed as a verifiably encrypted
+offset with a binding proof, then cross-sign an update record. While open, each party also watches the arbiter's log for any dispute opened
+on the channel (a duty it may delegate to a watchtower).
 
-The active channel state where payments can be made. Each payment updates the channel state with new balances and exchanged ZK proofs.
+**Events:** `ChannelUpdate`, `CooperativeClose`, `UnilateralClose`
 
-**Events:**
-- `ChannelUpdate` - Process a payment update
-- `CloseChannel` - Initiate cooperative close
-- `OnForceClose` - Initiate dispute (unilateral close)
+### Closing
 
-**Protocol Traits:**
-- `UpdateProtocolCommon<C>` - VCOF-based witness derivation
-- `UpdateProtocolProposer<C>` - Proposer-side update operations
-- `UpdateProtocolProposee<C>` - Proposee-side update verification
+The cooperative-close state. Each party sends its latest offset to the other; either can then complete and broadcast the single closing
+transaction, though by convention the merchant does so. The arbiter is not involved.
 
-### Closing (ClosingChannelState)
+**Events:** `ChannelCloseSigned`, `FinalTxBroadcast`, `FinalTxConfirmed`
 
-The cooperative close state where both parties agree to close the channel and exchange witnesses to create the final transaction.
+### Disputing
 
-**Events:**
-- `FinalTxConfirmed` - Final transaction confirmed on-chain
+Entered when a party closes unilaterally, or a counterparty goes silent. The disputing party presents its latest cross-signed record to the
+arbiter, which opens an adjudication window. Either party may answer a stale record with a newer one; the arbiter advances its high-water
+mark and, at the window's close, attests the statement for the highest update count it saw. That attestation unseals exactly the offset that
+closes at the true latest state. A stale record is never attested, so a stale close can never complete. The arbiter's own state machine is
+described in `40_arbiter`.
 
-**Protocol Traits:**
-- `CloseProtocolCommon` - Common close operations
-- `CloseProtocolInitiator` - Party that initiated the close
-- `CloseProtocolResponder` - Party that responds to close request
+**Events:** `RecordPresented`, `WindowElapsed`, `DisputeResolved`
 
-### Disputing (DisputingChannelState)
+### Closed
 
-The dispute state when one party forces a close without cooperation. A dispute window allows the other party to submit a more recent state.
+The terminal state, reached after a cooperative close, a resolved dispute, or an error/timeout during proposal or establishment. The arbiter
+keeps no per-channel state outside an open dispute, so there is nothing to clean up.
 
-**Dispute Reasons:**
-- `UnresponsivePeer` - Peer stopped responding
-- `InvalidUpdate` - Peer submitted invalid update
-- `FraudAttempt` - Peer attempted to cheat
-- `Timeout` - Protocol timeout
+**Close reasons:** `Normal`, `Timeout`, `UnilateralClose`, `Disputed`, `Rejected`
 
-**Events:**
-- `OnDisputeResolved` - Dispute resolved (by KES or timeout)
+> Once a channel is closed, neither party should reuse the 2-of-2 multisig wallet: the counterparty holds everything needed to spend from it.
 
-**Protocol Traits:**
-- `ForceCloseProtocolCommon` - Common dispute operations
-- `ForceCloseProtocolClaimant` - Party claiming funds
-- `ForceCloseProtocolDefendant` - Party defending against claim
+## Role-specific behavior
 
-### Closed (ClosedChannelState)
+| State | Merchant | Customer |
+|-------|----------|----------|
+| Proposing | Proposer (shares seed, accepts) | Proposee (builds proposal) |
+| Establishing | Multisig + initial-state exchange | Multisig + initial-state exchange, funds the wallet |
+| Open | Update proposer (by convention) | Update proposee |
+| Closing | Initiator or responder | Initiator or responder |
+| Disputing | Claimant or defendant | Claimant or defendant |
 
-The terminal state. The channel is complete and can no longer be used.
+## Cryptographic primitives
 
-**Close Reasons:**
-- `Normal` - Cooperative close completed
-- `Timeout` - Channel expired
-- `ForceClosed` - Unilateral close completed
-- `Disputed` - Dispute resolved
-- `Rejected` - Proposal was rejected
+- **Funding wallet and closing signatures:** Monero (Ed25519), 2-of-2 FROST multisig, producing the FCMP++ spend-authorization-and-linkability
+  (SAL) proof at close.
+- **Adapter signatures and offsets:** Ed25519 scalars; the per-state offset `ω` is fresh and independent (offsets do not chain).
+- **Verifiably encrypted offset:** identity-based encryption of `ω` against the arbiter's stable BLS12-381 threshold key, addressed to the
+  statement "this is the channel's latest state", carried with a binding proof that ties it to the state's adapter point.
 
-## Role-Specific Behavior
-
-Each state has role-specific protocol trait implementations:
-
-| State | Merchant Role | Customer Role |
-|-------|--------------|---------------|
-| Proposing | `ProposeProtocolProposer` | `ProposeProtocolProposee` |
-| Establishing | `EstablishProtocolMerchant` | `EstablishProtocolCustomer` |
-| Open | `UpdateProtocolProposer` (proposer) | `UpdateProtocolProposee` (proposee) |
-| Closing | Initiator or Responder (depends on who closes) | Initiator or Responder |
-| Disputing | Claimant or Defendant (depends on dispute) | Claimant or Defendant |
-
-## Generic Type Parameters
-
-- `C: FrostCurve` - The FROST-compatible elliptic curve (default: BabyJubJub)
-- `D: SecureDigest` - The cryptographic digest (default: Blake2b512)

@@ -6,34 +6,33 @@ sequenceDiagram
     note right of C: Agree on Δi, the value of the channel update
     C->>C: Update balances\n update_count +=1
     M->>M: Update balances\n update_count +=1
-    
+
     C->>M: Generate Txi
     note right of C: Wallet transaction protocol -> (sc[i], Rc[i])\n(sm[i], Rm[i])
-    M->>C: Ok/Abort    
+    M->>C: Ok/Abort
 
-    C->>C: Calculate ωc[i] = VCOF(wc[i-1])
+    C->>C: Generate fresh ωc[i]
     C->>C: Adapt signature (Rc[i], sc[i]) -> (Rc[i], Qc[i], ŝc[i]),\n sc[i] = ŝc[i] - ωc[i]
-    C->>C: Produce proof Πc[i]: Qc[i] = VCOF(Qc[i-1])
-    
-    C->>M: (Rc[i], Qc[i], ŝc[i]), Πc[i]
-    
-    M->>M: Verify proof Πc[i]
+    C->>C: Encrypt ωc[i] to statement mi -> deposit Xc[i]\nProve Xc[i] seals the dlog of Qc[i]
+
+    C->>M: (Rc[i], Qc[i], ŝc[i]), deposit Xc[i], binding proof, signed record
+
+    M->>M: Verify binding proof for Xc[i]
     M->>M: Verify adapter signature (Rc[i], Qc[i], ŝc[i])
     alt All verifications PASS
-        M->>M: Calculate (Rm[i], Qm[i], ŝm[i]), Πm[i] as above
-        M->>C: (Rm[i], Qm[i], ŝm[i]), Πm[i]
-    else ANY verification fails 
+        M->>M: Calculate (Rm[i], Qm[i], ŝm[i]), deposit Xm[i], binding proof as above
+        M->>C: (Rm[i], Qm[i], ŝm[i]), deposit Xm[i], binding proof, signed record
+    else ANY verification fails
         M-xC: Error: Reject update
     end
-    
-    C->>C: Verify proof Πm[i]
+
+    C->>C: Verify binding proof for Xm[i]
     C->>C: Verify adapter signature (Rm[i], Qm[i], ŝm[i])
     alt All verifications PASS
-        C->>C: Update accepted
-    else ANY verification fails 
+        C->>C: Update accepted, then countersign record
+    else ANY verification fails
         C-xM: Error: Reject update
     end
-    
-    note right of C: If rejected, reset update_count, balances to previous state
 
+    note right of C: If rejected, reset update_count, balances to previous state
 ```

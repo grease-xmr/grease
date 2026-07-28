@@ -12,12 +12,11 @@ use crate::balance::Balances;
 use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::dleq::Dleq;
-use crate::cryptography::CrossCurveScalar;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
-use crate::state_machine::ChannelClosedReason;
+use crate::state_machine::{ChannelClosedReason, Witness};
 use ciphersuite::{Ciphersuite, Ed25519};
 use log::*;
 use modular_frost::curve::Curve as FrostCurve;
@@ -28,10 +27,9 @@ use std::fmt::{Debug, Formatter};
 
 /// Container struct carrying all the information needed to record a payment channel update.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound = "")]
-pub struct UpdateRecord<SF: Ciphersuite = grease_grumpkin::Grumpkin> {
+pub struct UpdateRecord {
     // My half of the spend authority for this transaction.
-    pub my_offset: CrossCurveScalar<SF>,
+    pub my_offset: Witness,
     pub my_adapted_signature: AdaptedSignature<Ed25519>,
     pub peer_adapted_signature: AdaptedSignature<Ed25519>,
     // Data needed to reconstruct the Monero transaction for this update.
@@ -39,7 +37,7 @@ pub struct UpdateRecord<SF: Ciphersuite = grease_grumpkin::Grumpkin> {
     pub peer_preprocess: Vec<u8>,
 }
 
-impl<SF: Ciphersuite> Debug for UpdateRecord<SF> {
+impl Debug for UpdateRecord {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "UpdateRecord(...)")
     }
@@ -47,13 +45,13 @@ impl<SF: Ciphersuite> Debug for UpdateRecord<SF> {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct EstablishedChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphersuite = Ed25519> {
+pub struct EstablishedChannelState<KC: Ciphersuite = Ed25519> {
     pub(crate) metadata: StaticChannelMetadata<KC>,
     pub(crate) dynamic: DynamicChannelMetadata,
     /// Information needed to reconstruct the multisig wallet.
     pub(crate) multisig_wallet: MultisigWallet,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) current_update: Option<UpdateRecord<SF>>,
+    pub(crate) current_update: Option<UpdateRecord>,
     /// The per-channel KES public key ($P_g$) derived during establishment.
     ///
     /// Needed for force-close and dispute communication with the KES.
@@ -66,7 +64,7 @@ pub struct EstablishedChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, 
     pub(crate) kes_channel_pubkey: Option<KC::G>,
 }
 
-impl<SF: Ciphersuite, KC: Ciphersuite> Debug for EstablishedChannelState<SF, KC> {
+impl<KC: Ciphersuite> Debug for EstablishedChannelState<KC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -78,11 +76,8 @@ impl<SF: Ciphersuite, KC: Ciphersuite> Debug for EstablishedChannelState<SF, KC>
     }
 }
 
-impl<SF: FrostCurve, KC: Ciphersuite> EstablishedChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
-    pub fn to_channel_state(self) -> ChannelState<SF, KC>
+impl<KC: Ciphersuite> EstablishedChannelState<KC> {
+    pub fn to_channel_state(self) -> ChannelState<KC>
     where
         KC: FrostCurve,
         Ed25519: Dleq<KC>,
@@ -98,7 +93,7 @@ where
     ///
     /// # Panics
     /// Panics if no updates have been made yet. Use `has_updates()` to check first.
-    pub fn current_witness(&self) -> &CrossCurveScalar<SF> {
+    pub fn current_witness(&self) -> &Witness {
         &self.current_update.as_ref().expect("No updates have been made yet").my_offset
     }
 
@@ -138,7 +133,7 @@ where
     /// Return the record to send to the peer to co-operatively close the channel.
     /// Note that this record contains the secret that will allow the peer to publish closing transaction to the
     /// blockchain.
-    pub fn get_close_record(&self) -> ChannelCloseRecord<SF> {
+    pub fn get_close_record(&self) -> ChannelCloseRecord {
         ChannelCloseRecord {
             final_balance: self.dynamic.current_balances,
             update_count: self.dynamic.update_count,
@@ -146,7 +141,7 @@ where
         }
     }
 
-    pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord<SF>) -> u64 {
+    pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord) -> u64 {
         self.dynamic.apply_delta(delta);
         self.current_update = Some(update);
         self.update_count()
@@ -155,8 +150,8 @@ where
     #[allow(clippy::result_large_err)]
     pub fn close(
         self,
-        close_record: ChannelCloseRecord<SF>,
-    ) -> Result<ClosingChannelState<SF, KC>, (Self, LifeCycleError)> {
+        close_record: ChannelCloseRecord,
+    ) -> Result<ClosingChannelState<KC>, (Self, LifeCycleError)> {
         let final_balance = self.dynamic.current_balances;
         if final_balance != close_record.final_balance {
             return Err((self, LifeCycleError::mismatch("closing balances")));
@@ -197,10 +192,7 @@ where
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use crate::wallet::multisig_wallet::MultisigWallet;
 
-impl<SF: FrostCurve, KC: Ciphersuite> LifeCycle<KC> for EstablishedChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite> LifeCycle<KC> for EstablishedChannelState<KC> {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Open
     }
@@ -220,10 +212,7 @@ where
 
 // --- Protocol Trait Implementations ---
 
-impl<SF: FrostCurve, KC: Ciphersuite> HasRole for EstablishedChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite> HasRole for EstablishedChannelState<KC> {
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }

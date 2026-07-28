@@ -7,30 +7,52 @@ use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::dleq::DleqError;
 use crate::cryptography::vcof::VerifiableConsecutiveOnewayFunction;
 use crate::grease_protocol::adapter_signature::{AdapterSignatureError, AdapterSignatureHandler};
+use crate::grease_protocol::multisig_wallet::MultisigTransaction;
 use crate::payment_channel::HasRole;
 use async_trait::async_trait;
 use ciphersuite::Ed25519;
-use modular_frost::curve::Curve as FrostCurve;
+use modular_frost::curve::Curve;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 use thiserror::Error;
 
 /// Package containing all data needed for a channel update.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdatePackage {
+pub struct UpdatePackage<V, SF>
+where
+    V: VerifiableConsecutiveOnewayFunction,
+    SF: Curve,
+{
     /// The update count this package is for
     pub update_count: u64,
     /// The adapted signature for the closing transaction at this state
     pub adapted_signature: AdaptedSignature<Ed25519>,
     /// Serialized VCOF proof demonstrating valid witness derivation
-    pub vcof_proof: Vec<u8>,
+    pub vcof_proof: V::Proof,
     /// Preprocessing data for the Monero transaction
     pub preprocess: Vec<u8>,
+    /// Marker for the SNARK-friendly curve type
+    #[serde(skip)]
+    _curve: PhantomData<SF>,
+}
+
+impl<V, SF> UpdatePackage<V, SF>
+where
+    V: VerifiableConsecutiveOnewayFunction,
+    SF: Curve,
+{
+    /// Assemble an update package from its constituent parts.
+    pub fn new(update_count: u64, adapted_signature: AdaptedSignature<Ed25519>, vcof_proof: V::Proof, preprocess: Vec<u8>) -> Self {
+        Self { update_count, adapted_signature, vcof_proof, preprocess, _curve: PhantomData }
+    }
 }
 
 /// Common functionality shared by both update proposer and proposee.
 #[async_trait]
-pub trait UpdateProtocolCommon<SF: FrostCurve>: HasRole + AdapterSignatureHandler + Send + Sync {
+pub trait UpdateProtocolCommon<SF: Curve>:
+    HasRole + AdapterSignatureHandler + MultisigTransaction + Send + Sync
+{
     type VCOF: VerifiableConsecutiveOnewayFunction;
 
     /// Returns a reference to the VCOF instance.
@@ -47,7 +69,7 @@ pub trait UpdateProtocolCommon<SF: FrostCurve>: HasRole + AdapterSignatureHandle
     /// Create a VCOF proof for the current witness derivation.
     ///
     /// This operation involves ZK proof generation and is therefore async.
-    async fn create_vcof_proof(&self) -> Result<Vec<u8>, UpdateProtocolError>;
+    async fn create_vcof_proof(&self) -> Result<<Self::VCOF as VerifiableConsecutiveOnewayFunction>::Proof, UpdateProtocolError>;
 
     /// Verify a VCOF proof from the peer.
     ///
@@ -59,7 +81,8 @@ pub trait UpdateProtocolCommon<SF: FrostCurve>: HasRole + AdapterSignatureHandle
     /// * `peer_q_curr` - The peer's current public commitment (Q_i)
     async fn verify_vcof_proof(
         &self,
-        proof: &[u8],
+        proof: &<Self::VCOF as VerifiableConsecutiveOnewayFunction>::Proof,
+        update_count: u64,
         peer_q_prev: &SF::G,
         peer_q_curr: &SF::G,
     ) -> Result<(), UpdateProtocolError>;
@@ -77,7 +100,7 @@ pub trait UpdateProtocolCommon<SF: FrostCurve>: HasRole + AdapterSignatureHandle
 /// The proposer initiates a channel update by specifying a balance delta,
 /// generating necessary cryptographic material, and finalizing after receiving
 /// the peer's response.
-pub trait UpdateProtocolProposer<SF: FrostCurve>: UpdateProtocolCommon<SF> {
+pub trait UpdateProtocolProposer<SF: Curve>: UpdateProtocolCommon<SF> {
     /// Initiate a channel update with the given balance delta.
     ///
     /// A positive delta transfers funds from customer to merchant,
@@ -94,10 +117,10 @@ pub trait UpdateProtocolProposer<SF: FrostCurve>: UpdateProtocolCommon<SF> {
     fn create_update_package<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-    ) -> Result<UpdatePackage, UpdateProtocolError>;
+    ) -> Result<UpdatePackage<Self::VCOF, SF>, UpdateProtocolError>;
 
     /// Process the response package from the peer.
-    fn process_response(&mut self, response: &UpdatePackage) -> Result<(), UpdateProtocolError>;
+    fn process_response(&mut self, response: &UpdatePackage<Self::VCOF, SF>) -> Result<(), UpdateProtocolError>;
 
     /// Finalize the update after successful exchange.
     ///
@@ -112,7 +135,7 @@ pub trait UpdateProtocolProposer<SF: FrostCurve>: UpdateProtocolCommon<SF> {
 ///
 /// The proposee receives update requests, validates them, and responds
 /// with their own cryptographic material.
-pub trait UpdateProtocolProposee<SF: FrostCurve>: UpdateProtocolCommon<SF> {
+pub trait UpdateProtocolProposee<SF: Curve>: UpdateProtocolCommon<SF> {
     /// Receive and validate an update request from the proposer.
     fn receive_update_request(&mut self, delta: i64) -> Result<(), UpdateProtocolError>;
 
@@ -122,10 +145,10 @@ pub trait UpdateProtocolProposee<SF: FrostCurve>: UpdateProtocolCommon<SF> {
     fn process_tx_preprocessing(&mut self, preprocess: &[u8]) -> Result<Vec<u8>, UpdateProtocolError>;
 
     /// Process the update package from the proposer.
-    fn process_update_package(&mut self, package: &UpdatePackage) -> Result<(), UpdateProtocolError>;
+    fn process_update_package(&mut self, package: &UpdatePackage<Self::VCOF, SF>) -> Result<(), UpdateProtocolError>;
 
     /// Create the response package to send to the proposer.
-    fn create_response<R: RngCore + CryptoRng>(&mut self, rng: &mut R) -> Result<UpdatePackage, UpdateProtocolError>;
+    fn create_response<R: RngCore + CryptoRng>(&mut self, rng: &mut R) -> Result<UpdatePackage<Self::VCOF, SF>, UpdateProtocolError>;
 
     /// Finalize the update after successful exchange.
     ///

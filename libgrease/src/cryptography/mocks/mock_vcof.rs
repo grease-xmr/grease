@@ -99,6 +99,13 @@ pub struct MockVcofProof {
     index: u64,
 }
 
+impl MockVcofProof {
+    /// Construct a proof directly from a VCOF seed and update index.
+    pub fn new(vcof: MockVCOF, index: u64) -> Self {
+        Self { vcof, index }
+    }
+}
+
 impl Writable for MockVcofProof {
     fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         write_group_element::<Ed25519, _>(writer, &self.vcof.seed_pub)?;

@@ -28,7 +28,7 @@ use libgrease::monero::data_objects::{
     TransactionId, TransactionRecord,
 };
 use libgrease::monero::watcher::MonitorTransactions;
-use libgrease::payment_channel::{ChannelRole, UpdateError};
+use libgrease::role::ChannelRole;
 use libgrease::state_machine::error::LifeCycleError;
 use libgrease::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use libgrease::state_machine::{
@@ -42,12 +42,25 @@ use libgrease::wallet::transaction_monitor::TransactionMonitor;
 use libp2p::{Multiaddr, PeerId};
 use log::*;
 use monero::Network;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinHandle;
 use wallet::{connect_to_rpc, publish_transaction, MultisigWallet, RpcError};
+
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+pub enum UpdateError {
+    #[error("The new balance does not match the expected value on the peer side")]
+    InvalidBalance,
+    #[error("The amount being spent would cause one party to have a negative balance")]
+    InsufficientFunds,
+    #[error("A network error occurred: {0}")]
+    NetworkError(String),
+    #[error("An error occurred while preparing the update transaction: {0}")]
+    WalletError(String),
+}
 
 #[derive(Error, Debug)]
 pub enum GreaseClientError {

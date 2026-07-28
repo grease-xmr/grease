@@ -5,17 +5,17 @@
 
 Establishing a channel to accept payments requires the following preparatory steps:
 1. Both parties collaboratively create a new shared multisig wallet to hold the channel funds.
-2. The parties derive the channel id, which commits to the funding output, and agree on the arbiter to be used for disputes
-  (@arbiterDesign).
+2. Each party calculates a unique, shared secret for the channel, $kappa$ (see @channelKeys).
 3. Each party watches the Monero blockchain for the funding transaction to confirm it has been included in a block.
-4. The parties prepare the initial channel state: each adapter-signs the counterparty's closing transaction with a fresh secret offset, and
-  hands the counterparty a _verifiably encrypted offset_ — that offset encrypted to the statement that this is the channel's latest state.
-5. Each party verifies the binding proof accompanying the counterparty's verifiably encrypted offset before accepting the initial state.
-6. The customer funds the multisig wallet with the agreed initial balance.
-7. Once the funding transaction is confirmed, the channel is open and ready to use.
+4. Each party encrypts their initial adapter signature offset to the KES.
+5. The merchant creates a new KES commitment on the ZK-chain smart contract and commits the encrypted shares to it.
+6. The merchant provides a proof of the KES commitment to the customer who can verify that the KES was set up correctly.
+7. Each party creates the initial proof for their initial secret (witness) and shares it with the counterparty.
+8. The customer funds the multisig wallet with the agreed initial balance.
+9. Once the funding transaction is confirmed, the channel is open and ready to use.
 
-#note[No SNARKs are required to establish or operate a channel. The arbiter is not contacted during establishment; it holds no state for a
-  channel until a dispute is opened.]
+#note[No SNARKs are required for channel establishment. However, if the KES is deployed on a ZK-enabled chain, the KES proof of knowledge
+  proofs should be calculated in a zero-knowledge manner.]
 
 #figure(include "../diagrams/establish_channel_sequence_a.md", caption: [Establishing a new Channel]) <establish_channel_sequence_a>
 #figure(include "../diagrams/establish_channel_sequence_b.md", caption: [Establishing a new Channel, continued])
@@ -52,14 +52,14 @@ Upon receiving the Customer's data, the Merchant carries out:
   - This produces a partial signature, $partialSig(merchant, 0)$.
 3. *Adapts the signature* by converting the partial signature into an adapter signature format:
   - Produces an adapted signature tuple $adapterSig(merchant, 0)$
-  - For every state — the initial one and each subsequent update — it generates a fresh random witness value ($omega_0^#merchant$ for the
-    initial state) that serves as the secret offset for that state.
+  - During channel initialization, it generates a random witness value ($w0^#merchant$) that serves as a secret offset
+  - During updates, this witness will be updated using the VCOF mechanism instead of being generated randomly.
 
 The adapter signature is a cryptographic construct that allows the Merchant to create a valid-looking signature that is "locked" by a secret
 witness value. This signature appears complete but cannot be verified as a standard signature without knowledge of the witness.
 
 The Merchant transmits its preprocessing data and the adapted signature back to the Customer, but notably *withholds* the witness value
-$omega_0^#merchant$.
+$w0^#merchant$.
 
 ==== Phase 3: Customer Verification and Signing
 
@@ -68,7 +68,7 @@ The Customer now performs verification and, if successful, creates its own adapt
 - *Verifies the adapter signature* $adapterSig(merchant, 0)$ using the Merchant's public key
 - If verification succeeds:
   - Creates its own partial signature $partialSig(cust, 0)$ on the transaction
-  - Adapts this signature to produce $adapterSig(cust, 0)$ and witness $omega_0^#cust$
+  - Adapts this signature to produce $adapterSig(cust, 0)$ and witness $w0^#cust$
   - Transmits the adapted signature to the Merchant
 - If verification fails:
   - Sends an error message to the Merchant

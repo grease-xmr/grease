@@ -20,6 +20,52 @@ use std::marker::PhantomData;
 use zeroize::Zeroize;
 use zkuh_rs::noir_api::ProgramArtifact;
 
+/// Placeholder VCOF type for channel state machines.
+///
+/// Remove this after integration is complete.
+pub struct VcofSnarkDleq<SF: Curve>(PhantomData<SF>);
+
+impl<SF> Default for VcofSnarkDleq<SF>
+where
+    SF: Curve,
+    Ed25519: Dleq<SF>,
+{
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<SF> VerifiableConsecutiveOnewayFunction for VcofSnarkDleq<SF>
+where
+    SF: Curve,
+    Ed25519: Dleq<SF>,
+{
+    type Witness = CrossCurveScalar<SF>;
+    type PrivateData = SnarkDleqPrivateData<SF>;
+    type PublicData = SnarkDleqPublicData<SF>;
+    type Proof = SnarkDleqProof<SF>;
+    type Context = ();
+
+    fn compute_next(&self, _update_count: u64, _prev: &Self::Witness, _ctx: &Self::Context) -> Result<Self::Witness, ProvingError> {
+        Err(ProvingError::prove_err("VcofSnarkDleq is a placeholder type - use SnarkDleqVcofProver for actual proving"))
+    }
+
+    fn create_proof(
+        &self,
+        _index: u64,
+        _private_input: &Self::PrivateData,
+        _public_input: &Self::PublicData,
+        _ctx: &Self::Context,
+    ) -> Result<Self::Proof, ProvingError> {
+        Err(ProvingError::prove_err("VcofSnarkDleq is a placeholder type - use SnarkDleqVcofProver for actual proving"))
+    }
+
+    fn verify(&self, _update_count: u64, _public_input: &Self::PublicData, _proof: &Self::Proof, _ctx: &Self::Context) -> Result<(), InvalidProof> {
+        // Placeholder verification always succeeds for now
+        Ok(())
+    }
+}
+
 /// A VCOF prover for a ZK-SNARK+DLEQ construction using the Grumpkin curve and Poseidon hash.
 pub type GP2VcofProver<'p> = SnarkDleqVcofProver<'p, Grumpkin, PoseidonGrumpkinWitness, NoirUpdateCircuit>;
 

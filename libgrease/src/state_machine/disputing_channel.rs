@@ -13,7 +13,6 @@ use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::adapter_signature::SchnorrSignature;
 use crate::cryptography::dleq::Dleq;
 use crate::cryptography::keys::Curve25519PublicKey;
-use crate::cryptography::CrossCurveScalar;
 use crate::grease_protocol::force_close_channel::{
     ClaimChannelRequest, ConsensusCloseRequest, DisputeChannelState as DisputeMessage, DisputeResolution,
     ForceCloseProtocolClaimant, ForceCloseProtocolCommon, ForceCloseProtocolDefendant, ForceCloseProtocolError,
@@ -24,6 +23,7 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closed_channel::{ChannelClosedReason, ClosedChannelState};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::open_channel::UpdateRecord;
+use crate::state_machine::{SfCurve, Witness};
 use crate::XmrScalar;
 use ciphersuite::{Ciphersuite, Ed25519};
 use modular_frost::curve::Curve as FrostCurve;
@@ -37,7 +37,7 @@ pub const DEFAULT_DISPUTE_WINDOW: Duration = Duration::from_hours(24);
 /// State for a channel undergoing force close / dispute resolution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct DisputingChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphersuite = Ed25519> {
+pub struct DisputingChannelState<KC: Ciphersuite = Ed25519> {
     pub(crate) metadata: StaticChannelMetadata<KC>,
     pub(crate) dynamic: DynamicChannelMetadata,
     /// The reason this dispute was initiated
@@ -47,7 +47,7 @@ pub struct DisputingChannelState<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC
     /// Funding transaction records
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
     /// Last update record from the open channel state
-    pub(crate) last_update: UpdateRecord<SF>,
+    pub(crate) last_update: UpdateRecord,
     /// Status of the pending close operation
     pub(crate) status: PendingCloseStatus,
     /// Pending close notification (if we are the defendant)
@@ -69,7 +69,7 @@ pub enum DisputeReason {
     Timeout,
 }
 
-impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
+impl<KC: Ciphersuite> DisputingChannelState<KC> {
     /// Create a new disputing state from an established channel.
     pub fn from_open_channel(
         metadata: StaticChannelMetadata<KC>,
@@ -77,7 +77,7 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
         reason: DisputeReason,
         multisig_wallet: MultisigWallet,
         funding_transactions: HashMap<TransactionId, TransactionRecord>,
-        last_update: UpdateRecord<SF>,
+        last_update: UpdateRecord,
     ) -> Self {
         Self {
             metadata,
@@ -133,11 +133,10 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn next(self) -> Result<ClosedChannelState<SF, KC>, (Self, LifeCycleError)>
+    pub fn next(self) -> Result<ClosedChannelState<KC>, (Self, LifeCycleError)>
     where
-        SF: FrostCurve,
         KC: FrostCurve,
-        Ed25519: Dleq<SF> + Dleq<KC>,
+        Ed25519: Dleq<KC>,
     {
         if !self.requirements_met() {
             return Err((self, LifeCycleError::InvalidStateTransition));
@@ -158,19 +157,16 @@ impl<SF: Ciphersuite, KC: Ciphersuite> DisputingChannelState<SF, KC> {
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 use crate::wallet::multisig_wallet::MultisigWallet;
 
-impl<SF: FrostCurve, KC: FrostCurve> DisputingChannelState<SF, KC>
+impl<KC: FrostCurve> DisputingChannelState<KC>
 where
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
-    pub fn to_channel_state(self) -> ChannelState<SF, KC> {
+    pub fn to_channel_state(self) -> ChannelState<KC> {
         ChannelState::Disputing(self)
     }
 }
 
-impl<SF: FrostCurve, KC: Ciphersuite> LifeCycle<KC> for DisputingChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite> LifeCycle<KC> for DisputingChannelState<KC> {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Disputing
     }
@@ -190,19 +186,13 @@ where
 
 // --- Protocol Trait Implementations ---
 
-impl<SF: FrostCurve, KC: Ciphersuite> HasRole for DisputingChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite> HasRole for DisputingChannelState<KC> {
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }
 }
 
-impl<SF: FrostCurve, KC: Ciphersuite, K: Ciphersuite> ForceCloseProtocolCommon<K> for DisputingChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite, K: Ciphersuite> ForceCloseProtocolCommon<K> for DisputingChannelState<KC> {
     fn channel_id(&self) -> ChannelId {
         self.metadata.channel_id().name()
     }
@@ -244,11 +234,7 @@ where
     }
 }
 
-impl<SF: FrostCurve, KC: Ciphersuite, K: Ciphersuite> ForceCloseProtocolClaimant<SF, K>
-    for DisputingChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite, K: Ciphersuite> ForceCloseProtocolClaimant<SfCurve, K> for DisputingChannelState<KC> {
     fn create_force_close_request(&self) -> Result<ForceCloseRequest<K>, ForceCloseProtocolError> {
         let channel_id = self.metadata.channel_id().name();
         let claimant = self.multisig_wallet.my_public_key().clone();
@@ -295,7 +281,7 @@ where
         Ok(ClaimChannelRequest { channel_id, claimant, signature })
     }
 
-    fn process_claimed_offset(&mut self, _encrypted: &[u8]) -> Result<CrossCurveScalar<SF>, ForceCloseProtocolError> {
+    fn process_claimed_offset(&mut self, _encrypted: &[u8]) -> Result<Witness, ForceCloseProtocolError> {
         // Decrypt the offset using our secret key
         // This requires KES decryption with our channel key
         Err(ForceCloseProtocolError::DecryptionFailed(
@@ -319,11 +305,7 @@ where
     }
 }
 
-impl<SF: FrostCurve, KC: Ciphersuite, K: Ciphersuite> ForceCloseProtocolDefendant<SF, K>
-    for DisputingChannelState<SF, KC>
-where
-    Ed25519: Dleq<SF>,
-{
+impl<KC: Ciphersuite, K: Ciphersuite> ForceCloseProtocolDefendant<SfCurve, K> for DisputingChannelState<KC> {
     fn receive_force_close_notification(&mut self, notif: PendingChannelClose) -> Result<(), ForceCloseProtocolError> {
         if self.pending_close.is_some() {
             return Err(ForceCloseProtocolError::ForceCloseAlreadyPending);
@@ -346,7 +328,7 @@ where
         self.dynamic.update_count > claimed_count
     }
 
-    fn create_consensus_close(&self) -> Result<ConsensusCloseRequest<SF, K>, ForceCloseProtocolError> {
+    fn create_consensus_close(&self) -> Result<ConsensusCloseRequest<SfCurve, K>, ForceCloseProtocolError> {
         let pending = self.pending_close.as_ref().ok_or(ForceCloseProtocolError::NoPendingForceClose)?;
 
         let channel_id = self.metadata.channel_id().name();
@@ -411,7 +393,7 @@ where
         })
     }
 
-    fn handle_dispute_resolution(&mut self, resolution: DisputeResolution<SF>) -> Result<(), ForceCloseProtocolError> {
+    fn handle_dispute_resolution(&mut self, resolution: DisputeResolution<SfCurve>) -> Result<(), ForceCloseProtocolError> {
         match resolution {
             DisputeResolution::ClaimantWins { encrypted_offset: _ } => {
                 // We lost the dispute - claimant's state was valid

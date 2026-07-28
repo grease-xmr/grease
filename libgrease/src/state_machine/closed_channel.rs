@@ -4,36 +4,32 @@ use crate::cryptography::dleq::Dleq;
 use crate::state_machine::proposing_channel::RejectProposalReason;
 use crate::state_machine::timeouts::TimeoutReason;
 use ciphersuite::Ed25519;
-use grease_grumpkin::Grumpkin;
 use modular_frost::curve::Curve;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClosedChannelState<SF = Grumpkin, KC = Ed25519>
+pub struct ClosedChannelState<KC = Ed25519>
 where
     KC: Curve,
-    SF: Curve,
-    Ed25519: Dleq<KC> + Dleq<SF>,
+    Ed25519: Dleq<KC>,
 {
     reason: ChannelClosedReason,
     #[serde(bound = "")]
     metadata: StaticChannelMetadata<KC>,
     final_balances: Balances,
-    _sf: std::marker::PhantomData<SF>,
 }
 
-impl<SF, KC> ClosedChannelState<SF, KC>
+impl<KC> ClosedChannelState<KC>
 where
     KC: Curve,
-    SF: Curve,
-    Ed25519: Dleq<KC> + Dleq<SF>,
+    Ed25519: Dleq<KC>,
 {
     /// Create a new closed channel state
     pub fn new(reason: ChannelClosedReason, metadata: StaticChannelMetadata<KC>, final_balances: Balances) -> Self {
-        ClosedChannelState { reason, metadata, final_balances, _sf: std::marker::PhantomData }
+        ClosedChannelState { reason, metadata, final_balances }
     }
 
-    pub fn to_channel_state(self) -> ChannelState<SF, KC> {
+    pub fn to_channel_state(self) -> ChannelState<KC> {
         ChannelState::Closed(self)
     }
 
@@ -53,11 +49,10 @@ where
 
 use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 
-impl<SF, KC> LifeCycle<KC> for ClosedChannelState<SF, KC>
+impl<KC> LifeCycle<KC> for ClosedChannelState<KC>
 where
     KC: Curve,
-    SF: Curve,
-    Ed25519: Dleq<KC> + Dleq<SF>,
+    Ed25519: Dleq<KC>,
 {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Closed

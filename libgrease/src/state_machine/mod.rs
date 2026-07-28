@@ -1,3 +1,12 @@
+/// The scalar-field curve inherited from the retired VCOF cross-curve design.
+///
+/// The state layer is monomorphized over this alias; the VCOF-deletion ticket swaps or
+/// removes it in this one place.
+pub(crate) type SfCurve = grease_grumpkin::Grumpkin;
+
+/// A channel witness scalar on the retired VCOF curve.
+pub(crate) type Witness = crate::cryptography::CrossCurveScalar<SfCurve>;
+
 // Lifecycle state machines
 mod closed_channel;
 mod closing_channel;

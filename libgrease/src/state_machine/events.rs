@@ -9,7 +9,7 @@ use crate::wallet::multisig_wallet::MultisigWallet;
 use ciphersuite::{Ciphersuite, Ed25519};
 use std::fmt::{Display, Formatter};
 
-pub enum LifeCycleEvent<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphersuite = Ed25519> {
+pub enum LifeCycleEvent<KC: Ciphersuite = Ed25519> {
     /// Customer received acceptance from merchant - triggers transition to Establishing
     ProposalAcceptedByMerchant(Box<NewChannelProposal<KC>>),
     /// Merchant accepted customer's proposal - triggers transition to Establishing
@@ -24,13 +24,13 @@ pub enum LifeCycleEvent<SF: Ciphersuite = grease_grumpkin::Grumpkin, KC: Ciphers
     KesCreated(Box<KesPoKProofs<KC>>),
     FundingTxConfirmed(Box<TransactionRecord>),
     FinalTxConfirmed(Box<TransactionId>),
-    ChannelUpdate(Box<(MoneroDelta, UpdateRecord<SF>)>),
-    CloseChannel(Box<ChannelCloseRecord<SF>>),
+    ChannelUpdate(Box<(MoneroDelta, UpdateRecord)>),
+    CloseChannel(Box<ChannelCloseRecord>),
     OnForceClose,
     OnDisputeResolved,
 }
 
-impl<SF: Ciphersuite, KC: Ciphersuite> Display for LifeCycleEvent<SF, KC> {
+impl<KC: Ciphersuite> Display for LifeCycleEvent<KC> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             LifeCycleEvent::ProposalAcceptedByMerchant(_) => write!(f, "ProposalAcceptedByMerchant"),

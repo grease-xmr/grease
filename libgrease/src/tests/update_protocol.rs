@@ -4,8 +4,10 @@
 
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
+use crate::cryptography::mocks::mock_vcof::MockVcofProof;
 use crate::cryptography::mocks::MockVCOF;
 use crate::grease_protocol::adapter_signature::AdapterSignatureHandler;
+use crate::grease_protocol::multisig_wallet::{MoneroPayment, MultisigTransaction, MultisigTxError};
 use crate::grease_protocol::update_channel::{
     UpdatePackage, UpdateProtocolCommon, UpdateProtocolError, UpdateProtocolProposee, UpdateProtocolProposer,
 };
@@ -13,8 +15,47 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use crate::XmrScalar;
 use async_trait::async_trait;
 use ciphersuite::{Ciphersuite, Ed25519};
+use modular_frost::sign::Writable;
+use monero::Address;
 use rand_core::{CryptoRng, OsRng, RngCore};
+use std::future::Future;
 use zeroize::Zeroize;
+
+/// Minimal mock transaction preprocessing payload used to satisfy the `MultisigTransaction` bound.
+struct MockPreprocess(Vec<u8>);
+
+impl Writable for MockPreprocess {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.0)
+    }
+}
+
+/// Minimal mock partial signature used to satisfy the `MultisigTransaction` bound.
+struct MockPartialSignature(Vec<u8>);
+
+impl Writable for MockPartialSignature {
+    fn write<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.0)
+    }
+}
+
+/// Mock payment type. The update-protocol tests never actually build or sign a transaction, so the
+/// accessors are unreachable.
+struct MockPayment;
+
+impl MoneroPayment for MockPayment {
+    fn new<A: Into<Address>, V: Into<crate::amount::MoneroAmount>>(_recipient: A, _amount: V) -> Self {
+        MockPayment
+    }
+
+    fn amount(&self) -> crate::amount::MoneroAmount {
+        unreachable!("mock payment amount is never queried in the update-protocol tests")
+    }
+
+    fn recipient(&self) -> Address {
+        unreachable!("mock payment recipient is never queried in the update-protocol tests")
+    }
+}
 
 /// Test implementation of UpdateProtocolProposer
 struct TestUpdateProposer {
@@ -84,13 +125,14 @@ impl UpdateProtocolCommon<Ed25519> for TestUpdateProposer {
         Ok(())
     }
 
-    async fn create_vcof_proof(&self) -> Result<Vec<u8>, UpdateProtocolError> {
-        Ok(vec![0xDE, 0xAD, 0xBE, 0xEF])
+    async fn create_vcof_proof(&self) -> Result<MockVcofProof, UpdateProtocolError> {
+        Ok(MockVcofProof::new(self.vcof.clone(), self.update_count + 1))
     }
 
     async fn verify_vcof_proof(
         &self,
-        _proof: &[u8],
+        _proof: &MockVcofProof,
+        _update_count: u64,
         _peer_q_prev: &<Ed25519 as Ciphersuite>::G,
         _peer_q_curr: &<Ed25519 as Ciphersuite>::G,
     ) -> Result<(), UpdateProtocolError> {
@@ -103,6 +145,31 @@ impl UpdateProtocolCommon<Ed25519> for TestUpdateProposer {
         _msg: &[u8],
     ) -> Result<(), UpdateProtocolError> {
         Ok(())
+    }
+}
+
+impl MultisigTransaction for TestUpdateProposer {
+    type Context = ();
+    type Preprocess = MockPreprocess;
+    type PartialSignature = MockPartialSignature;
+    type Transaction = monero::Transaction;
+    type PaymentType = MockPayment;
+
+    fn prepare_transaction<R: Send + Sync + RngCore + CryptoRng>(
+        &mut self,
+        _payments: &[Self::PaymentType],
+        _ctx: &Self::Context,
+        _rng: &mut R,
+    ) -> impl Future<Output = Result<(), MultisigTxError>> {
+        async { Ok(()) }
+    }
+
+    fn partial_sign(&mut self, _preparatory_data: &Self::Preprocess, _ctx: &Self::Context) -> Result<(), MultisigTxError> {
+        Ok(())
+    }
+
+    fn sign(&mut self, _peer_sig: Self::PartialSignature, _ctx: &Self::Context) -> Result<Self::Transaction, MultisigTxError> {
+        Err(MultisigTxError::NotPrepared)
     }
 }
 
@@ -141,7 +208,7 @@ impl UpdateProtocolProposer<Ed25519> for TestUpdateProposer {
     fn create_update_package<R: RngCore + CryptoRng>(
         &mut self,
         rng: &mut R,
-    ) -> Result<UpdatePackage, UpdateProtocolError> {
+    ) -> Result<UpdatePackage<MockVCOF, Ed25519>, UpdateProtocolError> {
         if self.pending_delta.is_none() {
             return Err(UpdateProtocolError::NoUpdateInProgress);
         }
@@ -149,15 +216,15 @@ impl UpdateProtocolProposer<Ed25519> for TestUpdateProposer {
         let adapted_sig =
             AdaptedSignature::<Ed25519>::sign(self.secret_key.as_scalar(), &self.current_offset, "test_msg", rng);
 
-        Ok(UpdatePackage {
-            update_count: self.update_count + 1,
-            adapted_signature: adapted_sig,
-            vcof_proof: vec![0xDE, 0xAD, 0xBE, 0xEF],
-            preprocess: vec![0x01, 0x02, 0x03],
-        })
+        Ok(UpdatePackage::new(
+            self.update_count + 1,
+            adapted_sig,
+            MockVcofProof::new(self.vcof.clone(), self.update_count + 1),
+            vec![0x01, 0x02, 0x03],
+        ))
     }
 
-    fn process_response(&mut self, response: &UpdatePackage) -> Result<(), UpdateProtocolError> {
+    fn process_response(&mut self, response: &UpdatePackage<MockVCOF, Ed25519>) -> Result<(), UpdateProtocolError> {
         if response.update_count != self.update_count + 1 {
             return Err(UpdateProtocolError::UpdateCountMismatch {
                 expected: self.update_count + 1,
@@ -254,13 +321,14 @@ impl UpdateProtocolCommon<Ed25519> for TestUpdateProposee {
         Ok(())
     }
 
-    async fn create_vcof_proof(&self) -> Result<Vec<u8>, UpdateProtocolError> {
-        Ok(vec![0xCA, 0xFE, 0xBA, 0xBE])
+    async fn create_vcof_proof(&self) -> Result<MockVcofProof, UpdateProtocolError> {
+        Ok(MockVcofProof::new(self.vcof.clone(), self.update_count + 1))
     }
 
     async fn verify_vcof_proof(
         &self,
-        _proof: &[u8],
+        _proof: &MockVcofProof,
+        _update_count: u64,
         _peer_q_prev: &<Ed25519 as Ciphersuite>::G,
         _peer_q_curr: &<Ed25519 as Ciphersuite>::G,
     ) -> Result<(), UpdateProtocolError> {
@@ -273,6 +341,31 @@ impl UpdateProtocolCommon<Ed25519> for TestUpdateProposee {
         _msg: &[u8],
     ) -> Result<(), UpdateProtocolError> {
         Ok(())
+    }
+}
+
+impl MultisigTransaction for TestUpdateProposee {
+    type Context = ();
+    type Preprocess = MockPreprocess;
+    type PartialSignature = MockPartialSignature;
+    type Transaction = monero::Transaction;
+    type PaymentType = MockPayment;
+
+    fn prepare_transaction<R: Send + Sync + RngCore + CryptoRng>(
+        &mut self,
+        _payments: &[Self::PaymentType],
+        _ctx: &Self::Context,
+        _rng: &mut R,
+    ) -> impl Future<Output = Result<(), MultisigTxError>> {
+        async { Ok(()) }
+    }
+
+    fn partial_sign(&mut self, _preparatory_data: &Self::Preprocess, _ctx: &Self::Context) -> Result<(), MultisigTxError> {
+        Ok(())
+    }
+
+    fn sign(&mut self, _peer_sig: Self::PartialSignature, _ctx: &Self::Context) -> Result<Self::Transaction, MultisigTxError> {
+        Err(MultisigTxError::NotPrepared)
     }
 }
 
@@ -305,7 +398,7 @@ impl UpdateProtocolProposee<Ed25519> for TestUpdateProposee {
         Ok(vec![0x04, 0x05, 0x06])
     }
 
-    fn process_update_package(&mut self, package: &UpdatePackage) -> Result<(), UpdateProtocolError> {
+    fn process_update_package(&mut self, package: &UpdatePackage<MockVCOF, Ed25519>) -> Result<(), UpdateProtocolError> {
         if package.update_count != self.update_count + 1 {
             return Err(UpdateProtocolError::UpdateCountMismatch {
                 expected: self.update_count + 1,
@@ -315,7 +408,10 @@ impl UpdateProtocolProposee<Ed25519> for TestUpdateProposee {
         Ok(())
     }
 
-    fn create_response<R: RngCore + CryptoRng>(&mut self, rng: &mut R) -> Result<UpdatePackage, UpdateProtocolError> {
+    fn create_response<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<UpdatePackage<MockVCOF, Ed25519>, UpdateProtocolError> {
         if self.pending_delta.is_none() {
             return Err(UpdateProtocolError::NoUpdateInProgress);
         }
@@ -323,12 +419,12 @@ impl UpdateProtocolProposee<Ed25519> for TestUpdateProposee {
         let adapted_sig =
             AdaptedSignature::<Ed25519>::sign(self.secret_key.as_scalar(), &self.current_offset, "test_msg", rng);
 
-        Ok(UpdatePackage {
-            update_count: self.update_count + 1,
-            adapted_signature: adapted_sig,
-            vcof_proof: vec![0xCA, 0xFE, 0xBA, 0xBE],
-            preprocess: vec![0x04, 0x05, 0x06],
-        })
+        Ok(UpdatePackage::new(
+            self.update_count + 1,
+            adapted_sig,
+            MockVcofProof::new(self.vcof.clone(), self.update_count + 1),
+            vec![0x04, 0x05, 0x06],
+        ))
     }
 
     fn finalize_update(&mut self) -> Result<u64, UpdateProtocolError> {
@@ -427,17 +523,12 @@ fn test_update_count_mismatch() {
     proposer.initiate_update(100).expect("should initiate");
 
     // Create a package with wrong update count
-    let bad_package = UpdatePackage {
-        update_count: 5, // Wrong!
-        adapted_signature: AdaptedSignature::<Ed25519>::sign(
-            proposer.secret_key.as_scalar(),
-            &proposer.current_offset,
-            "test",
-            &mut rng,
-        ),
-        vcof_proof: vec![],
-        preprocess: vec![],
-    };
+    let bad_package = UpdatePackage::<MockVCOF, Ed25519>::new(
+        5, // Wrong!
+        AdaptedSignature::<Ed25519>::sign(proposer.secret_key.as_scalar(), &proposer.current_offset, "test", &mut rng),
+        MockVcofProof::new(proposer.vcof.clone(), 5),
+        vec![],
+    );
 
     let result = proposer.process_response(&bad_package);
     assert!(matches!(
@@ -537,9 +628,11 @@ async fn test_async_vcof_operations() {
 
     // Test async create_vcof_proof
     let proof = proposer.create_vcof_proof().await.expect("should create proof");
-    assert!(!proof.is_empty());
+    let mut serialized = Vec::new();
+    proof.write(&mut serialized).expect("proof should serialize");
+    assert!(!serialized.is_empty());
 
     // Test async verify_vcof_proof
     let dummy_point = Ed25519::generator();
-    proposer.verify_vcof_proof(&proof, &dummy_point, &dummy_point).await.expect("should verify proof");
+    proposer.verify_vcof_proof(&proof, 1, &dummy_point, &dummy_point).await.expect("should verify proof");
 }

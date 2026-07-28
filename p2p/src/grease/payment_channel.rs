@@ -531,7 +531,7 @@ mod test {
     use libgrease::cryptography::CrossCurveScalar;
     use libgrease::monero::data_objects::{ClosingAddresses, MultisigSplitSecrets, TransactionId, TransactionRecord};
     use libgrease::multisig::MultisigWalletData;
-    use libgrease::payment_channel::ChannelRole;
+    use libgrease::role::ChannelRole;
     use libgrease::state_machine::lifecycle::LifeCycle;
     use libgrease::state_machine::{
         ChannelCloseRecord, ChannelProposer, ChannelSeedBuilder, LifeCycleEvent, NewChannelProposal, UpdateRecord,

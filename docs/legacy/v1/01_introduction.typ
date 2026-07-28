@@ -31,23 +31,20 @@ Monero, since state implies heterogeneity. And heterogeneity immediately breaks 
 undiscovered insight won't allow this in future, but for the short and medium-term at least, any kind of state management for Monero
 transactions or UTXOs would have to be stored off-chain.
 
-The small amount of state a channel needs in order to resolve a dispute — which of two signed records is the more recent — is not private;
-it is a public fact that both parties already share. What it needs is a platform that will evaluate that fact deterministically and act on
-it in a way no single operator can subvert. A public consensus platform provides exactly this.
+It makes the most sense to store this off-chain state on another decentralized, private protocol. Zero-knowledge Rollup blockchains fit the
+bill nicely.
 
-It's the goal of this project to pair Monero (for private money) with such a platform (for trustless dispute resolution) to create a
-proof-of-concept payment channel for Monero.
+It's the goal of this project to marry Monero (for private money) with a ZK-rollup chain (for private state management) to create a
+proof-of-concept Monero payment channel for Monero.
 
 === Enter Grease
 
-The Grease protocol is a new bi-directional payment channel design with unlimited lifetime for Monero. FCMP++ (Full-Chain Membership
-Proofs++) replaces Monero's fixed-size ring signatures with a succinct proof that a spent output belongs to the whole set of outputs on the
-chain; because the anonymity set is chosen only when a transaction is finally broadcast, a channel's pre-signed closing transaction never
-becomes stale — which is what gives a Grease channel its unlimited lifetime.
+The Grease protocol is a new bi-directional payment channel design with unlimited lifetime for Monero. It is fully compatible with the
+current Monero implementation and is also fully compatible with the upcoming FCMP++ update.
 
-Using the Grease protocol, two peers may trustlessly #footnote[No trust is needed between the channel parties. Dispute resolution relies on
-  an arbiter, whose trust assumptions reduce to those of its consensus platform; the arbiter holds no funds and no
-  secret whose leak could cost a channel anything.] cooperate to share, divide and reclaim a common locked amount of Monero XMR while
+Using the Grease protocol, two peers may trustlessly #footnote[No trust is needed between the channel parties. The degree of trust given 
+to the escrow service is dependent on the specific KES used. Different implementations are possible carrying different trade-offs.] 
+cooperate to share, divide and reclaim a common locked amount of Monero XMR while
 minimizing the online transaction costs and with minimal use of outside trusted third parties.
 
 The Grease protocol maintains all of Monero's security. No identifiable information about the peers' privately owned Monero wallets is
@@ -60,35 +57,31 @@ channel design but many details were omitted or elided. Grease is a full-fledged
 management, multiple concurrent channels, peer-to-peer communication and encryption and practical performance.
 
 Every update and the final closure of the channel require an online interaction between channel parties. In order to prevent the accidental
-or intentional violation of the protocol by a peer not interacting and thus jamming the channel closure, Grease introduces an external
-_arbiter_. The arbiter needs to run on a stateful, logic- and time-aware platform whose behavior is determined by consensus rather than by
-any single operator. A decentralized smart-contract platform satisfies this requirement.
+or intentional violation of the protocol by a peer not interacting and thus jamming the channel closure, Grease introduces an external Key
+Escrow Service (KES). The KES needs to run on a stateful, logic- and time-aware platform. A decentralized zero-knowledge smart contract
+platform satisfies this requirement while also providing the privacy-focused ethos familiar to the Monero community.
 
-=== Why does another platform have to be involved?
+=== Why does another chain have to be involved?
 
-Offline payment channels necessarily _require_ a state management mechanism. Typically, the scripting features for a given blockchain allow
-for this state to be managed directly. However, Monero's primary design goals are privacy and fungibility. Attaching state to UTXOs would
-create a heterogeneity that threatens these goals. Fungibility is more important than features when it comes to privacy.
+Offline payment channels necessarily _require_ a state management mechanism. Typically, the scripting features for a given
+blockchain allow for this state to be managed directly. However, Monero's primary design goals are privacy and fungibility. Attaching state
+to UTXOs would create a heterogeneity that threatens these goals. Fungibility is more important than features when it comes to privacy.
 
-The dispute state does not have to be managed on the same chain though. Any place where it is:
+The state does not have to be managed on the same chain though. Any place where the state is:
 
 - available,
 - reliable,
 - has trust assumptions appropriate for the value involved,
 
-will suffice. Note that this state is not secret — it is a public record of which channel update is the most recent — so the platform is
-never asked to keep a secret, only to run its published logic honestly.
+will suffice.
 
-The initial implementation targets the Internet Computer, whose canisters can hold a stable threshold key on behalf of the whole validator
-set and release an attestation on demand under the control of on-chain logic.
+The initial implementation uses any Noir-compatible execution environment that supports the Barretenberg PLONK proving system, the Aztec
+blockchain being one candidate.
 
-The arbiter acts as a third-party judge in disputes, but holds nothing that could be stolen. At every update, each peer encrypts a fresh
-secret offset so that it can only be recovered once the arbiter attests that this state is the channel's latest. This uses _identity-based
-encryption_: a value can be sealed to a short "identity" — here the statement "this is the channel's latest state" — using only a public key,
-and it becomes decryptable only when the arbiter issues the single attestation that matches that identity. The offset is sealed long before
-any dispute; if one arises, the arbiter attests the most recent state either party can prove, and that attestation is exactly the key that
-unseals the offset closing at it. A stale or fabricated state is never attested and can never be closed. @arbiterDesign has full details on
-the arbiter's design and implementation.
+The KES acts as a third-party judge in disputes. At initialization, each peer encrypts a secret (their $omega_0$ offset) for the KES. If a
+dispute arises, the KES identifies the violating peer and releases that peer's secret to the wronged peer. The wronged peer can use the
+secret to generate a valid Monero transaction and recover funds from the channel. Only valid channel states can be unilaterally closed;
+fabricated updates cannot be simulated. @kesDesign has full details on the KES design and implementation.
 
 = Design principles
 
@@ -99,17 +92,17 @@ and we use that terminology throughout this document.
 
 Grease embraces this use case and optimizes the design and UX based on the following assumptions:
 
-- The merchant is, by convention, the party that interacts with the arbiter — lodging any optional setup deposit and covering its fees.
-- The merchant therefore needs to hold a small amount of the arbiter chain's native token to pay those fees.
-- The customer needs a small quantity of the arbiter chain's token to dispute a closure. In the vast majority of cases this
-  won't be necessary, since funds almost always flow in one direction from the customer to the merchant. In practice, the merchant can
-  supply this if the customer has none. The customer must watch the arbiter and present a more recent cross-signed record than the one
-  the merchant tried to close on in the case of a dispute.
+- The merchant is responsible for recording the channel state on the ZK chain.
+- The merchant pays for gas fees on the ZK chain and will need to have some amount of ZK chain tokens to pay for these fees.
+- The customer will need a small quantity of ZK chain tokens if they want to dispute a channel closure. In the vast majority of cases, this
+  won't be necessary, since funds almost always flow in one direction from the customer to the merchant. However, in instances where this is
+  not the case, the customer is able to dispute the channel closure by watching the ZK chain and proving that the channel was closed with
+  outdated state.
 - In the vast majority of cases, the customer opens a channel with _m_ XMR and the merchant starts with a zero XMR balance (since the
   merchant is providing assets or services in exchange for Monero).
-- Usually, both parties mutually close the channel. Either party _may_ close the channel unilaterally through the arbiter, and are able to
-  claim their funds once the adjudication window has elapsed. In this case, the party doing so is usually the merchant since they have the
-  greater incentive to do so in the case of an abandoned channel.
+- Usually, both parties mutually close the channel. Either party _may_ force close the channel, and are able to claim their funds after a
+  predetermined timeout. In this case, the forcing party is usually the merchant since they have the greater incentive to do so in the case
+  of an abandoned channel.
 
 == Anti-principles
 

@@ -6,7 +6,7 @@ use grease_p2p::ConversationIdentity;
 use libgrease::balance::Balances;
 use libgrease::channel_id::ChannelIdMetadata;
 use libgrease::monero::data_objects::ClosingAddresses;
-use libgrease::payment_channel::ChannelRole;
+use libgrease::role::ChannelRole;
 use libgrease::state_machine::ChannelSeedBuilder;
 use monero::Network;
 use std::fmt::Debug;

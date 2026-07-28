@@ -21,13 +21,11 @@ use crate::state_machine::lifecycle::ChannelState;
 use crate::state_machine::open_channel::EstablishedChannelState;
 use crate::state_machine::proposing_channel::{AwaitingConfirmation, AwaitingProposalResponse};
 use ciphersuite::Ed25519;
-use grease_grumpkin::Grumpkin;
 use log::*;
 use modular_frost::curve::Curve as FrostCurve;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use zeroize::Zeroizing;
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
@@ -36,16 +34,14 @@ use zeroize::Zeroizing;
 /// This state provides the cryptographic operations needed during channel establishment
 /// including wallet key exchange, KES client setup, and adapter signature verification.
 ///
-/// The generic parameter `SF` specifies the SNARK-friendly curve (defaults to Grumpkin).
 /// The generic parameter `KC` specifies the Curve that the KES has elected to use. By default, the KES uses Ed25519,
 /// the same curve as Monero.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = "KC::F: ciphersuite::group::ff::PrimeFieldBits"))]
-pub struct EstablishingState<SF = Grumpkin, KC = Ed25519>
+pub struct EstablishingState<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     // Variables specified at start of stage
     pub(crate) metadata: StaticChannelMetadata<KC>,
@@ -105,18 +101,15 @@ where
     pub(crate) peer_nonce_pubkey: Option<KC::G>,
     #[serde(skip)]
     pub(crate) preprepare_data: Vec<u8>,
-    #[serde(skip)]
-    _sf: PhantomData<SF>,
 }
 
-/// Type alias for the default curve types (Grumpkin + Ed25519).
-pub type DefaultEstablishingState = EstablishingState<Grumpkin>;
+/// Type alias for the default KES curve (Ed25519).
+pub type DefaultEstablishingState = EstablishingState;
 
-impl<SF, KC> EstablishingState<SF, KC>
+impl<KC> EstablishingState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     //---------------------------------------  Constructors -------------------------------------------------------//
     /// Constructor for EstablishingState.
@@ -169,7 +162,6 @@ where
             peer_adapted_sig: None,
             payload_sig: None,
             peer_payload_sig: None,
-            _sf: Default::default(),
             preprepare_data: vec![],
         };
         Ok(this)
@@ -492,7 +484,7 @@ where
         }
     }
 
-    pub fn to_channel_state(self) -> ChannelState<SF, KC> {
+    pub fn to_channel_state(self) -> ChannelState<KC> {
         ChannelState::Establishing(self)
     }
 
@@ -507,7 +499,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn next(self) -> Result<EstablishedChannelState<SF, KC>, (Self, LifeCycleError)> {
+    pub fn next(self) -> Result<EstablishedChannelState<KC>, (Self, LifeCycleError)> {
         debug!("Trying to move from Establishing to Established state");
         if !self.requirements_met() {
             debug!("Cannot change from Establishing to Established because all requirements are not met");
@@ -530,11 +522,10 @@ where
 
 // --- HasRole, HasPublicKey, HasSecretKey implementations ---
 
-impl<SF, KC> HasRole for EstablishingState<SF, KC>
+impl<KC> HasRole for EstablishingState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     fn role(&self) -> ChannelRole {
         self.metadata.role()
@@ -543,11 +534,10 @@ where
 
 // --- Peer info accessors ---
 
-impl<SF, KC> EstablishingState<SF, KC>
+impl<KC> EstablishingState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     /// Generate a [`ChannelInitPackage`] containing an encrypted offset, adapted signature,
     /// and DLEQ proof for the initial channel state.
@@ -642,27 +632,25 @@ fn channel_nonce_from_proposal<KC: FrostCurve>(
     ChannelNonce::new(Zeroizing::new(*secret), peer_pubkey, &channel_id)
 }
 
-impl<SF, KC> TryFrom<AwaitingProposalResponse<SF, KC>> for EstablishingState<SF, KC>
+impl<KC> TryFrom<AwaitingProposalResponse<KC>> for EstablishingState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     type Error = EstablishError;
-    fn try_from(state: AwaitingProposalResponse<SF, KC>) -> Result<Self, Self::Error> {
+    fn try_from(state: AwaitingProposalResponse<KC>) -> Result<Self, Self::Error> {
         let channel_nonce = channel_nonce_from_proposal(state.channel_secret, &state.metadata);
         EstablishingState::new_with_secrets(&mut OsRng, state.metadata, channel_nonce, state.partial_spend_key)
     }
 }
 
-impl<SF, KC> TryFrom<AwaitingConfirmation<SF, KC>> for EstablishingState<SF, KC>
+impl<KC> TryFrom<AwaitingConfirmation<KC>> for EstablishingState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     type Error = EstablishError;
-    fn try_from(state: AwaitingConfirmation<SF, KC>) -> Result<Self, Self::Error> {
+    fn try_from(state: AwaitingConfirmation<KC>) -> Result<Self, Self::Error> {
         let channel_nonce = channel_nonce_from_proposal(state.channel_secret, &state.metadata);
         EstablishingState::new_with_secrets(&mut OsRng, state.metadata, channel_nonce, state.partial_spend_key)
     }
@@ -674,24 +662,22 @@ where
 ///
 /// Constructed on-demand when the merchant needs to perform establishment operations,
 /// then unwrapped via [`into_inner`](MerchantEstablishing::into_inner) to return the state.
-pub struct MerchantEstablishing<SF = Grumpkin, KC = Ed25519>
+pub struct MerchantEstablishing<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
-    inner: EstablishingState<SF, KC>,
+    inner: EstablishingState<KC>,
     wallet_setup: MerchantSetup<MultisigWalletKeyNegotiation>,
 }
 
-impl<SF, KC> MerchantEstablishing<SF, KC>
+impl<KC> MerchantEstablishing<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     /// Wrap an `EstablishingState`, returning an error if the state is not for a merchant.
-    pub fn new(state: EstablishingState<SF, KC>, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
+    pub fn new(state: EstablishingState<KC>, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
         let role = HasRole::role(&state);
         if role != ChannelRole::Merchant {
             return Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: role });
@@ -708,7 +694,7 @@ where
     }
 
     /// Unwrap and return the underlying `EstablishingState`.
-    pub fn into_inner(self) -> EstablishingState<SF, KC> {
+    pub fn into_inner(self) -> EstablishingState<KC> {
         self.inner
     }
 
@@ -737,12 +723,12 @@ where
     }
 
     /// Borrow the underlying state.
-    pub fn state(&self) -> &EstablishingState<SF, KC> {
+    pub fn state(&self) -> &EstablishingState<KC> {
         &self.inner
     }
 
     /// Mutably borrow the underlying state.
-    pub fn state_mut(&mut self) -> &mut EstablishingState<SF, KC> {
+    pub fn state_mut(&mut self) -> &mut EstablishingState<KC> {
         &mut self.inner
     }
 
@@ -869,24 +855,22 @@ where
 ///
 /// Constructed on-demand when the customer needs to perform establishment operations,
 /// then unwrapped via [`into_inner`](CustomerEstablishing::into_inner) to return the state.
-pub struct CustomerEstablishing<SF = Grumpkin, KC = Ed25519>
+pub struct CustomerEstablishing<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
-    inner: EstablishingState<SF, KC>,
+    inner: EstablishingState<KC>,
     wallet_setup: CustomerSetup<MultisigWalletKeyNegotiation>,
 }
 
-impl<SF, KC> CustomerEstablishing<SF, KC>
+impl<KC> CustomerEstablishing<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     /// Wrap an `EstablishingState`, returning an error if the state is not for a customer.
-    pub fn new(state: EstablishingState<SF, KC>, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
+    pub fn new(state: EstablishingState<KC>, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
         let role = HasRole::role(&state);
         if role != ChannelRole::Customer {
             return Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: role });
@@ -903,17 +887,17 @@ where
     }
 
     /// Unwrap and return the underlying `EstablishingState`.
-    pub fn into_inner(self) -> EstablishingState<SF, KC> {
+    pub fn into_inner(self) -> EstablishingState<KC> {
         self.inner
     }
 
     /// Borrow the underlying state.
-    pub fn state(&self) -> &EstablishingState<SF, KC> {
+    pub fn state(&self) -> &EstablishingState<KC> {
         &self.inner
     }
 
     /// Mutably borrow the underlying state.
-    pub fn state_mut(&mut self) -> &mut EstablishingState<SF, KC> {
+    pub fn state_mut(&mut self) -> &mut EstablishingState<KC> {
         &mut self.inner
     }
 
@@ -1013,11 +997,10 @@ use crate::state_machine::lifecycle::{LifeCycle, LifecycleStage};
 use crate::state_machine::{CustomerSetup, MerchantSetup, SetupState};
 use crate::wallet::multisig_wallet::MultisigWallet;
 
-impl<SF, KC> LifeCycle<KC> for EstablishingState<SF, KC>
+impl<KC> LifeCycle<KC> for EstablishingState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Establishing

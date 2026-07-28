@@ -1,3 +1,4 @@
+use crate::amount::MoneroAmount;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::cryptography::{Commit, HashCommitment256};
 use crate::error::ReadError;
@@ -10,6 +11,8 @@ use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
 use log::*;
 use modular_frost::sign::Writable;
 use monero::Address;
+use rand_core::{CryptoRng, RngCore};
+use std::future::Future;
 use std::io::{Read, Write};
 use thiserror::Error;
 
@@ -95,6 +98,36 @@ pub trait LinkedMultisigWallets<D: SecureDigest>: HasPublicKey + HasRole {
 
     /// The Monero address associated with this multisignature wallet.
     fn shared_address(&self) -> Result<Address, MultisigWalletError>;
+}
+
+/// A trait that describes a Monero payment to one or more recipients.
+pub trait MoneroPayment {
+    fn new<A: Into<Address>, V: Into<MoneroAmount>>(recipient: A, amount: V) -> Self;
+    fn amount(&self) -> MoneroAmount;
+    fn recipient(&self) -> Address;
+}
+
+/// A trait that describes the behavior for collaboratively creating and signing a multisignature Monero transaction.
+/// using a 2-round communication protocol.
+pub trait MultisigTransaction: HasRole {
+    type Context;
+    type Preprocess: Writable;
+    type PartialSignature: Writable;
+    type Transaction: Sized;
+    type PaymentType: MoneroPayment;
+    fn prepare_transaction<R: Send + Sync + RngCore + CryptoRng>(
+        &mut self,
+        payments: &[Self::PaymentType],
+        ctx: &Self::Context,
+        rng: &mut R,
+    ) -> impl Future<Output = Result<(), MultisigTxError>>;
+    fn partial_sign(&mut self, preparatory_data: &Self::Preprocess, ctx: &Self::Context)
+        -> Result<(), MultisigTxError>;
+    fn sign(
+        &mut self,
+        peer_sig: Self::PartialSignature,
+        ctx: &Self::Context,
+    ) -> Result<Self::Transaction, MultisigTxError>;
 }
 
 #[derive(Debug, Clone, Error)]

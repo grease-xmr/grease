@@ -9,7 +9,6 @@ use crate::state_machine::{
     ClosedChannelState, ClosingChannelState, DisputingChannelState, EstablishedChannelState, EstablishingState,
 };
 use ciphersuite::{Ciphersuite, Ed25519};
-use grease_grumpkin::Grumpkin;
 use modular_frost::curve::Curve as FrostCurve;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
@@ -86,43 +85,37 @@ pub trait LifeCycle<KC: Ciphersuite = Ed25519> {
 #[derive(Clone, Serialize, Deserialize)]
 /// The channel state enum representing all possible lifecycle states.
 ///
-/// The generic parameter `SF` specifies the SNARK-friendly curve used for DLEQ proofs and KES
-/// operations for updating channel state.
-///
 /// `KC` refers to the curve employed by the KES.
 #[serde(bound = "")]
-pub enum ChannelState<SF = Grumpkin, KC = Ed25519>
+pub enum ChannelState<KC = Ed25519>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
-    Establishing(EstablishingState<SF, KC>),
-    Open(EstablishedChannelState<SF, KC>),
-    Closing(ClosingChannelState<SF, KC>),
-    Disputing(DisputingChannelState<SF, KC>),
-    Closed(ClosedChannelState<SF, KC>),
+    Establishing(EstablishingState<KC>),
+    Open(EstablishedChannelState<KC>),
+    Closing(ClosingChannelState<KC>),
+    Disputing(DisputingChannelState<KC>),
+    Closed(ClosedChannelState<KC>),
 }
 
-/// Type alias for the default curve type (Grumpkin + Ed25519).
-pub type DefaultChannelState = ChannelState<Grumpkin, Ed25519>;
+/// Type alias for the default KES curve (Ed25519).
+pub type DefaultChannelState = ChannelState<Ed25519>;
 
-impl<SF, KC> Debug for ChannelState<SF, KC>
+impl<KC> Debug for ChannelState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.stage())
     }
 }
 
-impl<SF, KC> ChannelState<SF, KC>
+impl<KC> ChannelState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     pub fn as_lifecycle(&self) -> &dyn LifeCycle<KC> {
         match self {
@@ -135,28 +128,28 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_establishing(self) -> Result<EstablishingState<SF, KC>, (Self, LifeCycleError)> {
+    pub fn to_establishing(self) -> Result<EstablishingState<KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Establishing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected EstablishingState"))),
         }
     }
 
-    pub fn as_establishing(&self) -> Result<&EstablishingState<SF, KC>, LifeCycleError> {
+    pub fn as_establishing(&self) -> Result<&EstablishingState<KC>, LifeCycleError> {
         match self {
             ChannelState::Establishing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected EstablishingState")),
         }
     }
 
-    pub fn as_open(&self) -> Result<&EstablishedChannelState<SF, KC>, LifeCycleError> {
+    pub fn as_open(&self) -> Result<&EstablishedChannelState<KC>, LifeCycleError> {
         match self {
             ChannelState::Open(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected EstablishedState")),
         }
     }
 
-    pub fn as_closing(&self) -> Result<&ClosingChannelState<SF, KC>, LifeCycleError> {
+    pub fn as_closing(&self) -> Result<&ClosingChannelState<KC>, LifeCycleError> {
         match self {
             ChannelState::Closing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected ClosingState")),
@@ -164,7 +157,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_open(self) -> Result<EstablishedChannelState<SF, KC>, (Self, LifeCycleError)> {
+    pub fn to_open(self) -> Result<EstablishedChannelState<KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Open(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected EstablishedChannelState"))),
@@ -172,14 +165,14 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_closing(self) -> Result<ClosingChannelState<SF, KC>, (Self, LifeCycleError)> {
+    pub fn to_closing(self) -> Result<ClosingChannelState<KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Closing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected ClosingChannelState"))),
         }
     }
 
-    pub fn as_disputing(&self) -> Result<&DisputingChannelState<SF, KC>, LifeCycleError> {
+    pub fn as_disputing(&self) -> Result<&DisputingChannelState<KC>, LifeCycleError> {
         match self {
             ChannelState::Disputing(ref state) => Ok(state),
             _ => Err(LifeCycleError::invalid_state_for("Expected DisputingState")),
@@ -187,7 +180,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_disputing(self) -> Result<DisputingChannelState<SF, KC>, (Self, LifeCycleError)> {
+    pub fn to_disputing(self) -> Result<DisputingChannelState<KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Disputing(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected DisputingChannelState"))),
@@ -195,7 +188,7 @@ where
     }
 
     #[allow(clippy::result_large_err)]
-    pub fn to_closed(self) -> Result<ClosedChannelState<SF, KC>, (Self, LifeCycleError)> {
+    pub fn to_closed(self) -> Result<ClosedChannelState<KC>, (Self, LifeCycleError)> {
         match self {
             ChannelState::Closed(state) => Ok(state),
             _ => Err((self, LifeCycleError::invalid_state_for("Expected ClosedChannelState"))),
@@ -203,11 +196,10 @@ where
     }
 }
 
-impl<SF, KC> LifeCycle<KC> for ChannelState<SF, KC>
+impl<KC> LifeCycle<KC> for ChannelState<KC>
 where
-    SF: FrostCurve,
     KC: FrostCurve,
-    Ed25519: Dleq<SF> + Dleq<KC>,
+    Ed25519: Dleq<KC>,
 {
     fn stage(&self) -> LifecycleStage {
         self.as_lifecycle().stage()
@@ -239,7 +231,6 @@ pub mod test {
     use crate::XmrScalar;
     use ciphersuite::group::ff::Field;
     use ciphersuite::Ed25519;
-    use grease_grumpkin::Grumpkin;
 
     pub fn create_wallet(role: ChannelRole) -> MultisigWallet {
         let mut rng = rand_core::OsRng;
@@ -257,7 +248,7 @@ pub mod test {
         MultisigWallet::try_from(mine).expect("create wallet keyring")
     }
 
-    pub fn payment(state: &mut EstablishedChannelState<Grumpkin>, amount: &str) -> u64 {
+    pub fn payment(state: &mut EstablishedChannelState, amount: &str) -> u64 {
         let delta = MoneroDelta::from(MoneroAmount::from_xmr(amount).unwrap());
         let update_count = state.update_count() + 1;
         let k = XmrScalar::random(&mut rand_core::OsRng);

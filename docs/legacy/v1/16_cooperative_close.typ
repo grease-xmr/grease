@@ -9,8 +9,8 @@ merchant responds with an `ChannelCloseSuccess` message. If any errors occur, th
 the channel remains `Open`. If the merchant did not provide the transaction id in its response, the customer may use the provided offset to
 reconstruct and broadcast the closing transaction herself.
 
-If a party becomes unresponsive during the co-operative close process, one may initiate a unilateral close through the arbiter, as described
-in @arbiterDesign.
+If a party becomes unresponsive during the co-operative close process, one may initiate a force-close via the KES, as described in
+@kesDesign.
 
 
 === Channel Close messages <closeMessages>

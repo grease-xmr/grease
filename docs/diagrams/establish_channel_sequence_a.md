@@ -3,11 +3,9 @@ sequenceDiagram
     participant C as Customer
     participant M as Merchant
     participant L1 as Monero blockchain
-    participant KES as KES
 
-    KES-->KES: Create public/private keypair (k_K, P_K).\nPublish P_K.
     M->>C: Create wallet
-    note right of C: Wallet creation protocol -> Pc, kc, Pm, km, Cm
+    note right of C: Wallet creation protocol -> Pc, kc, Pm, km
     C->>M: Ok/Abort
 
     C->>M: Check multisig wallet address
@@ -21,29 +19,18 @@ sequenceDiagram
     C->>M: Generate Tx0
     note right of C: Wallet transaction protocol -> (sc, Rc)\n(sm, Rm)
     M->>C: Ok/Abort
-    
-    C->>C: Adapt signature (Rc, sc) -> (Rc, Qc, ŝc), ωc
-    C->>C: Encrypt ωc to KES -> Xc.\nNote: Tc = ωc.G on KES curve
-    C->>C: Produce DLEQ proof for Π(Qc <-> Tc) 
-    C->>M: Χc, (Rc, Qc, ŝc), Πc(Tc, Sc).. in SignedChannelInitPackage
-    
-    M->>M: Verify DLEQ proof Πc (i.e. Qc <-> Tc)
+
+    C->>C: Adapt signature (Rc, sc) -> (Rc, Qc, ŝc), fresh ωc
+    C->>C: Encrypt ωc to statement m0 -> deposit Xc\nProve Xc seals the dlog of Qc
+    C->>M: (Rc, Qc, ŝc), deposit Xc, binding proof, signed record
+
+    M->>M: Verify binding proof for Xc
     M->>M: Verify adapter signature (Rc, Qc, ŝc)
     alt All verifications PASS
-        M->>M: Generate Χm, (Rm, Qm, ŝm), Πm(Tm, Sm) as above.
-        activate KES
-        M->>KES: Xc, Xm, κ
-        KES->>KES: Generate channel keys
-        M->>C: (Rm, Qm, ŝm), Πm(Tm, Sm)
+        M->>M: Generate (Rm, Qm, ŝm), deposit Xm, binding proof as above
+        M->>C: (Rm, Qm, ŝm), deposit Xm, binding proof, signed record
     else any verification FAILED
         M-xC: Error: Verification failed
         note left of M: Closed
     end
-    
-    KES->>KES: Decrypt Xc, Xm -> ωc, ωm
-    KES->>KES: Generate PoK for (ωc, ωm) -> (Γc, Γm).
-    KES->>M: Send PoK (Γm, Γc)
-    KES-->>C: Send PoK (Γm, Γc)
-    KES-->>KES: Store (Xc, Xm). Destroy (ωc, ωm)
-    deactivate KES
 ```
