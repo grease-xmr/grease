@@ -16,7 +16,7 @@ pub trait SecretBytes: Zeroize + Sized {
 
 /// Blanket impl for all `PrimeField + Zeroize` types.
 ///
-/// This covers `XmrScalar` (Ed25519), `grumpkin::Scalar`, `BabyJubJub::Scalar`, etc.
+/// This covers `XmrScalar` (Ed25519), `Secp256k1::F`, etc.
 impl<F> SecretBytes for F
 where
     F: PrimeField + Zeroize,

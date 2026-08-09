@@ -1,15 +1,11 @@
-use crate::error::ReadError;
+use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
+pub use crate::io::Readable;
 pub use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};
-use modular_frost::curve::PrimeField;
 use monero::consensus::encode::Error as MoneroError;
 use monero::consensus::{ReadExt, WriteExt};
 use std::io::{self, Read, Write};
-
-pub trait Readable: Sized {
-    fn read<R: Read>(reader: &mut R) -> Result<Self, ReadError>;
-}
 
 pub fn write_group_element<C: Ciphersuite, W: Write>(w: &mut W, element: &C::G) -> io::Result<()> {
     let b = element.to_bytes();

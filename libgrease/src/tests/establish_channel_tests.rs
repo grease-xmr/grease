@@ -1,37 +1,55 @@
-//! Tests for the channel establishment protocol.
+//! Tests for the channel establishment protocol (v2, arbiter design).
+//!
+//! Spec: `docs/src/14_establishing_channel.typ` §`initProtocol`.
 //!
 //! These tests cover:
-//! - Full happy-path establishment (wallet setup, init packages, KES validation,
-//!   channel key derivation, PoK proofs, funding, state transition)
-//! - KES proof-of-knowledge generation and verification against per-channel key
-//! - Wrapper role enforcement (MerchantEstablishing / CustomerEstablishing)
-//! - Failure modes: missing data, tampering, adversarial proofs, replay attacks
-//! - KES bundle fraud detection
-//! - Funding edge cases
-//! - Accessor edge cases
+//! - the full happy path: wallet setup → channel-id finalization against `L_F` → initial-state package
+//!   exchange → funding → transition to `Open`
+//! - channel-id finalization: both parties derive the same `L_F`, the id becomes final, and it cannot be re-bound
+//! - wrapper role enforcement (`MerchantEstablishing` / `CustomerEstablishing`)
+//! - failure modes on the package exchange: tampering, swapped packages, replay, a package for the wrong state
+//! - funding edge cases and `requirements_met` / `next` failures
+//!
+//! The adversarial cases that belong to the binding proof itself live with the binding proof
+//! (`cryptography/binding_proof.rs`); what is tested here is the establishment protocol around it.
 
 use crate::amount::MoneroAmount;
+use crate::channel_id::{ChannelId, ChannelIdFinalizeError};
 use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::dleq::{Dleq, DleqProof};
-use crate::cryptography::pok::{KesPoK, KesPoKProofs};
-use crate::cryptography::CrossCurveScalar;
+use crate::cryptography::binding_proof::BindingProofParams;
 use crate::grease_protocol::establish_channel::{ChannelInitPackage, EstablishError};
-use crate::grease_protocol::kes_establishing::{KesEstablishError, KesEstablishing};
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{CustomerEstablishing, MerchantEstablishing};
-use crate::XmrScalar;
+use crate::{XmrPoint, XmrScalar};
 use ciphersuite::group::ff::Field;
 use ciphersuite::{Ciphersuite, Ed25519};
 use rand_core::OsRng;
-use zeroize::Zeroizing;
 
 use super::propose_channel_tests::propose_channel;
+
+const URL: &str = "No RPC required";
+
+/// A cheap cut-and-choose profile. Soundness is not what these tests exercise, and the production profile
+/// `(104, 53)` would make every one of them an order of magnitude slower.
+pub(crate) fn test_params() -> BindingProofParams {
+    BindingProofParams::new(12, 5).expect("(12, 5) is a valid profile")
+}
 
 // ============================================================================
 // Shared test helpers
 // ============================================================================
+
+/// Run the proposal exchange and wrap both parties, with the cheap binding-proof profile in place.
+pub(crate) fn wrapped_parties() -> (MerchantEstablishing, CustomerEstablishing) {
+    let (merchant, customer) = propose_channel();
+    let mut merchant = MerchantEstablishing::new(merchant, URL).expect("merchant role");
+    let mut customer = CustomerEstablishing::new(customer, URL).expect("customer role");
+    merchant.state_mut().set_binding_proof_params(test_params());
+    customer.state_mut().set_binding_proof_params(test_params());
+    (merchant, customer)
+}
 
 pub(crate) fn establish_wallet(merchant: &mut MerchantEstablishing, customer: &mut CustomerEstablishing) {
     // Merchant commits to their shared public key, customer stores the commitment
@@ -72,20 +90,38 @@ pub(crate) fn inject_signing_shares(merchant: &mut MerchantEstablishing, custome
     }
 }
 
-/// Wallet + signing shares + init package exchange (no KES), returns wrappers + KES private key.
-fn establish_with_init_packages() -> (MerchantEstablishing, CustomerEstablishing, XmrScalar) {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant, customer, kes_key) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer, url).expect("customer role");
+/// Exchange partial linking tags and bind both parties' channel ids to the funding output.
+///
+/// Returns the final id, which both sides must agree on.
+pub(crate) fn finalize_channel_ids(
+    merchant: &mut MerchantEstablishing,
+    customer: &mut CustomerEstablishing,
+) -> ChannelId {
+    let merchant_partial = merchant.partial_linking_tag().expect("merchant partial linking tag");
+    let customer_partial = customer.partial_linking_tag().expect("customer partial linking tag");
+    let merchant_id = merchant.finalize_channel_id(&customer_partial).expect("merchant finalizes the id");
+    let customer_id = customer.finalize_channel_id(&merchant_partial).expect("customer finalizes the id");
+    assert_eq!(merchant_id, customer_id, "both parties must derive the same final channel id");
+    merchant_id
+}
 
+/// Wallet setup, signing shares, funding-tx watcher and channel-id finalization: everything up to, but not
+/// including, the initial-state package exchange.
+pub(crate) fn establish_to_final_id() -> (MerchantEstablishing, CustomerEstablishing) {
+    let (mut merchant, mut customer) = wrapped_parties();
     establish_wallet(&mut merchant, &mut customer);
-
     merchant.state_mut().save_funding_tx_pipe(vec![]);
     customer.state_mut().save_funding_tx_pipe(vec![]);
-
     inject_signing_shares(&mut merchant, &mut customer);
+    finalize_channel_ids(&mut merchant, &mut customer);
+    (merchant, customer)
+}
+
+/// The full establishment protocol short of funding: both initial-state packages generated, exchanged and
+/// verified.
+pub(crate) fn establish_to_init_packages() -> (MerchantEstablishing, CustomerEstablishing) {
+    let mut rng = OsRng;
+    let (mut merchant, mut customer) = establish_to_final_id();
 
     let customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
     merchant.receive_customer_init_package(customer_pkg).expect("merchant receives customer package");
@@ -93,7 +129,7 @@ fn establish_with_init_packages() -> (MerchantEstablishing, CustomerEstablishing
     let merchant_pkg = merchant.generate_init_package(&mut rng).expect("merchant init package");
     customer.receive_merchant_init_package(merchant_pkg).expect("customer receives merchant package");
 
-    (merchant, customer, kes_key)
+    (merchant, customer)
 }
 
 /// Add exact required funding to both parties.
@@ -114,52 +150,15 @@ pub(crate) fn fake_tx(id: &str, amount: MoneroAmount) -> TransactionRecord {
     }
 }
 
-/// Run the full establishment protocol up to (and including) KES bundle validation.
-///
-/// This performs: proposal exchange → wallet key exchange → synthetic signing share
-/// injection → init package generation and verification → KES bundle creation
-/// (including ephemeral channel ID) → validation via [`KesEstablishing::from_bundle`].
-///
-/// Returns the merchant/customer wrappers and the KES instance, ready for
-/// [`finalize`](KesEstablishing::finalize).
-fn establish_to_bundle() -> (MerchantEstablishing, CustomerEstablishing, KesEstablishing<Ed25519>) {
-    let (merchant, customer, kes_key) = establish_with_init_packages();
-    let kes_bundle = merchant.bundle_for_kes(&mut OsRng).expect("bundling for KES should succeed");
-    let kes_secret = Zeroizing::new(kes_key);
-    let kes = KesEstablishing::from_bundle(kes_secret, kes_bundle).expect("KES from bundle");
-    (merchant, customer, kes)
-}
-
 // ============================================================================
 // Happy path
 // ============================================================================
 
 #[test]
-pub fn happy_path() {
-    let mut rng = OsRng;
-    let (mut merchant, mut customer, kes) = establish_to_bundle();
+fn happy_path() {
+    let (mut merchant, mut customer) = establish_to_init_packages();
 
-    // KES generates PoK proofs and creates the OpenChannelRecord
-    // (validateOpen, Section 4.6.3 of the KES spec).
-    // Channel keys were already derived in from_bundle.
-    let (proofs, record) = kes.finalize(&mut rng);
-    assert_eq!(record.channel_id, merchant.state().metadata.channel_id().name());
-
-    // Both parties receive and verify the KES PoK proofs.
-    // Each party computes P_g = kappa * P_K locally — no explicit set_kes_channel_pubkey needed.
-    merchant.receive_kes_proof(proofs.clone()).expect("merchant KES proofs should verify");
-    customer.receive_kes_proof(proofs).expect("customer KES proofs should verify");
-
-    // Fund the channel
-    let required = merchant.state().metadata.initial_balance().total();
-    let tx = TransactionRecord {
-        channel_name: "test".into(),
-        transaction_id: TransactionId::new("fake_tx"),
-        amount: required,
-        serialized: vec![],
-    };
-    merchant.funding_tx_confirmed(tx.clone());
-    customer.funding_tx_confirmed(tx);
+    fund_both(&mut merchant, &mut customer);
 
     assert!(merchant.state().requirements_met(), "Merchant requirements not met");
     assert!(customer.state().requirements_met(), "Customer requirements not met");
@@ -169,13 +168,127 @@ pub fn happy_path() {
     let _customer = customer.into_inner().next().expect("customer to move to established");
 }
 
+/// The arbiter is never contacted during establishment: the whole flow above runs against an arbiter
+/// configuration that is nothing but a master public key.
+#[test]
+fn establishment_needs_only_the_arbiters_public_key() {
+    let (merchant, customer) = establish_to_init_packages();
+    let merchant_z = *merchant.state().metadata.arbiter_configuration().master_public_key();
+    let customer_z = *customer.state().metadata.arbiter_configuration().master_public_key();
+    assert_eq!(merchant_z, customer_z, "both parties seal their offsets to the same arbiter key");
+}
+
+// ============================================================================
+// Channel id finalization (§initProtocol step 2)
+// ============================================================================
+
+/// Before the shared wallet exists there is no `L_F`, so the id is provisional and carries the `XGT` prefix.
+#[test]
+fn the_proposed_id_is_provisional() {
+    let (merchant, _) = propose_channel();
+    let id = merchant.channel_id();
+    assert!(!id.is_finalized());
+    assert!(id.as_str().starts_with(ChannelId::PREFIX_PROVISIONAL));
+}
+
+/// Finalizing replaces the provisional id with a 65-character `XGC…` id that commits to `L_F`.
+#[test]
+fn finalization_binds_the_id_to_the_funding_output() {
+    let (mut merchant, mut customer) = wrapped_parties();
+    establish_wallet(&mut merchant, &mut customer);
+    let provisional = merchant.state().channel_id();
+
+    let final_id = finalize_channel_ids(&mut merchant, &mut customer);
+
+    assert!(final_id.is_finalized());
+    assert!(final_id.as_str().starts_with(ChannelId::PREFIX_FINAL));
+    assert_eq!(final_id.as_str().len(), ChannelId::LENGTH);
+    assert_ne!(final_id, provisional, "binding L_F must change the id");
+    assert_eq!(
+        merchant.state().channel_id_metadata().linking_tag(),
+        customer.state().channel_id_metadata().linking_tag(),
+        "both parties must bind the same L_F"
+    );
+}
+
+/// Neither party can compute `L_F` alone: the partials differ and neither equals the sum.
+#[test]
+fn the_linking_tag_needs_both_partials() {
+    let (mut merchant, mut customer) = wrapped_parties();
+    establish_wallet(&mut merchant, &mut customer);
+
+    let merchant_partial = merchant.partial_linking_tag().expect("merchant partial");
+    let customer_partial = customer.partial_linking_tag().expect("customer partial");
+    assert_ne!(merchant_partial, customer_partial);
+
+    finalize_channel_ids(&mut merchant, &mut customer);
+    let l_f = *merchant.state().channel_id_metadata().linking_tag().expect("L_F is bound");
+    assert_eq!(l_f, merchant_partial + customer_partial);
+    assert_ne!(l_f, merchant_partial);
+    assert_ne!(l_f, customer_partial);
+}
+
+/// A different shared wallet gives a different `L_F`, and therefore a different channel id.
+#[test]
+fn a_different_wallet_gives_a_different_id() {
+    let (mut merchant_a, mut customer_a) = wrapped_parties();
+    establish_wallet(&mut merchant_a, &mut customer_a);
+    let id_a = finalize_channel_ids(&mut merchant_a, &mut customer_a);
+
+    let (mut merchant_b, mut customer_b) = wrapped_parties();
+    establish_wallet(&mut merchant_b, &mut customer_b);
+    let id_b = finalize_channel_ids(&mut merchant_b, &mut customer_b);
+
+    assert_ne!(id_a, id_b);
+}
+
+/// The id is bound to a funding output exactly once.
+#[test]
+fn a_final_id_cannot_be_rebound() {
+    let (mut merchant, mut customer) = wrapped_parties();
+    establish_wallet(&mut merchant, &mut customer);
+    let customer_partial = customer.partial_linking_tag().expect("customer partial");
+    finalize_channel_ids(&mut merchant, &mut customer);
+
+    match merchant.finalize_channel_id(&customer_partial) {
+        Err(EstablishError::ChannelIdFinalize(ChannelIdFinalizeError::AlreadyFinalized)) => {}
+        other => panic!("expected AlreadyFinalized, got: {other:?}"),
+    }
+}
+
+/// The linking tag cannot be derived before the shared wallet exists.
+#[test]
+fn no_linking_tag_without_a_wallet() {
+    let (merchant, _) = wrapped_parties();
+    match merchant.partial_linking_tag() {
+        Err(EstablishError::MissingInformation(msg)) => assert!(msg.contains("wallet"), "msg: {msg}"),
+        other => panic!("expected MissingInformation about the wallet, got: {other:?}"),
+    }
+}
+
+/// Every signature in an init package commits to the channel id, so no package may be built against the
+/// provisional one.
+#[test]
+fn no_init_package_before_the_id_is_final() {
+    let (mut merchant, mut customer) = wrapped_parties();
+    establish_wallet(&mut merchant, &mut customer);
+    inject_signing_shares(&mut merchant, &mut customer);
+
+    match customer.generate_init_package(&mut OsRng) {
+        Err(EstablishError::MissingInformation(msg)) => {
+            assert!(msg.contains("Final channel id"), "msg: {msg}");
+        }
+        other => panic!("expected MissingInformation about the final channel id, got: {other:?}"),
+    }
+}
+
 // ============================================================================
 // Wrapper role enforcement
 // ============================================================================
 
 #[test]
-fn test_merchant_wrapper_rejects_customer() {
-    let (_, customer, _) = propose_channel();
+fn merchant_wrapper_rejects_customer() {
+    let (_, customer) = propose_channel();
     match MerchantEstablishing::new(customer, "") {
         Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: ChannelRole::Customer }) => {}
         Err(e) => panic!("expected WrongRole, got: {e:?}"),
@@ -184,8 +297,8 @@ fn test_merchant_wrapper_rejects_customer() {
 }
 
 #[test]
-fn test_customer_wrapper_rejects_merchant() {
-    let (merchant, _, _) = propose_channel();
+fn customer_wrapper_rejects_merchant() {
+    let (merchant, _) = propose_channel();
     match CustomerEstablishing::new(merchant, "") {
         Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: ChannelRole::Merchant }) => {}
         Err(e) => panic!("expected WrongRole, got: {e:?}"),
@@ -193,82 +306,48 @@ fn test_customer_wrapper_rejects_merchant() {
     }
 }
 
-// ============================================================================
-// KES proof-of-knowledge
-// ============================================================================
-
+/// Merchant rejects a wallet public key with Merchant role (should be Customer).
 #[test]
-fn test_kes_pok_verifies_for_parties() {
-    let (merchant, customer, kes) = establish_to_bundle();
-    let mut rng = OsRng;
+fn merchant_rejects_merchant_role_wallet_key() {
+    let (mut merchant, _customer) = wrapped_parties();
+    let _ = merchant.wallet_public_key_commitment().expect("merchant commitment should succeed");
+    let merchant_key = merchant.wallet_public_key();
 
-    let channel_pubkey = *kes.channel_public_key();
-    let proof = kes.generate_pok(&mut rng);
-
-    // Verify the proof against the offset public points and per-channel KES pubkey
-    let customer_offset = *customer.state().dleq_proof.public_points.foreign_point();
-    let merchant_offset = *merchant.state().dleq_proof.public_points.foreign_point();
-
-    proof
-        .verify_for(&customer_offset, &merchant_offset, &channel_pubkey)
-        .expect("KES proof should verify against per-channel pubkey");
+    match merchant.set_customer_wallet_public_key(merchant_key) {
+        Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: ChannelRole::Merchant }) => {}
+        Err(e) => panic!("expected WrongRole, got: {e:?}"),
+        Ok(_) => panic!("should reject Merchant role key as customer key"),
+    }
 }
 
+/// Customer rejects a wallet public key with Customer role (should be Merchant).
 #[test]
-fn test_kes_pok_rejects_wrong_pubkey() {
-    let (merchant, customer, kes) = establish_to_bundle();
-    let mut rng = OsRng;
+fn customer_rejects_customer_role_wallet_key() {
+    let (_merchant, mut customer) = wrapped_parties();
+    let customer_key = customer.wallet_public_key();
 
-    let proof = kes.generate_pok(&mut rng);
-
-    let customer_offset = *customer.state().dleq_proof.public_points.foreign_point();
-    let merchant_offset = *merchant.state().dleq_proof.public_points.foreign_point();
-
-    // Proofs are bound to the per-channel key, so they must fail against the global KES pubkey
-    let kes_config = merchant.state().metadata.kes_configuration();
-    let global_kes_pubkey = kes_config.kes_public_key;
-    let err = proof.verify_for(&customer_offset, &merchant_offset, &global_kes_pubkey);
-    assert!(err.is_err(), "Should reject proof verified against global KES pubkey");
-
-    // Also fails against a random point
-    let random_pubkey = Ed25519::generator() * crate::XmrScalar::random(&mut rng);
-    let err = proof.verify_for(&customer_offset, &merchant_offset, &random_pubkey);
-    assert!(err.is_err(), "Should reject proof with random pubkey");
+    match customer.set_merchant_wallet_public_key(customer_key) {
+        Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: ChannelRole::Customer }) => {}
+        Err(e) => panic!("expected WrongRole, got: {e:?}"),
+        Ok(_) => panic!("should reject Customer role key as merchant key"),
+    }
 }
 
 // ============================================================================
-// Per-channel KES pubkey derivation
+// requirements_met() / next() failures
 // ============================================================================
 
-/// Both parties independently compute the same P_g as the KES derives internally.
+/// A fresh EstablishingState (right after proposal exchange) has nothing set.
 #[test]
-fn test_kes_channel_pubkey_matches_parties() {
-    let (merchant, customer, kes) = establish_to_bundle();
-
-    let kes_pg = *kes.channel_public_key();
-    let merchant_pg = merchant.state().kes_channel_pubkey().expect("merchant should have P_g");
-    let customer_pg = customer.state().kes_channel_pubkey().expect("customer should have P_g");
-
-    assert_eq!(kes_pg, merchant_pg, "KES and merchant should agree on P_g");
-    assert_eq!(kes_pg, customer_pg, "KES and customer should agree on P_g");
-}
-
-// ============================================================================
-// 1. requirements_met() / next() failures
-// ============================================================================
-
-/// A fresh EstablishingState (right after proposal exchange) has no optional fields set
-/// and requirements_met must return false.
-#[test]
-fn test_fresh_state_requirements_not_met() {
-    let (merchant, _, _) = propose_channel();
+fn fresh_state_requirements_not_met() {
+    let (merchant, _) = propose_channel();
     assert!(!merchant.requirements_met(), "Fresh state should not have requirements met");
 }
 
 /// next() on an incomplete state returns Err with InvalidStateTransition.
 #[test]
-fn test_next_fails_without_requirements() {
-    let (merchant, _, _) = propose_channel();
+fn next_fails_without_requirements() {
+    let (merchant, _) = propose_channel();
     match merchant.next() {
         Err((_, LifeCycleError::InvalidStateTransition)) => {}
         Err((_, e)) => panic!("expected InvalidStateTransition, got: {e:?}"),
@@ -276,17 +355,10 @@ fn test_next_fails_without_requirements() {
     }
 }
 
-/// Full setup + KES proofs but no funding tx — requirements not met, next() fails.
+/// Packages exchanged but no funding transaction: requirements not met, next() fails.
 #[test]
-fn test_next_fails_without_funding() {
-    let mut rng = OsRng;
-    let (mut merchant, mut customer, kes) = establish_to_bundle();
-
-    let (proofs, _) = kes.finalize(&mut rng);
-    merchant.receive_kes_proof(proofs.clone()).expect("merchant KES proofs");
-    customer.receive_kes_proof(proofs).expect("customer KES proofs");
-
-    // No funding tx added
+fn next_fails_without_funding() {
+    let (merchant, _customer) = establish_to_init_packages();
     assert!(!merchant.state().requirements_met(), "Should not be met without funding");
     match merchant.into_inner().next() {
         Err((_, LifeCycleError::InvalidStateTransition)) => {}
@@ -294,37 +366,24 @@ fn test_next_fails_without_funding() {
     }
 }
 
-/// Full setup + funding, but no KES proof — requirements not met.
+/// Funded, but the counterparty's initial-state package was never accepted.
 #[test]
-fn test_next_fails_without_kes_proof() {
-    let (mut merchant, _, _) = establish_with_init_packages();
+fn next_fails_without_the_peer_package() {
+    let (mut merchant, mut customer) = establish_to_final_id();
+    let _ = merchant.generate_init_package(&mut OsRng).expect("merchant init package");
+    fund_both(&mut merchant, &mut customer);
 
-    fund_both(
-        &mut merchant,
-        &mut CustomerEstablishing::new(propose_channel().1, "").expect("customer"),
+    assert!(
+        !merchant.state().requirements_met(),
+        "Should not be met without the counterparty's package"
     );
-    // Actually let's do it properly: we need the same instance
-    let required = merchant.state().metadata.initial_balance().total();
-    let tx = fake_tx("funding_tx", required);
-    merchant.funding_tx_confirmed(tx);
-
-    // No KES proof received
-    assert!(!merchant.state().requirements_met(), "Should not be met without KES proof");
 }
 
 /// Clearing funding_tx_pipe after full setup causes requirements_met to fail.
 #[test]
-fn test_next_fails_without_funding_tx_pipe() {
-    let mut rng = OsRng;
-    let (mut merchant, _, kes) = establish_to_bundle();
-
-    let (proofs, _) = kes.finalize(&mut rng);
-    merchant.receive_kes_proof(proofs).expect("merchant KES proofs");
-
-    let required = merchant.state().metadata.initial_balance().total();
-    merchant.funding_tx_confirmed(fake_tx("tx", required));
-
-    // Clear the funding_tx_pipe
+fn next_fails_without_funding_tx_pipe() {
+    let (mut merchant, mut customer) = establish_to_init_packages();
+    fund_both(&mut merchant, &mut customer);
     merchant.state_mut().funding_tx_pipe = None;
 
     assert!(
@@ -335,14 +394,8 @@ fn test_next_fails_without_funding_tx_pipe() {
 
 /// Funding with half the required amount is insufficient.
 #[test]
-fn test_partial_funding_insufficient() {
-    let mut rng = OsRng;
-    let (mut merchant, mut customer, kes) = establish_to_bundle();
-
-    let (proofs, _) = kes.finalize(&mut rng);
-    merchant.receive_kes_proof(proofs.clone()).expect("merchant KES proofs");
-    customer.receive_kes_proof(proofs).expect("customer KES proofs");
-
+fn partial_funding_insufficient() {
+    let (mut merchant, _customer) = establish_to_init_packages();
     let required = merchant.state().metadata.initial_balance().total();
     let half = MoneroAmount::from_piconero(required.to_piconero() / 2);
     merchant.funding_tx_confirmed(fake_tx("half_tx", half));
@@ -355,14 +408,8 @@ fn test_partial_funding_insufficient() {
 
 /// Overfunding (more than required) still satisfies requirements.
 #[test]
-fn test_overfunding_satisfies_requirements() {
-    let mut rng = OsRng;
-    let (mut merchant, mut customer, kes) = establish_to_bundle();
-
-    let (proofs, _) = kes.finalize(&mut rng);
-    merchant.receive_kes_proof(proofs.clone()).expect("merchant KES proofs");
-    customer.receive_kes_proof(proofs).expect("customer KES proofs");
-
+fn overfunding_satisfies_requirements() {
+    let (mut merchant, mut customer) = establish_to_init_packages();
     let required = merchant.state().metadata.initial_balance().total();
     let overfund = MoneroAmount::from_piconero(required.to_piconero() * 2);
     merchant.funding_tx_confirmed(fake_tx("big_tx", overfund));
@@ -376,409 +423,190 @@ fn test_overfunding_satisfies_requirements() {
 }
 
 // ============================================================================
-// 2. Init package tampering
+// Initial-state package exchange: what the counterparty must reject
 // ============================================================================
 
-/// Swapping the nonce_pubkey to a random point invalidates the payload signature.
+/// The customer's package, built honestly, ready to be tampered with.
+fn customer_package() -> (MerchantEstablishing, CustomerEstablishing, ChannelInitPackage) {
+    let (merchant, mut customer) = establish_to_final_id();
+    let package = customer.generate_init_package(&mut OsRng).expect("customer init package");
+    (merchant, customer, package)
+}
+
+/// A package with no binding proof at all cannot be built — the proof is not optional — so the closest an
+/// attacker gets is a proof for some other offset, which no longer targets the adaptor point `Q`.
 #[test]
-fn test_tampered_nonce_pubkey_in_init_package() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
+fn a_binding_proof_for_a_different_offset_is_rejected() {
+    let (mut merchant, mut customer, mut package) = customer_package();
+    // A second, independent package from the same party: an honest proof, but for a different ω.
+    let other = customer.generate_init_package(&mut OsRng).expect("a second customer package");
+    package.binding_proof = other.binding_proof;
 
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    customer.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-    // Tamper: replace nonce_pubkey with a random point
-    customer_pkg.nonce_pubkey = Ed25519::generator() * XmrScalar::random(&mut rng);
-
-    match merchant.receive_customer_init_package(customer_pkg) {
-        Err(EstablishError::InvalidPayloadSignature(_)) => {}
-        Err(e) => panic!("expected InvalidPayloadSignature, got: {e:?}"),
-        Ok(_) => panic!("expected Err, got Ok"),
+    match merchant.receive_customer_init_package(package) {
+        // The payload signature commits to the binding proof, so the swap is caught there first.
+        Err(EstablishError::InvalidPayloadSignature(_)) | Err(EstablishError::BindingProof(_)) => {}
+        other => panic!("expected the swapped binding proof to be rejected, got: {other:?}"),
     }
 }
 
-/// Forging an adapted signature with a random key fails verification.
+/// The payload signature binds the sealed offset: swapping it for another party's is detected.
 #[test]
-fn test_tampered_adapted_signature_in_init_package() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
+fn a_swapped_encrypted_offset_is_rejected() {
+    let (mut merchant, _customer, mut package) = customer_package();
+    let (_, mut other_customer) = establish_to_final_id();
+    let other = other_customer.generate_init_package(&mut OsRng).expect("another party's package");
+    package.encrypted_offset = other.encrypted_offset;
 
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    customer.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
+    match merchant.receive_customer_init_package(package) {
+        Err(EstablishError::InvalidPayloadSignature(_)) => {}
+        other => panic!("expected InvalidPayloadSignature, got: {other:?}"),
+    }
+}
 
-    let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-    // Tamper: forge adapted signature with random keys
-    let random_secret = XmrScalar::random(&mut rng);
-    let random_payload = XmrScalar::random(&mut rng);
-    customer_pkg.adapted_signature =
-        AdaptedSignature::<Ed25519>::sign(&random_secret, &random_payload, b"fake", &mut rng);
+/// Swapping the nonce_pubkey for a random point invalidates the payload signature.
+#[test]
+fn a_tampered_nonce_pubkey_is_rejected() {
+    let (mut merchant, _customer, mut package) = customer_package();
+    package.nonce_pubkey = Ed25519::generator() * XmrScalar::random(&mut OsRng);
 
-    // Payload sig still verifies (nonce_pubkey unchanged), but adapted sig will fail
-    match merchant.receive_customer_init_package(customer_pkg) {
+    match merchant.receive_customer_init_package(package) {
+        Err(EstablishError::InvalidPayloadSignature(_)) => {}
+        other => panic!("expected InvalidPayloadSignature, got: {other:?}"),
+    }
+}
+
+/// An adaptor signature forged under a key that is not the counterparty's wallet key fails verification.
+#[test]
+fn a_forged_adaptor_signature_is_rejected() {
+    let (mut merchant, _customer, mut package) = customer_package();
+    let random_secret = XmrScalar::random(&mut OsRng);
+    let random_offset = XmrScalar::random(&mut OsRng);
+    package.adapted_signature =
+        AdaptedSignature::<Ed25519>::sign(&random_secret, &random_offset, b"fake", &mut OsRng);
+
+    match merchant.receive_customer_init_package(package) {
         Err(EstablishError::InvalidDataFromPeer(_)) => {}
-        Err(e) => panic!("expected InvalidDataFromPeer, got: {e:?}"),
-        Ok(_) => panic!("expected Err, got Ok"),
+        other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
     }
 }
 
-/// Replacing the DLEQ proof with one from a different scalar causes Q mismatch.
+/// The merchant's own package handed back to it as if it came from the customer: the adaptor signature was made
+/// with the merchant's wallet key over the *customer's* closing transaction, so it cannot verify in that
+/// direction.
 #[test]
-fn test_tampered_dleq_proof_in_init_package() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
+fn a_replayed_merchant_package_is_rejected() {
+    let (mut merchant, _customer) = establish_to_final_id();
+    let merchant_pkg = merchant.generate_init_package(&mut OsRng).expect("merchant init package");
 
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    customer.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-    // Tamper: generate a valid DLEQ for a different scalar
-    let fake_witness = CrossCurveScalar::<Ed25519>::random_with_rng(&mut rng);
-    let (fake_proof, fake_points) =
-        <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng, &fake_witness).expect("fake DLEQ");
-    customer_pkg.dleq_proof = DleqProof::new(fake_proof, fake_points);
-    // The payload signature message includes T0, so tampering the DLEQ also breaks the payload sig
-    match merchant.receive_customer_init_package(customer_pkg) {
-        Err(EstablishError::InvalidPayloadSignature(_)) | Err(EstablishError::InvalidDataFromPeer(_)) => {}
-        Err(e) => panic!("expected InvalidPayloadSignature or InvalidDataFromPeer, got: {e:?}"),
-        Ok(_) => panic!("expected Err, got Ok"),
+    match merchant.receive_customer_init_package(merchant_pkg) {
+        Err(EstablishError::InvalidDataFromPeer(_)) => {}
+        other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
     }
 }
 
-// ============================================================================
-// 3. Invalid cryptographic proofs (adversarial)
-// ============================================================================
-
-/// A valid DLEQ for a different scalar has a Q0 that won't match the adapter signature.
+/// A package from an entirely different channel does not verify: the adaptor-signature message commits to the
+/// channel id, and the signing keys differ.
 #[test]
-fn test_invalid_dleq_proof_wrong_scalar() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
+fn a_package_from_another_channel_is_rejected() {
+    let (mut merchant, _customer) = establish_to_final_id();
+    let (_, mut other_customer) = establish_to_final_id();
+    let foreign = other_customer.generate_init_package(&mut OsRng).expect("another channel's package");
 
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    customer.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    let customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-    // Store the original package fields, then tamper only the DLEQ
-    let mut tampered = customer_pkg.clone();
-    let fake_witness = CrossCurveScalar::<Ed25519>::random_with_rng(&mut rng);
-    let (fake_proof, fake_points) =
-        <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng, &fake_witness).expect("fake DLEQ");
-    tampered.dleq_proof = DleqProof::new(fake_proof, fake_points);
-
-    // T0 changed in dleq_proof → payload signature message changes → payload sig fails
-    match merchant.receive_customer_init_package(tampered) {
-        Err(EstablishError::InvalidPayloadSignature(_))
-        | Err(EstablishError::InvalidDataFromPeer(_))
-        | Err(EstablishError::AdapterSigOffsetError(_)) => {}
-        Err(e) => panic!("expected crypto verification failure, got: {e:?}"),
-        Ok(_) => panic!("expected Err, got Ok"),
+    match merchant.receive_customer_init_package(foreign) {
+        Err(EstablishError::InvalidDataFromPeer(_)) => {}
+        other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
     }
 }
 
-/// KES PoK proofs constructed with a random private key fail verify_kes_proof().
+/// Each party adapter-signs the *counterparty's* closing transaction, so the customer's own package must not
+/// verify when presented to the customer.
 #[test]
-fn test_kes_pok_signed_with_wrong_key() {
-    let mut rng = OsRng;
-    let (mut merchant, mut customer, kes) = establish_to_bundle();
+fn packages_do_not_verify_in_the_sender_s_own_direction() {
+    let (_merchant, mut customer, package) = customer_package();
 
-    // Generate proofs with the real KES (correct offsets + correct channel key)
-    let (real_proofs, _) = kes.finalize(&mut rng);
+    match customer.receive_merchant_init_package(package) {
+        Err(EstablishError::InvalidDataFromPeer(_)) => {}
+        other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
+    }
+}
 
-    // Now forge proofs with the correct offset secrets but a WRONG KES private key
-    let customer_offset_scalar = *customer.state().dleq_proof.public_points.foreign_point();
-    let merchant_offset_scalar = *merchant.state().dleq_proof.public_points.foreign_point();
-    let random_key = XmrScalar::random(&mut rng);
-    let random_shard = XmrScalar::random(&mut rng);
-    let forged_proofs = KesPoKProofs {
-        customer_pok: KesPoK::<Ed25519>::prove(&mut rng, &random_shard, &random_key),
-        merchant_pok: KesPoK::<Ed25519>::prove(&mut rng, &random_shard, &random_key),
+/// A rejected package leaves the state untouched: nothing half-accepted is stored.
+#[test]
+fn a_rejected_package_is_not_stored() {
+    let (mut merchant, _customer, mut package) = customer_package();
+    package.nonce_pubkey = Ed25519::generator() * XmrScalar::random(&mut OsRng);
+    assert!(merchant.receive_customer_init_package(package).is_err());
+    assert!(merchant.state().peer_init_package().is_none());
+    assert!(!merchant.state().requirements_met());
+}
+
+/// An accepted package is stored, and our own package is kept alongside it.
+#[test]
+fn accepted_packages_are_stored() {
+    let (merchant, customer) = establish_to_init_packages();
+    assert!(merchant.state().my_init_package().is_some());
+    assert!(merchant.state().peer_init_package().is_some());
+    assert_eq!(
+        merchant.state().my_init_package(),
+        customer.state().peer_init_package(),
+        "the customer holds exactly the package the merchant sent"
+    );
+    assert_eq!(customer.state().my_init_package(), merchant.state().peer_init_package());
+}
+
+/// Offsets are drawn fresh per party and per package: never derived from anything, never reused.
+#[test]
+fn offsets_are_independent() {
+    let (merchant, customer) = establish_to_init_packages();
+    let merchant_q = merchant.state().my_init_package().expect("merchant package").adapted_signature.adapter_commitment();
+    let customer_q = customer.state().my_init_package().expect("customer package").adapted_signature.adapter_commitment();
+    assert_ne!(merchant_q, customer_q);
+
+    let (mut again, _) = establish_to_final_id();
+    let repeat = again.generate_init_package(&mut OsRng).expect("a fresh package");
+    assert_ne!(repeat.adapted_signature.adapter_commitment(), merchant_q);
+}
+
+/// The binding proof's target is exactly the adaptor point of the signature it accompanies.
+#[test]
+fn the_binding_proof_targets_the_adaptor_point() {
+    let (_merchant, _customer, package) = customer_package();
+    assert_eq!(package.adapted_signature.adapter_commitment(), *package.binding_proof.q());
+}
+
+/// Revealing `ω` completes the closing signature the counterparty holds.
+#[test]
+fn revealing_the_offset_completes_the_closing_signature() {
+    use crate::grease_protocol::adapter_signature::adapter_signature_message;
+    use crate::grease_protocol::establish_channel::INITIAL_UPDATE_COUNT;
+
+    let (merchant, customer) = establish_to_init_packages();
+    let omega = customer.state().initial_offset.as_ref().expect("customer keeps its offset");
+    let customer_wallet_key = {
+        let wallet = customer.state().multisig_wallet.as_ref().expect("wallet");
+        Ed25519::generator() * XmrScalar(*wallet.my_spend_key().to_dalek_scalar())
     };
-
-    // The real proofs should verify
-    merchant.receive_kes_proof(real_proofs.clone()).expect("real proofs should verify for merchant");
-    // But forged proofs should fail for the customer
-    match customer.receive_kes_proof(forged_proofs) {
-        Err(EstablishError::KesProofError(_)) => {}
-        Err(e) => panic!("expected KesProofError, got: {e:?}"),
-        Ok(_) => panic!("expected Err, got Ok — forged proofs should not verify"),
-    }
-
-    // Verify the real proofs also pass for a fresh customer
-    let _ = (customer_offset_scalar, merchant_offset_scalar); // used for reference
-}
-
-/// Swapping customer/merchant proofs in KesPoKProofs fails role-based verification.
-#[test]
-fn test_kes_pok_with_swapped_customer_merchant() {
-    let mut rng = OsRng;
-    let (mut merchant, mut customer, kes) = establish_to_bundle();
-
-    let (proofs, _) = kes.finalize(&mut rng);
-
-    // Swap the customer and merchant proofs
-    let swapped = KesPoKProofs { customer_pok: proofs.merchant_pok.clone(), merchant_pok: proofs.customer_pok.clone() };
-
-    match merchant.receive_kes_proof(swapped.clone()) {
-        Err(EstablishError::KesProofError(_)) => {}
-        Err(e) => panic!("expected KesProofError for merchant, got: {e:?}"),
-        Ok(_) => panic!("swapped proofs should not verify for merchant"),
-    }
-
-    match customer.receive_kes_proof(swapped) {
-        Err(EstablishError::KesProofError(_)) => {}
-        Err(e) => panic!("expected KesProofError for customer, got: {e:?}"),
-        Ok(_) => panic!("swapped proofs should not verify for customer"),
-    }
+    let package = merchant.state().peer_init_package().expect("merchant holds the customer's package");
+    let msg = adapter_signature_message(
+        &merchant.state().channel_id(),
+        INITIAL_UPDATE_COUNT,
+        &merchant.state().initial_close_hash(ChannelRole::Merchant).expect("merchant close hash"),
+    );
+    let completed = package
+        .adapted_signature
+        .adapt(omega, &customer_wallet_key, &msg)
+        .expect("the revealed offset completes the signature");
+    assert!(completed.verify(&customer_wallet_key, &msg));
 }
 
 // ============================================================================
-// 4. Signature and proof replay attacks
-// ============================================================================
-
-/// Taking the merchant's ChannelInitPackage and presenting it back to the merchant
-/// as if it came from the customer. Payload sig verification fails because the nonce
-/// key doesn't match what the merchant expects.
-#[test]
-fn test_replay_merchant_init_as_customer() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    customer.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    // Customer generates their init package legitimately
-    let customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-    merchant.receive_customer_init_package(customer_pkg).expect("merchant receives customer package");
-
-    // Merchant generates their init package
-    let merchant_pkg = merchant.generate_init_package(&mut rng).expect("merchant init package");
-
-    // Attacker replays merchant's init package back to merchant as if from customer
-    // This should fail because the adapter sig is signed with merchant's wallet key,
-    // not the customer's
-    let url2 = "No RPC required";
-    let (merchant_state2, customer_state2, _) = propose_channel();
-    let mut merchant2 = MerchantEstablishing::new(merchant_state2, url2).expect("merchant role");
-    let mut customer2 = CustomerEstablishing::new(customer_state2, url2).expect("customer role");
-    establish_wallet(&mut merchant2, &mut customer2);
-    merchant2.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant2, &mut customer2);
-
-    // Try to feed merchant_pkg to a fresh merchant as customer init
-    match merchant2.receive_customer_init_package(merchant_pkg) {
-        Err(_) => {} // Any error is expected — payload sig or adapter sig mismatch
-        Ok(_) => panic!("replayed merchant init package should not be accepted as customer's"),
-    }
-}
-
-/// Modifying one field (encrypted_offset) of a valid init package invalidates
-/// the payload signature since it's bound to the original encrypted_offset.
-#[test]
-fn test_reuse_init_package_after_modification() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    customer.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    let mut customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-
-    // Swap encrypted_offset with the merchant's (a different encrypted blob)
-    customer_pkg.encrypted_offset = merchant.state().encrypted_offset.clone();
-
-    match merchant.receive_customer_init_package(customer_pkg) {
-        Err(EstablishError::InvalidPayloadSignature(_)) => {}
-        Err(e) => panic!("expected InvalidPayloadSignature after modifying encrypted_offset, got: {e:?}"),
-        Ok(_) => panic!("modified init package should not be accepted"),
-    }
-}
-
-// ============================================================================
-// 5. Merchant fraud: KES bundle tampering (detected by KES/customer)
-// ============================================================================
-
-/// Merchant replaces customer's encrypted offset in the KES bundle with their own.
-/// KES rejects because the customer's payload signature is bound to the original offset.
-#[test]
-fn test_merchant_swaps_customer_offset_in_kes_bundle() {
-    let mut rng = OsRng;
-    let (merchant, _, kes_key) = establish_with_init_packages();
-
-    let mut bundle = merchant.bundle_for_kes(&mut rng).expect("bundle");
-    // Swap customer encrypted offset with merchant's
-    bundle.customer_encrypted_offset = bundle.merchant_encrypted_offset.clone();
-
-    let kes_secret = Zeroizing::new(kes_key);
-    match KesEstablishing::from_bundle(kes_secret, bundle) {
-        Err(KesEstablishError::InvalidPayloadSignature { role: ChannelRole::Customer }) => {}
-        Err(e) => panic!("expected InvalidPayloadSignature for Customer, got: {e:?}"),
-        Ok(_) => panic!("tampered bundle should not be accepted"),
-    }
-}
-
-/// Merchant replaces customer's payload signature with their own in the bundle.
-/// KES rejects because the signature won't verify against the customer's ephemeral pubkey.
-#[test]
-fn test_merchant_swaps_customer_payload_sig_in_bundle() {
-    let mut rng = OsRng;
-    let (merchant, _, kes_key) = establish_with_init_packages();
-
-    let mut bundle = merchant.bundle_for_kes(&mut rng).expect("bundle");
-    // Replace customer payload sig with merchant's
-    bundle.customer_payload_sig = bundle.merchant_payload_sig.clone();
-
-    let kes_secret = Zeroizing::new(kes_key);
-    match KesEstablishing::from_bundle(kes_secret, bundle) {
-        Err(KesEstablishError::InvalidPayloadSignature { role: ChannelRole::Customer }) => {}
-        Err(e) => panic!("expected InvalidPayloadSignature for Customer, got: {e:?}"),
-        Ok(_) => panic!("tampered bundle should not be accepted"),
-    }
-}
-
-/// Even with forged PoK proofs (wrong offset values), the customer detects it
-/// because verify_kes_proof() checks against their own DLEQ public point T0.
-#[test]
-fn test_kes_proof_wrong_offsets_detected_by_customer() {
-    let mut rng = OsRng;
-    let (_, mut customer, kes) = establish_to_bundle();
-
-    // Generate proofs from kes (correct), then forge new ones with wrong offsets
-    let wrong_shard = XmrScalar::random(&mut rng);
-    let kes_channel_key_scalar = XmrScalar::random(&mut rng); // wrong key
-    let forged_proofs = KesPoKProofs {
-        customer_pok: KesPoK::<Ed25519>::prove(&mut rng, &wrong_shard, &kes_channel_key_scalar),
-        merchant_pok: KesPoK::<Ed25519>::prove(&mut rng, &wrong_shard, &kes_channel_key_scalar),
-    };
-    let _ = kes; // drop
-
-    match customer.receive_kes_proof(forged_proofs) {
-        Err(EstablishError::KesProofError(_)) => {}
-        Err(e) => panic!("expected KesProofError, got: {e:?}"),
-        Ok(_) => panic!("forged proofs with wrong offsets should not verify"),
-    }
-}
-
-// ============================================================================
-// 6. KES proof verification missing-state failures
-// ============================================================================
-
-/// verify_kes_proof with no KES proof set returns MissingInformation.
-#[test]
-fn test_verify_kes_proof_missing_proof() {
-    let (merchant, _, _) = establish_with_init_packages();
-    // No kes_proof set
-    match merchant.state().verify_kes_proof() {
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(msg.contains("KES proof"), "error should mention KES proof: {msg}");
-        }
-        other => panic!("expected MissingInformation about KES proof, got: {other:?}"),
-    }
-}
-
-/// verify_kes_proof with no peer DLEQ proof returns MissingInformation.
-#[test]
-fn test_verify_kes_proof_missing_peer_dleq() {
-    let (merchant, _, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant, "").expect("merchant");
-    // Set a dummy KES proof to bypass the first check
-    let mut rng = OsRng;
-    let dummy_shard = XmrScalar::random(&mut rng);
-    let dummy_key = XmrScalar::random(&mut rng);
-    let dummy_proofs = KesPoKProofs {
-        customer_pok: KesPoK::<Ed25519>::prove(&mut rng, &dummy_shard, &dummy_key),
-        merchant_pok: KesPoK::<Ed25519>::prove(&mut rng, &dummy_shard, &dummy_key),
-    };
-    merchant.state_mut().kes_created(dummy_proofs);
-
-    // No peer DLEQ proof set
-    match merchant.state().verify_kes_proof() {
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(msg.contains("DLEQ"), "error should mention DLEQ: {msg}");
-        }
-        other => panic!("expected MissingInformation about DLEQ, got: {other:?}"),
-    }
-}
-
-/// verify_kes_proof with no peer nonce pubkey (can't derive P_g) returns MissingInformation.
-#[test]
-fn test_verify_kes_proof_missing_peer_nonce() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-
-    establish_wallet(&mut merchant, &mut customer);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    // Generate customer's init package but DON'T send it to merchant
-    // Instead, manually set some fields to get past earlier checks
-    let dummy_shard = XmrScalar::random(&mut rng);
-    let dummy_key = XmrScalar::random(&mut rng);
-    let dummy_proofs = KesPoKProofs {
-        customer_pok: KesPoK::<Ed25519>::prove(&mut rng, &dummy_shard, &dummy_key),
-        merchant_pok: KesPoK::<Ed25519>::prove(&mut rng, &dummy_shard, &dummy_key),
-    };
-    merchant.state_mut().kes_created(dummy_proofs);
-
-    // Set a fake peer DLEQ proof
-    let fake_witness = CrossCurveScalar::<Ed25519>::random_with_rng(&mut rng);
-    let (fake_proof, fake_points) =
-        <Ed25519 as Dleq<Ed25519>>::generate_dleq(&mut rng, &fake_witness).expect("fake DLEQ");
-    merchant.state_mut().set_peer_dleq_proof(DleqProof::new(fake_proof, fake_points));
-
-    // peer_nonce_pubkey is still None → can't derive P_g
-    match merchant.state().verify_kes_proof() {
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(
-                msg.contains("peer nonce") || msg.contains("P_g"),
-                "error should mention peer nonce or P_g: {msg}"
-            );
-        }
-        other => panic!("expected MissingInformation about peer nonce, got: {other:?}"),
-    }
-}
-
-// ============================================================================
-// 7. Other missing information errors
+// Other missing-information errors
 // ============================================================================
 
 /// preprepare_data() when empty returns MissingInformation.
 #[test]
-fn test_preprepare_data_before_preparation() {
-    let (merchant, _, _) = propose_channel();
+fn preprepare_data_before_preparation() {
+    let (merchant, _) = propose_channel();
     match merchant.preprepare_data() {
         Err(EstablishError::MissingInformation(msg)) => {
             assert!(msg.contains("Preprepare"), "error should mention preprepare: {msg}");
@@ -787,175 +615,36 @@ fn test_preprepare_data_before_preparation() {
     }
 }
 
-/// verify_initial_offset without peer adapted signature returns MissingInformation.
+/// The adaptor signature adapts the FROST partial signature, so it needs one.
 #[test]
-fn test_verify_initial_offset_no_adapted_sig() {
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
+fn no_init_package_without_a_signing_share() {
+    let (mut merchant, mut customer) = wrapped_parties();
     establish_wallet(&mut merchant, &mut customer);
+    finalize_channel_ids(&mut merchant, &mut customer);
 
-    // No adapted sig set
-    match merchant.state().verify_initial_offset(b"test") {
+    match customer.generate_init_package(&mut OsRng) {
         Err(EstablishError::MissingInformation(msg)) => {
-            assert!(msg.contains("Adapted signature") || msg.contains("adapted"), "msg: {msg}");
+            assert!(msg.contains("signing share"), "msg: {msg}");
         }
-        other => panic!("expected MissingInformation about adapted sig, got: {other:?}"),
-    }
-}
-
-/// verify_initial_offset without multisig wallet returns MissingInformation.
-#[test]
-fn test_verify_initial_offset_no_wallet() {
-    let (merchant, _, _) = propose_channel();
-    // Fresh state has no wallet
-    match merchant.verify_initial_offset(b"test") {
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(
-                msg.contains("wallet") || msg.contains("Wallet") || msg.contains("Adapted"),
-                "msg: {msg}"
-            );
-        }
-        other => panic!("expected MissingInformation, got: {other:?}"),
-    }
-}
-
-/// verify_initial_offset without peer DLEQ proof returns MissingInformation
-/// (after adapted sig check passes).
-#[test]
-fn test_verify_initial_offset_no_dleq_proof() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-    establish_wallet(&mut merchant, &mut customer);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    // Generate a real adapted signature from customer side so it verifies
-    let customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
-    // Set adapted sig and nonce but NOT dleq_proof
-    merchant.state_mut().set_peer_adapted_signature(customer_pkg.adapted_signature);
-    merchant.state_mut().peer_nonce_pubkey = Some(customer_pkg.nonce_pubkey);
-
-    // No peer DLEQ proof set
-    let msg = merchant.state().commitment_message();
-    match merchant.state().verify_initial_offset(&msg) {
-        // Adapted sig will fail because it's verified against peer_pubkey (wallet)
-        // but the adapter_commitment Q won't match since no dleq is set.
-        // Either InvalidDataFromPeer (sig fails) or MissingInformation (dleq missing)
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(msg.contains("DLEQ") || msg.contains("dleq"), "msg: {msg}");
-        }
-        Err(EstablishError::InvalidDataFromPeer(_)) => {
-            // Also acceptable — the adapted sig verification may fail first
-        }
-        other => panic!("expected MissingInformation or InvalidDataFromPeer, got: {other:?}"),
-    }
-}
-
-/// generate_kes_channel_id without peer nonce pubkey returns MissingInformation.
-#[test]
-fn test_generate_kes_channel_id_no_peer_nonce() {
-    let url = "No RPC required";
-    let (merchant_state, _, _) = propose_channel();
-    let merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-
-    let mut rng = OsRng;
-    match merchant.state().generate_kes_channel_id(&mut rng) {
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(msg.contains("nonce") || msg.contains("Peer"), "msg: {msg}");
-        }
-        other => panic!("expected MissingInformation about peer nonce, got: {other:?}"),
-    }
-}
-
-/// bundle_for_kes without customer init package (no peer encrypted offset) returns MissingInformation.
-#[test]
-fn test_bundle_for_kes_missing_peer_offset() {
-    let mut rng = OsRng;
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-
-    establish_wallet(&mut merchant, &mut customer);
-    merchant.state_mut().save_funding_tx_pipe(vec![]);
-    inject_signing_shares(&mut merchant, &mut customer);
-
-    // Merchant generates their own init package but never receives customer's
-    let _merchant_pkg = merchant.generate_init_package(&mut rng).expect("merchant init package");
-
-    match merchant.bundle_for_kes(&mut rng) {
-        Err(EstablishError::MissingInformation(msg)) => {
-            assert!(
-                msg.to_lowercase().contains("customer") || msg.to_lowercase().contains("peer"),
-                "msg: {msg}"
-            );
-        }
-        other => panic!("expected MissingInformation about customer data, got: {other:?}"),
+        other => panic!("expected MissingInformation about the signing share, got: {other:?}"),
     }
 }
 
 // ============================================================================
-// 8. Wallet key role enforcement
-// ============================================================================
-
-/// Merchant rejects a wallet public key with Merchant role (should be Customer).
-#[test]
-fn test_merchant_rejects_merchant_role_wallet_key() {
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let mut merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-
-    let _ = merchant.wallet_public_key_commitment().expect("merchant commitment should succeed");
-    // Get merchant's own key (which has Merchant role)
-    let merchant_key = merchant.wallet_public_key();
-
-    // Try to set it as customer wallet key — wrong role
-    match merchant.set_customer_wallet_public_key(merchant_key) {
-        Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: ChannelRole::Merchant }) => {}
-        Err(e) => panic!("expected WrongRole, got: {e:?}"),
-        Ok(_) => panic!("should reject Merchant role key as customer key"),
-    }
-}
-
-/// Customer rejects a wallet public key with Customer role (should be Merchant).
-#[test]
-fn test_customer_rejects_customer_role_wallet_key() {
-    let url = "No RPC required";
-    let (merchant_state, customer_state, _) = propose_channel();
-    let merchant = MerchantEstablishing::new(merchant_state, url).expect("merchant role");
-    let mut customer = CustomerEstablishing::new(customer_state, url).expect("customer role");
-
-    // Get customer's own key (which has Customer role)
-    let customer_key = customer.wallet_public_key();
-
-    // Try to set it as merchant wallet key — wrong role
-    match customer.set_merchant_wallet_public_key(customer_key) {
-        Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: ChannelRole::Customer }) => {}
-        Err(e) => panic!("expected WrongRole, got: {e:?}"),
-        Ok(_) => panic!("should reject Customer role key as merchant key"),
-    }
-}
-
-// ============================================================================
-// 9. Funding edge cases
+// Funding edge cases
 // ============================================================================
 
 /// No transactions → funding_total is 0.
 #[test]
-fn test_funding_total_empty() {
-    let (merchant, _, _) = propose_channel();
+fn funding_total_empty() {
+    let (merchant, _) = propose_channel();
     assert_eq!(merchant.funding_total(), MoneroAmount::from_piconero(0));
 }
 
 /// Multiple transactions sum correctly.
 #[test]
-fn test_funding_total_accumulates() {
-    let (mut merchant, _, _) = propose_channel();
+fn funding_total_accumulates() {
+    let (mut merchant, _) = propose_channel();
     merchant.funding_tx_confirmed(fake_tx("tx1", MoneroAmount::from_piconero(100)));
     merchant.funding_tx_confirmed(fake_tx("tx2", MoneroAmount::from_piconero(200)));
     merchant.funding_tx_confirmed(fake_tx("tx3", MoneroAmount::from_piconero(300)));
@@ -964,8 +653,8 @@ fn test_funding_total_accumulates() {
 
 /// Same tx_id inserted twice → HashMap last-write-wins.
 #[test]
-fn test_duplicate_tx_id_overwrites() {
-    let (mut merchant, _, _) = propose_channel();
+fn duplicate_tx_id_overwrites() {
+    let (mut merchant, _) = propose_channel();
     merchant.funding_tx_confirmed(fake_tx("same_tx", MoneroAmount::from_piconero(100)));
     merchant.funding_tx_confirmed(fake_tx("same_tx", MoneroAmount::from_piconero(500)));
     // HashMap overwrites: only the last value for "same_tx" is stored
@@ -973,15 +662,240 @@ fn test_duplicate_tx_id_overwrites() {
 }
 
 // ============================================================================
-// 10. Accessor edge cases
+// The package in isolation: tampering, replay, swapped roles
 // ============================================================================
 
-/// kes_channel_pubkey returns None without peer nonce pubkey.
-#[test]
-fn test_kes_channel_pubkey_none_before_peer_nonce() {
-    let (merchant, _, _) = propose_channel();
-    assert!(
-        merchant.kes_channel_pubkey().is_none(),
-        "kes_channel_pubkey should be None without peer nonce"
-    );
+mod package {
+    use super::*;
+    use crate::channel_id::ChannelId;
+    use crate::cryptography::attestation::test_helpers::generate_master_keypair;
+    use crate::cryptography::attestation::{G2Point, Statement};
+    use crate::cryptography::binding_proof::{prove_encrypted_offset, BindingProofError};
+    use crate::cryptography::pvss::SecondBase;
+    use crate::grease_protocol::adapter_signature::adapter_signature_message;
+    use crate::grease_protocol::establish_channel::INITIAL_UPDATE_COUNT;
+    use crate::grease_protocol::update_record::CloseHash;
+    use crate::wallet::multisig_wallet::commitment_tx_message;
+    use std::str::FromStr;
+    use std::time::Duration;
+    use zeroize::Zeroizing;
+
+    const DISPUTE_WINDOW: Duration = Duration::from_secs(86_400);
+
+    fn channel_id() -> ChannelId {
+        ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap()
+    }
+
+    struct Party {
+        secret: XmrScalar,
+        pubkey: XmrPoint,
+        /// The canonical hash of the closing transaction *this* party holds — the one the counterparty
+        /// adapter-signs.
+        close_hash: CloseHash,
+    }
+
+    fn party(close_hash: CloseHash) -> Party {
+        let secret = XmrScalar::random(&mut OsRng);
+        let pubkey = Ed25519::generator() * secret;
+        Party { secret, pubkey, close_hash }
+    }
+
+    struct Channel {
+        id: ChannelId,
+        arbiter_pk: G2Point,
+        customer: Party,
+        merchant: Party,
+    }
+
+    fn channel() -> Channel {
+        let (_, arbiter_pk) = generate_master_keypair(&mut OsRng);
+        let id = channel_id();
+        // Each party holds its own closing transaction at state 0, separated by the holder tag, so the two
+        // close hashes differ and the swapped-role tests below are meaningful.
+        let customer_close = CloseHash::try_from(commitment_tx_message(&id, 0, ChannelRole::Customer, 700, 300)).unwrap();
+        let merchant_close = CloseHash::try_from(commitment_tx_message(&id, 0, ChannelRole::Merchant, 700, 300)).unwrap();
+        assert_ne!(customer_close, merchant_close);
+        Channel { id, arbiter_pk, customer: party(customer_close), merchant: party(merchant_close) }
+    }
+
+    /// Both parties create their packages: each adapter-signs the *counterparty's* closing transaction.
+    fn create_packages(ch: &Channel) -> (ChannelInitPackage, Zeroizing<XmrScalar>, ChannelInitPackage, Zeroizing<XmrScalar>) {
+        let mut rng = OsRng;
+        let (customer_pkg, customer_omega) = ChannelInitPackage::create(
+            &ch.id,
+            &ch.merchant.close_hash,
+            DISPUTE_WINDOW,
+            &ch.customer.secret,
+            &ch.arbiter_pk,
+            test_params(),
+            &mut rng,
+        )
+        .expect("customer package");
+        let (merchant_pkg, merchant_omega) = ChannelInitPackage::create(
+            &ch.id,
+            &ch.customer.close_hash,
+            DISPUTE_WINDOW,
+            &ch.merchant.secret,
+            &ch.arbiter_pk,
+            test_params(),
+            &mut rng,
+        )
+        .expect("merchant package");
+        (customer_pkg, customer_omega, merchant_pkg, merchant_omega)
+    }
+
+    /// The merchant verifies a package that claims to come from the customer.
+    fn verify_as_merchant(ch: &Channel, pkg: &ChannelInitPackage) -> Result<(), EstablishError> {
+        pkg.verify(&ch.id, &ch.merchant.close_hash, DISPUTE_WINDOW, &ch.customer.pubkey, &ch.arbiter_pk)
+    }
+
+    /// The customer verifies a package that claims to come from the merchant.
+    fn verify_as_customer(ch: &Channel, pkg: &ChannelInitPackage) -> Result<(), EstablishError> {
+        pkg.verify(&ch.id, &ch.customer.close_hash, DISPUTE_WINDOW, &ch.merchant.pubkey, &ch.arbiter_pk)
+    }
+
+    #[test]
+    fn round_trip() {
+        let ch = channel();
+        let (customer_pkg, customer_omega, merchant_pkg, _) = create_packages(&ch);
+        verify_as_merchant(&ch, &customer_pkg).expect("customer package should verify");
+        verify_as_customer(&ch, &merchant_pkg).expect("merchant package should verify");
+        // The binding proof's target is exactly the adaptor point of the adapted signature
+        assert_eq!(customer_pkg.adapted_signature.adapter_commitment(), *customer_pkg.binding_proof.q());
+        // Revealing ω completes the closing signature the customer adapter-signed for the merchant
+        let msg = adapter_signature_message(&ch.id, INITIAL_UPDATE_COUNT, &ch.merchant.close_hash);
+        let completed = customer_pkg
+            .adapted_signature
+            .adapt(&customer_omega, &ch.customer.pubkey, &msg)
+            .expect("revealed offset should complete the signature");
+        assert!(completed.verify(&ch.customer.pubkey, &msg));
+    }
+
+    /// A package survives the serialization round trip it makes over the wire.
+    #[test]
+    fn serde_round_trip() {
+        let ch = channel();
+        let (customer_pkg, ..) = create_packages(&ch);
+        let encoded = ron::to_string(&customer_pkg).expect("serialize");
+        let decoded: ChannelInitPackage = ron::from_str(&encoded).expect("deserialize");
+        assert_eq!(decoded, customer_pkg);
+        verify_as_merchant(&ch, &decoded).expect("a round-tripped package still verifies");
+    }
+
+    /// Offsets are fresh per party and per package: never derived, never reused.
+    #[test]
+    fn offsets_are_independent() {
+        let ch = channel();
+        let (customer_pkg, _, merchant_pkg, _) = create_packages(&ch);
+        let (customer_pkg2, ..) = create_packages(&ch);
+        let q_customer = customer_pkg.adapted_signature.adapter_commitment();
+        assert_ne!(q_customer, merchant_pkg.adapted_signature.adapter_commitment());
+        assert_ne!(q_customer, customer_pkg2.adapted_signature.adapter_commitment());
+    }
+
+    /// Swapping the nonce_pubkey for a random point invalidates the payload signature.
+    #[test]
+    fn tampered_nonce_pubkey() {
+        let ch = channel();
+        let (mut customer_pkg, ..) = create_packages(&ch);
+        customer_pkg.nonce_pubkey = Ed25519::generator() * XmrScalar::random(&mut OsRng);
+        match verify_as_merchant(&ch, &customer_pkg) {
+            Err(EstablishError::InvalidPayloadSignature(_)) => {}
+            other => panic!("expected InvalidPayloadSignature, got: {other:?}"),
+        }
+    }
+
+    /// An adapted signature forged with random keys fails the adaptor-sig check.
+    #[test]
+    fn tampered_adapted_signature() {
+        let ch = channel();
+        let (mut customer_pkg, ..) = create_packages(&ch);
+        let random_secret = XmrScalar::random(&mut OsRng);
+        let random_payload = XmrScalar::random(&mut OsRng);
+        customer_pkg.adapted_signature = AdaptedSignature::<Ed25519>::sign(&random_secret, &random_payload, b"fake", &mut OsRng);
+        match verify_as_merchant(&ch, &customer_pkg) {
+            Err(EstablishError::InvalidDataFromPeer(_)) => {}
+            other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
+        }
+    }
+
+    /// An honest binding proof for a *different* offset no longer targets the adaptor point Q.
+    #[test]
+    fn tampered_binding_proof() {
+        let ch = channel();
+        let (mut customer_pkg, ..) = create_packages(&ch);
+        let other_omega = XmrScalar::random(&mut OsRng);
+        let statement = Statement::new(ch.id.as_str(), INITIAL_UPDATE_COUNT);
+        customer_pkg.binding_proof =
+            prove_encrypted_offset(&other_omega, &statement, &ch.arbiter_pk, SecondBase::grease_default(), test_params())
+                .expect("honest proof for a different offset");
+        match verify_as_merchant(&ch, &customer_pkg) {
+            Err(EstablishError::BindingProof(BindingProofError::TargetMismatch)) => {}
+            other => panic!("expected BindingProof(TargetMismatch), got: {other:?}"),
+        }
+    }
+
+    /// The payload signature binds the direct ciphertext: swapping it for the counterparty's is detected.
+    #[test]
+    fn tampered_encrypted_offset() {
+        let ch = channel();
+        let (mut customer_pkg, _, merchant_pkg, _) = create_packages(&ch);
+        customer_pkg.encrypted_offset = merchant_pkg.encrypted_offset;
+        match verify_as_merchant(&ch, &customer_pkg) {
+            Err(EstablishError::InvalidPayloadSignature(_)) => {}
+            other => panic!("expected InvalidPayloadSignature, got: {other:?}"),
+        }
+    }
+
+    /// The merchant's own package replayed back as if it were the customer's: the adapted signature was made
+    /// with the merchant's key over the *customer's* closing transaction, so both bindings fail.
+    #[test]
+    fn replayed_merchant_package_as_customer() {
+        let ch = channel();
+        let (_, _, merchant_pkg, _) = create_packages(&ch);
+        match verify_as_merchant(&ch, &merchant_pkg) {
+            Err(EstablishError::InvalidDataFromPeer(_)) => {}
+            other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
+        }
+    }
+
+    /// Swapped-role presentation: the customer's package offered to the customer as if from the merchant.
+    #[test]
+    fn swapped_role_packages() {
+        let ch = channel();
+        let (customer_pkg, _, merchant_pkg, _) = create_packages(&ch);
+        match verify_as_customer(&ch, &customer_pkg) {
+            Err(EstablishError::InvalidDataFromPeer(_)) => {}
+            other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
+        }
+        match verify_as_merchant(&ch, &merchant_pkg) {
+            Err(EstablishError::InvalidDataFromPeer(_)) => {}
+            other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
+        }
+    }
+
+    /// The payload signature binds the dispute window.
+    #[test]
+    fn wrong_dispute_window() {
+        let ch = channel();
+        let (customer_pkg, ..) = create_packages(&ch);
+        let doubled = DISPUTE_WINDOW * 2;
+        match customer_pkg.verify(&ch.id, &ch.merchant.close_hash, doubled, &ch.customer.pubkey, &ch.arbiter_pk) {
+            Err(EstablishError::InvalidPayloadSignature(_)) => {}
+            other => panic!("expected InvalidPayloadSignature, got: {other:?}"),
+        }
+    }
+
+    /// The adapter-signature message binds the channel id, so a package presented for a different channel fails
+    /// at the adaptor-sig check.
+    #[test]
+    fn wrong_channel_id() {
+        let ch = channel();
+        let (customer_pkg, ..) = create_packages(&ch);
+        let other_id = ChannelId::from_str("XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a384").unwrap();
+        match customer_pkg.verify(&other_id, &ch.merchant.close_hash, DISPUTE_WINDOW, &ch.customer.pubkey, &ch.arbiter_pk) {
+            Err(EstablishError::InvalidDataFromPeer(_)) => {}
+            other => panic!("expected InvalidDataFromPeer, got: {other:?}"),
+        }
+    }
 }

@@ -34,8 +34,8 @@ pub enum InvalidProposal {
     MismatchedMerchantPublicKey,
     #[error("The customer's public key in the proposal does not match the one that was expected")]
     MismatchedCustomerPublicKey,
-    #[error("The KES configuration in the proposal does not match the one that was expected")]
-    MismatchedKesConfig,
+    #[error("The arbiter named in the proposal is not one the merchant offered")]
+    MismatchedArbiterConfig,
     #[error("The channel ID in the proposal does not match the one that was expected")]
     MismatchedChannelId,
     #[error("The network in the proposal does not match the one that was expected")]

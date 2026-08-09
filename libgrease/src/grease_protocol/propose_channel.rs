@@ -1,5 +1,5 @@
+use crate::arbiter::ArbiterConfiguration;
 use crate::balance::Balances;
-use crate::key_escrow_services::{KesConfiguration, KesImplementation};
 use ciphersuite::{Ciphersuite, Ed25519};
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,11 @@ use thiserror::Error;
 
 /// A record that (usually) the merchant will send out-of-band to the customer to give them the seed information they
 /// need to complete a new channel proposal.
+///
+/// The fields are the channel seed metadata of `docs/src/12_new_channel.typ`: a random nonce id, the merchant's
+/// closing address, the requested initial balances, the merchant's public key, and — as the protocol-specific
+/// initialization data — the arbiters the merchant is willing to be judged by, each carrying its own dispute-window
+/// duration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(bound = "")]
 pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
@@ -16,49 +21,62 @@ pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
         serialize_with = "crate::monero::helpers::serialize_network"
     )]
     pub network: Network,
-    /// The KES configuration for this channel
-    pub kes_type: KesImplementation,
-    /// The KES configuration parameters (public key, dispute duration, etc.)
-    pub kes_config: KesConfiguration<KC>,
+    /// The arbiters the merchant will accept for this channel, in order of preference. The customer picks exactly
+    /// one of them for the proposal; a proposal naming anything else is rejected.
+    ///
+    /// The choice is agreed between the parties but deliberately **not** committed into the channel id: the arbiter
+    /// sees the id only as an opaque label (see [`crate::channel_id::ChannelIdMetadata`]).
+    pub accepted_arbiters: Vec<ArbiterConfiguration>,
     /// The initial set of channel balances
     pub initial_balances: Balances,
     /// The merchant's address that the closing transaction must pay into
     pub merchant_closing_address: Address,
-    /// The public key corresponding to the merchant's secret channel nonce. Used to derive a shared secret for the
-    /// channel, $kappa$.
+    /// The merchant's public key, #Pm, the first field of the channel-id transcript.
     #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
-    pub merchant_channel_key: KC::G,
-    /// The merchant nonce for channel ID derivation, to help them identify this proposal.
+    pub merchant_public_key: KC::G,
+    /// The merchant nonce, which blinds the channel-id hash and lets the merchant recognise this proposal.
     pub merchant_nonce: u64,
+}
+
+impl<KC: Ciphersuite> MerchantSeedInfo<KC> {
+    /// Whether `arbiter` is one of the arbiters this seed offers.
+    pub fn accepts_arbiter(&self, arbiter: &ArbiterConfiguration) -> bool {
+        self.accepted_arbiters.contains(arbiter)
+    }
 }
 
 /// The builder struct for the [`MerchantSeedInfo`].
 /// See [`MerchantSeedInfo`] for more information about each field.
 pub struct MerchantSeedBuilder<KC: Ciphersuite> {
     network: Network,
-    kes_type: KesImplementation,
-    kes_config: Option<KesConfiguration<KC>>,
+    accepted_arbiters: Vec<ArbiterConfiguration>,
     initial_balances: Option<Balances>,
     closing_address: Option<Address>,
-    channel_key: Option<KC::G>,
+    merchant_public_key: Option<KC::G>,
     channel_nonce: Option<u64>,
 }
 
 impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
-    pub fn new(network: Network, kes_type: KesImplementation) -> Self {
+    pub fn new(network: Network) -> Self {
         MerchantSeedBuilder {
             network,
-            kes_type,
-            kes_config: None,
+            accepted_arbiters: Vec::new(),
             initial_balances: None,
             closing_address: None,
-            channel_key: None,
+            merchant_public_key: None,
             channel_nonce: None,
         }
     }
 
-    pub fn with_kes_config(mut self, kes_config: KesConfiguration<KC>) -> Self {
-        self.kes_config = Some(kes_config);
+    /// Offer one more arbiter to the customer. Order is preserved and read as the merchant's preference.
+    pub fn with_arbiter(mut self, arbiter: ArbiterConfiguration) -> Self {
+        self.accepted_arbiters.push(arbiter);
+        self
+    }
+
+    /// Offer a whole set of arbiters, appended to any already added.
+    pub fn with_arbiters(mut self, arbiters: impl IntoIterator<Item = ArbiterConfiguration>) -> Self {
+        self.accepted_arbiters.extend(arbiters);
         self
     }
 
@@ -72,10 +90,9 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
         self
     }
 
-    /// Calculate the ephemeral channel public key $P_g$ from the channel secret, $hat(k)_a$. The secret is not stored.
-    pub fn derive_channel_pubkey(mut self, secret: &KC::F) -> Self {
-        let channel_key = KC::generator() * *secret;
-        self.channel_key = Some(channel_key);
+    /// The merchant's public key, #Pm.
+    pub fn with_merchant_public_key(mut self, public_key: KC::G) -> Self {
+        self.merchant_public_key = Some(public_key);
         self
     }
 
@@ -85,19 +102,20 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
     }
 
     pub fn build(self) -> Result<MerchantSeedInfo<KC>, MissingSeedInfo> {
-        let kes_config = self.kes_config.ok_or(MissingSeedInfo::KesConfig)?;
+        if self.accepted_arbiters.is_empty() {
+            return Err(MissingSeedInfo::AcceptedArbiters);
+        }
         let initial_balances = self.initial_balances.ok_or(MissingSeedInfo::InitialBalances)?;
         let closing_address = self.closing_address.ok_or(MissingSeedInfo::ClosingAddress)?;
-        let channel_key = self.channel_key.ok_or(MissingSeedInfo::ChannelKey)?;
+        let merchant_public_key = self.merchant_public_key.ok_or(MissingSeedInfo::MerchantPublicKey)?;
         let channel_nonce = self.channel_nonce.ok_or(MissingSeedInfo::ChannelNonce)?;
 
         Ok(MerchantSeedInfo {
             network: self.network,
-            kes_type: self.kes_type,
-            kes_config,
+            accepted_arbiters: self.accepted_arbiters,
             initial_balances,
             merchant_closing_address: closing_address,
-            merchant_channel_key: channel_key,
+            merchant_public_key,
             merchant_nonce: channel_nonce,
         })
     }
@@ -105,14 +123,14 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
 
 #[derive(Debug, Clone, Error)]
 pub enum MissingSeedInfo {
-    #[error("Missing KES configuration")]
-    KesConfig,
+    #[error("A channel seed must offer at least one arbiter")]
+    AcceptedArbiters,
     #[error("Missing initial balances")]
     InitialBalances,
     #[error("Missing closing address")]
     ClosingAddress,
-    #[error("Missing channel key")]
-    ChannelKey,
+    #[error("Missing merchant public key")]
+    MerchantPublicKey,
     #[error("Missing channel nonce")]
     ChannelNonce,
 }

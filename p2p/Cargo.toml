@@ -7,7 +7,6 @@ edition = "2021"
 libgrease = { workspace = true }
 
 blake2 = "0.10.6"
-grease-babyjubjub = { workspace = true }
 ciphersuite = { workspace = true }
 dalek-ff-group = { workspace = true }
 futures = { workspace = true }

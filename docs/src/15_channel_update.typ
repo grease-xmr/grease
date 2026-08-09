@@ -42,6 +42,7 @@ Verification consists of:
 Each state's offset is generated independently at random, so no offset reveals anything about any other. A party that later closes the
 channel at the agreed latest state learns nothing that would let it complete an _earlier_ state, and a stale state can never be closed
 because the arbiter will never attest its statement (@arbiterDesign). There is therefore no need for the offsets to chain to one another,
-and no zero-knowledge circuit is evaluated on an update — a channel update is a handful of Schnorr operations plus one verifiably encrypted offset and its
-binding proof.
+and no zero-knowledge circuit is evaluated on an update — a channel update is a handful of Schnorr operations plus one verifiably encrypted
+offset and its binding proof. The proof is essentially the whole of an update's bandwidth: 23,641 bytes at the parameters pinned in
+@bindingProof (@proofSize), against well under a kilobyte for the adapter signature, the record and its two signatures combined.
 

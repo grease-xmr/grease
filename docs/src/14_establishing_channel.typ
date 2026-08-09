@@ -5,8 +5,10 @@
 
 Establishing a channel to accept payments requires the following preparatory steps:
 1. Both parties collaboratively create a new shared multisig wallet to hold the channel funds.
-2. The parties derive the channel id, which commits to the funding output, and agree on the arbiter to be used for disputes
-  (@arbiterDesign).
+2. The parties exchange their shares of the funding output's linking tag $L_F$ and finalize the channel id (@channelId): the provisional
+  `XGT` id quoted during negotiation gives way to the final `XGC` id, which commits to the funding output. They also agree on the arbiter to
+  be used for disputes (@arbiterDesign). Finalization precedes step 4, because every signature in the initial-state package commits to the
+  channel id, and it happens exactly once — an id that is already final cannot be re-bound.
 3. Each party watches the Monero blockchain for the funding transaction to confirm it has been included in a block.
 4. The parties prepare the initial channel state: each adapter-signs the counterparty's closing transaction with a fresh secret offset, and
   hands the counterparty a _verifiably encrypted offset_ — that offset encrypted to the statement that this is the channel's latest state.

@@ -2,14 +2,12 @@ use crate::amount::MoneroAmount;
 use crate::balance::Balances;
 use crate::channel_id::ChannelId;
 use crate::channel_metadata::StaticChannelMetadata;
-use crate::cryptography::dleq::Dleq;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{
     ClosedChannelState, ClosingChannelState, DisputingChannelState, EstablishedChannelState, EstablishingState,
 };
 use ciphersuite::{Ciphersuite, Ed25519};
-use modular_frost::curve::Curve as FrostCurve;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use thiserror::Error;
@@ -85,12 +83,11 @@ pub trait LifeCycle<KC: Ciphersuite = Ed25519> {
 #[derive(Clone, Serialize, Deserialize)]
 /// The channel state enum representing all possible lifecycle states.
 ///
-/// `KC` refers to the curve employed by the KES.
+/// `KC` refers to the curve the channel's adaptor signatures and offsets live on.
 #[serde(bound = "")]
 pub enum ChannelState<KC = Ed25519>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     Establishing(EstablishingState<KC>),
     Open(EstablishedChannelState<KC>),
@@ -99,13 +96,12 @@ where
     Closed(ClosedChannelState<KC>),
 }
 
-/// Type alias for the default KES curve (Ed25519).
+/// Type alias for the default channel curve (Ed25519).
 pub type DefaultChannelState = ChannelState<Ed25519>;
 
 impl<KC> Debug for ChannelState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.stage())
@@ -114,8 +110,7 @@ where
 
 impl<KC> ChannelState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     pub fn as_lifecycle(&self) -> &dyn LifeCycle<KC> {
         match self {
@@ -198,8 +193,7 @@ where
 
 impl<KC> LifeCycle<KC> for ChannelState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     fn stage(&self) -> LifecycleStage {
         self.as_lifecycle().stage()
@@ -221,12 +215,18 @@ where
 #[cfg(test)]
 pub mod test {
     use crate::amount::{MoneroAmount, MoneroDelta};
+    use crate::arbiter::client::statement_for;
     use crate::cryptography::adapter_signature::AdaptedSignature;
-    use crate::cryptography::CrossCurveScalar;
+    use crate::cryptography::attestation::test_helpers::generate_master_keypair;
+    use crate::cryptography::binding_proof::{prove_encrypted_offset, BindingProofParams};
+    use crate::cryptography::pvss::SecondBase;
+    use crate::cryptography::keys::Curve25519Secret;
     use crate::grease_protocol::multisig_wallet::LinkedMultisigWallets;
     use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
     use crate::payment_channel::ChannelRole;
-    use crate::state_machine::open_channel::{EstablishedChannelState, UpdateRecord};
+    use crate::channel_id::ChannelId;
+    use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord, CLOSE_HASH_LEN};
+    use crate::state_machine::open_channel::{AppliedUpdate, EstablishedChannelState};
     use crate::wallet::multisig_wallet::MultisigWallet;
     use crate::XmrScalar;
     use ciphersuite::group::ff::Field;
@@ -248,18 +248,46 @@ pub mod test {
         MultisigWallet::try_from(mine).expect("create wallet keyring")
     }
 
+    /// A cross-signed record for `update_count` under throwaway keys. The state-machine plumbing tested here
+    /// never re-verifies the signatures; the protocol tests in `tests::update_protocol` do that against the real
+    /// channel keys.
+    fn record(channel_id: ChannelId, update_count: u64) -> UpdateRecord {
+        let mut rng = rand_core::OsRng;
+        let close_hash = CloseHash::new([update_count as u8; CLOSE_HASH_LEN]);
+        let halves = [ChannelRole::Customer, ChannelRole::Merchant].map(|role| {
+            let secret = XmrScalar::random(&mut rng);
+            HalfSignedUpdateRecord::sign(channel_id.clone(), update_count, close_hash, role, &secret, &mut rng)
+        });
+        UpdateRecord::from_halves(&halves[0], &halves[1]).expect("halves agree by construction")
+    }
+
     pub fn payment(state: &mut EstablishedChannelState, amount: &str) -> u64 {
         let delta = MoneroDelta::from(MoneroAmount::from_xmr(amount).unwrap());
         let update_count = state.update_count() + 1;
+        let channel_id = state.metadata.channel_id().name();
         let k = XmrScalar::random(&mut rand_core::OsRng);
-        let q = XmrScalar::random(&mut rand_core::OsRng);
-        let update_info = UpdateRecord {
-            my_offset: CrossCurveScalar::random(),
-            my_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &q, "", &mut rand_core::OsRng),
-            peer_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &q, "", &mut rand_core::OsRng),
+        let peer_omega = XmrScalar::random(&mut rand_core::OsRng);
+        let my_omega = XmrScalar::random(&mut rand_core::OsRng);
+        // The retained proof seals the *peer's* offset, so it is sealed against the peer's adaptor point. A cheap
+        // cut-and-choose profile keeps these plumbing tests fast; soundness is the binding proof's own concern.
+        let peer_binding_proof = prove_encrypted_offset(
+            &peer_omega,
+            &statement_for(&channel_id, update_count),
+            &generate_master_keypair(&mut rand_core::OsRng).1,
+            SecondBase::grease_default(),
+            BindingProofParams::new(6, 3).unwrap(),
+        )
+        .expect("sealing a fresh offset always succeeds");
+        let update_info = AppliedUpdate {
+            record: record(channel_id, update_count),
+            my_offset: Curve25519Secret::from(my_omega),
+            my_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &my_omega, "", &mut rand_core::OsRng),
+            peer_adapted_signature: AdaptedSignature::<Ed25519>::sign(&k, &peer_omega, "", &mut rand_core::OsRng),
+            peer_binding_proof,
             my_preprocess: vec![],
             peer_preprocess: vec![],
         };
+        assert!(update_info.proof_matches_presignature());
         let updated_index = state.store_update(delta, update_info);
         assert_eq!(updated_index, update_count);
         update_count

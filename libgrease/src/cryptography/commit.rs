@@ -2,7 +2,7 @@ use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
 use flexible_transcript::{SecureDigest, Transcript};
 use hex::{FromHex, FromHexError, ToHex};
-use modular_frost::sign::Writable;
+use crate::io::Writable;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io::{Read, Write};
 use std::marker::PhantomData;

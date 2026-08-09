@@ -2,7 +2,7 @@ use crate::error::ReadError;
 use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
-use modular_frost::sign::Writable;
+use crate::io::Writable;
 use paste::paste;
 use rand_core::{CryptoRng, RngCore};
 use serde::ser::SerializeStruct;

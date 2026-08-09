@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Test coverage script for Grease project
-# Runs unit tests with coverage (excludes e2e and circuits)
+# Runs unit tests with coverage (excludes e2e)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -58,7 +58,7 @@ done
 cd "$PROJECT_ROOT"
 
 echo "Running test coverage for Grease project..."
-echo "Excluding: e2e, circuits"
+echo "Excluding: e2e"
 echo ""
 
 case $OUTPUT_FORMAT in
@@ -68,7 +68,6 @@ case $OUTPUT_FORMAT in
             --all-features \
             --workspace \
             --exclude e2e \
-            --exclude circuits \
             --release \
             --html \
             --output-dir "$COVERAGE_DIR/html"
@@ -92,7 +91,6 @@ case $OUTPUT_FORMAT in
             --all-features \
             --workspace \
             --exclude e2e \
-            --exclude circuits \
             --release \
             --lcov \
             --output-path "$COVERAGE_DIR/lcov.info"
@@ -105,7 +103,6 @@ case $OUTPUT_FORMAT in
             --all-features \
             --workspace \
             --exclude e2e \
-            --exclude circuits \
             --release
         ;;
 esac

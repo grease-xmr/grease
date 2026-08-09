@@ -7,7 +7,7 @@ use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::wallet::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::wallet::errors::WalletError;
-use crate::XmrScalar;
+use crate::{XmrPoint, XmrScalar};
 use blake2::Digest;
 use dalek_ff_group::dalek::Scalar as DScalar;
 use log::*;
@@ -17,6 +17,7 @@ use modular_frost::{Participant, ThresholdKeys};
 use monero::{Address as UAddress, AddressType as UAddressType, Network};
 use monero_rpc::{Rpc, RpcError, ScannableBlock};
 use monero_serai::block::Block;
+use monero_serai::generators::hash_to_point;
 use monero_serai::ringct::clsag::ClsagAddendum;
 use monero_serai::transaction::Transaction;
 use monero_simple_request_rpc::SimpleRequestRpc;
@@ -113,32 +114,43 @@ impl Clone for MultisigWallet {
     }
 }
 
-/// Generate the adapter signature message for a commitment transaction.
+/// Generate the canonical message for the commitment transaction *held by* `holder` at `state_index`.
 ///
-/// This binds the signature to the channel ID and state index, ensuring
-/// the adapted signature is only valid for the specific commitment transaction state.
-/// Both parties can compute this message independently before the transaction is built.
+/// Both parties can compute this independently, before the transaction is built, so it is what the state's
+/// adaptor signature and its [`UpdateRecord`](crate::grease_protocol::update_record::UpdateRecord) commit to.
+///
+/// Each party holds its own closing transaction for a state and broadcasts it on a unilateral close, so `holder`
+/// separates the pair: the two adaptor signatures exchanged for one state are then never over the same bytes,
+/// and a package presented in the counterparty's direction cannot verify.
 ///
 /// # Parameters
 /// - `channel_id`: The unique channel identifier
 /// - `state_index`: The state update index (0 for initial commitment)
+/// - `holder`: The party that holds — and would broadcast — this closing transaction
 /// - `customer_amount`: Customer's balance in piconero
 /// - `merchant_amount`: Merchant's balance in piconero
 pub fn commitment_tx_message(
     channel_id: &ChannelId,
     state_index: u64,
+    holder: ChannelRole,
     customer_amount: u64,
     merchant_amount: u64,
 ) -> Vec<u8> {
     use blake2::Blake2b512;
     use flexible_transcript::{DigestTranscript, Transcript};
 
-    let mut transcript = DigestTranscript::<Blake2b512>::new(b"Grease CommitmentTx v1");
+    let mut transcript = DigestTranscript::<Blake2b512>::new(b"Grease CommitmentTx v2");
     transcript.append_message(b"channel_id", channel_id.as_str().as_bytes());
     transcript.append_message(b"state_index", state_index.to_le_bytes());
+    transcript.append_message(b"holder", holder.to_string());
     transcript.append_message(b"customer_amount", customer_amount.to_le_bytes());
     transcript.append_message(b"merchant_amount", merchant_amount.to_le_bytes());
     transcript.challenge(b"commitment_tx_message").to_vec()
+}
+
+/// The MuSig participant index `i`, which is always in range for the 2-of-2 signing set.
+fn participant(i: u16) -> Participant {
+    Participant::new(i).expect("1 and 2 are valid participant indices")
 }
 
 impl MultisigWallet {
@@ -241,6 +253,34 @@ impl MultisigWallet {
 
     pub fn my_spend_key(&self) -> &Curve25519Secret {
         &self.my_spend_key
+    }
+
+    /// The generator this wallet's linking tag is taken against: `H_p(P)` for the joint public spend key `P`,
+    /// the generator Monero uses for the key image of an output paying to `P`.
+    fn linking_tag_generator(&self) -> XmrPoint {
+        XmrPoint(hash_to_point(self.joint_public_spend_key.to_compressed().to_bytes()))
+    }
+
+    /// This party's share of the funding output's linking tag, `L_F = x · H_p(P)`.
+    ///
+    /// `x` is the *joint* spend key, which neither party holds on its own, so neither can compute `L_F` alone.
+    /// Each side contributes `λ_i·s_i·H_p(P)` for its own interpolated MuSig share and the two partials sum to
+    /// `L_F` — the standard Monero multisig key-image construction. Send this to the peer and combine the two
+    /// with [`linking_tag`](Self::linking_tag).
+    pub fn partial_linking_tag(&self) -> Result<XmrPoint, WalletError> {
+        let view = self
+            .musig_keys
+            .view(vec![participant(1), participant(2)])
+            .map_err(|e| WalletError::KeyError(format!("Could not interpolate the 2-of-2 signing set: {e:?}")))?;
+        Ok(self.linking_tag_generator() * **view.secret_share())
+    }
+
+    /// Combine our partial linking tag with the peer's to obtain the funding output's linking tag `L_F`.
+    ///
+    /// Addition is commutative, so both parties derive an identical `L_F` and therefore an identical final
+    /// channel id.
+    pub fn linking_tag(&self, peer_partial: &XmrPoint) -> Result<XmrPoint, WalletError> {
+        Ok(self.partial_linking_tag()? + peer_partial)
     }
 
     pub async fn get_height(&self) -> Result<u64, WalletError> {

@@ -252,14 +252,45 @@ Three details close the construction.
 - *Soundness budget.* Take $(n, t) = (104, 53)$, so the opened subset has $t - 1 = 52$ shares and $binom(104, 52) approx 2^100$. The margin is
   deliberately generous: because a surviving cheat only _freezes_ one update rather than stealing, that much work to force a single dispute to
   fail is beyond any rational attacker. A channel wanting smaller messages can lower $n$; one wanting more margin can raise it.
-- *The artifact is per-update.* The offset and its proof travel on _every_ update, not only on the dispute path, so the $approx 20$ KB at these
-  parameters is a standing per-update cost, not a rare one. If it ever dominates, the constant-size McFly-style algebraic variant is the
-  documented upgrade, at the price of a re-architected ciphertext and chunked decryption.
+- *The artifact is per-update.* The offset and its proof travel on _every_ update, not only on the dispute path, so the 23,641 bytes at these
+  parameters (@proofSize) are a standing per-update cost, not a rare one. If it ever dominates, the constant-size McFly-style algebraic
+  variant is the documented upgrade, at the price of a re-architected ciphertext and chunked decryption.
 - *#raw("H2F") concretely.* Instantiate $H2F$ as a wide reduction — read $64$ uniform bytes (SHA-512, or RFC 9380 `expand_message` with
   $L = 48$) as an integer modulo $ell$ — of a Grease-unique domain-separation tag prepended to the canonical fixed-length $GG_T$ serialization
   of $y$. The wide reduction holds $s$ within $2^(-128)$ of uniform on $ZZ_ell$, so $c = omega + s$ is a sound one-time pad; the unique tag
   separates this hash from vetKD's own hashes of pairing outputs; and both parties must reproduce the same $GG_T$ serialization (@icp), since a
   divergence there stays invisible until decryption fails on the dispute path.
+
+Because the cost is paid on every update, the size is worth stating exactly rather than approximately. Write $pi$ for the encoded proof. Its
+canonical encoding has no variable-length field: a nine-byte header (a version byte, then $n$ and $t$ as 32-bit little-endian integers), the
+two commitment vectors, one DLEQ per coefficient, all $n$ share ciphertexts in index order, and the openings in ascending index order. The
+subset $I$ is not sent separately — each opening carries its own index — and $B$ is not sent at all, since the verifier recomputes it. Every
+element is fixed-width, so the length is exactly
+#footnote[
+  The implementation pins this figure: `BindingProofParams::encoded_len` in `libgrease/src/cryptography/binding_proof.rs`, with a regression
+  test that recomputes the layout independently and asserts 23,641 bytes at the production profile.
+]
+
+$ |pi| = underbrace(9, "header") + underbrace(128 n, "ciphertexts") + underbrace(128 t, "commitments + DLEQs") + underbrace(68 (t-1), "openings") "  bytes," $
+
+which at $(n, t) = (104, 53)$ is *23,641 bytes*, or $23.1$ KiB; @proofSize breaks it down. The share ciphertexts are $56%$ of that, and inside
+each of them it is the 96-byte compressed $GG_2$ point, not the 32-byte Ed25519 scalar, that sets the scale. A rough estimate that prices the
+$GG_2$ encodings at Ed25519 width lands near $20$ KB and under-budgets the update path by about a fifth.
+
+#figure(
+  table(
+    columns: 4,
+    align: (left, left, right, right),
+    table.header([*Component*], [*Element*], [*Count $times$ width*], [*Bytes*]),
+    [Header], [$"version" bar.v.double n bar.v.double t$], [$1 times 9$], [9],
+    [Commitments], [$F_j$, $F_j^B$], [$2t times 32$], [3,392],
+    [Coefficient DLEQs], [$"challenge" bar.v.double "response"$], [$t times 64$], [3,392],
+    [Share ciphertexts], [$U_k bar.v.double c_k$], [$n times (96 + 32)$], [13,312],
+    [Openings], [$k bar.v.double r_k bar.v.double omega_k$], [$(t-1) times (4 + 32 + 32)$], [3,536],
+    [*Total*], [], [], [*23,641*],
+  ),
+  caption: [The canonical binding-proof encoding at $(n, t) = (104, 53)$.],
+)<proofSize>
 
 == The dispute state machine <stateMachine>
 

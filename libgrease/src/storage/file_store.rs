@@ -51,16 +51,16 @@ impl StateStore for FileStore {
 mod test {
     use super::*;
     use crate::cryptography::encryption_context::{with_encryption_context, AesGcmEncryption};
-    use crate::grease_protocol::kes_establishing::KesEstablishing;
     use crate::state_machine::error::LifeCycleError;
     use crate::state_machine::lifecycle::LifecycleStage;
     use crate::state_machine::{CustomerEstablishing, EstablishingState, MerchantEstablishing};
-    use crate::tests::establish_channel_tests::{establish_wallet, fake_tx, fund_both, inject_signing_shares};
+    use crate::tests::establish_channel_tests::{
+        establish_wallet, finalize_channel_ids, fund_both, test_params,
+    };
     use crate::tests::propose_channel_tests::propose_channel;
     use crate::XmrScalar;
     use rand_core::OsRng;
     use std::sync::Arc;
-    use zeroize::Zeroizing;
 
     const URL: &str = "No RPC required";
 
@@ -113,7 +113,7 @@ mod test {
                 let mut rng = OsRng;
 
                 // ---- Step 1: Channel proposal exchange ----
-                let (merchant_state, customer_state, kes_key) = propose_channel();
+                let (merchant_state, customer_state) = propose_channel();
 
                 // Round-trip: both parties after proposal (no wallet yet)
                 let merchant_state = round_trip(&mut store, merchant_state);
@@ -122,6 +122,8 @@ mod test {
                 // ---- Step 2: Wrap and establish wallet ----
                 let mut merchant = MerchantEstablishing::new(merchant_state, URL).expect("merchant");
                 let mut customer = CustomerEstablishing::new(customer_state, URL).expect("customer");
+                merchant.state_mut().set_binding_proof_params(test_params());
+                customer.state_mut().set_binding_proof_params(test_params());
                 establish_wallet(&mut merchant, &mut customer);
 
                 // Round-trip: both parties after wallet setup
@@ -136,65 +138,55 @@ mod test {
                 let mut merchant = reload_merchant(&mut store, merchant);
                 let mut customer = reload_customer(&mut store, customer);
 
-                // ---- Step 4: Customer generates init package ----
+                // ---- Step 4: Bind the channel id to the funding output ----
+                // The channel id changes here, so everything stored afterwards lives under the final id.
+                finalize_channel_ids(&mut merchant, &mut customer);
+
+                let mut merchant = reload_merchant(&mut store, merchant);
+                let mut customer = reload_customer(&mut store, customer);
+
+                // ---- Step 5: Customer generates its initial-state package ----
                 // Signing shares were re-injected by reload_*
                 let customer_pkg = customer.generate_init_package(&mut rng).expect("customer init package");
 
-                // Round-trip: customer has adapted_sig + payload_sig stored
+                // Round-trip: the customer holds its offset and its own package
                 let customer = reload_customer(&mut store, customer);
 
-                // ---- Step 5: Merchant receives customer init package ----
+                // ---- Step 6: Merchant verifies and accepts it ----
                 merchant.receive_customer_init_package(customer_pkg).expect("merchant receives customer package");
 
                 // Round-trip: merchant has peer data. Re-inject signing share because
                 // merchant still needs to generate their own init package.
                 let mut merchant = reload_merchant(&mut store, merchant);
 
-                // ---- Step 6: Merchant generates init package ----
+                // ---- Step 7: Merchant generates its initial-state package ----
                 let merchant_pkg = merchant.generate_init_package(&mut rng).expect("merchant init package");
 
-                // Round-trip: merchant has adapted_sig + payload_sig stored
-                let merchant = reload_merchant(&mut store, merchant);
+                // Round-trip: the merchant holds its offset and both packages
+                let mut merchant = reload_merchant(&mut store, merchant);
 
-                // ---- Step 7: Customer receives merchant init package ----
+                // ---- Step 8: Customer verifies and accepts it ----
                 let mut customer = reload_customer(&mut store, customer);
                 customer.receive_merchant_init_package(merchant_pkg).expect("customer receives merchant package");
 
                 // Round-trip: customer has peer data
-                let customer = reload_customer(&mut store, customer);
-
-                // ---- Step 8: KES bundle + validation ----
-                let kes_bundle = merchant.bundle_for_kes(&mut rng).expect("bundle for KES");
-                let kes_secret = Zeroizing::new(kes_key);
-                let kes = KesEstablishing::from_bundle(kes_secret, kes_bundle).expect("KES from bundle");
-                let (proofs, record) = kes.finalize(&mut rng);
-                assert_eq!(record.channel_id, merchant.state().metadata.channel_id().name());
-
-                // ---- Step 9: Receive KES proofs ----
-                let mut merchant = reload_merchant(&mut store, merchant);
-                let mut customer = reload_customer(&mut store, customer);
-                merchant.receive_kes_proof(proofs.clone()).expect("merchant KES proofs");
-                customer.receive_kes_proof(proofs).expect("customer KES proofs");
-
-                // Round-trip: both have KES proof
-                let mut merchant = reload_merchant(&mut store, merchant);
                 let mut customer = reload_customer(&mut store, customer);
 
-                // ---- Step 10: Fund the channel ----
+                // ---- Step 9: Fund the channel ----
                 fund_both(&mut merchant, &mut customer);
 
                 // Round-trip: both have funding tx
                 let merchant = reload_merchant(&mut store, merchant);
                 let customer = reload_customer(&mut store, customer);
 
-                // ---- Step 11: Verify requirements and transition to Established ----
+                // ---- Step 10: Verify requirements and transition to Established ----
                 assert!(merchant.state().requirements_met(), "merchant requirements not met");
                 assert!(customer.state().requirements_met(), "customer requirements not met");
 
                 let established_m = merchant.into_inner().next().map_err(|(s, e)| (s.to_channel_state(), e))?;
                 let established_c = customer.into_inner().next().map_err(|(s, e)| (s.to_channel_state(), e))?;
 
-                // ---- Step 12: Round-trip the Established state ----
+                // ---- Step 11: Round-trip the Established state ----
                 let cs_m = established_m.to_channel_state();
                 let id = cs_m.as_lifecycle().name();
                 store.write_channel(&cs_m).expect("write established merchant");

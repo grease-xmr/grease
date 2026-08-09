@@ -4,7 +4,7 @@ pub mod multisig_negotiation;
 
 use crate::error::ReadError;
 pub use error::UpdateError;
-use modular_frost::sign::Writable;
+use crate::io::Writable;
 use monero::consensus::{ReadExt, WriteExt};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;

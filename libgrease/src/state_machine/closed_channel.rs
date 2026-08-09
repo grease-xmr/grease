@@ -1,17 +1,14 @@
 use crate::balance::Balances;
 use crate::channel_metadata::StaticChannelMetadata;
-use crate::cryptography::dleq::Dleq;
 use crate::state_machine::proposing_channel::RejectProposalReason;
 use crate::state_machine::timeouts::TimeoutReason;
-use ciphersuite::Ed25519;
-use modular_frost::curve::Curve;
+use ciphersuite::{Ciphersuite, Ed25519};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClosedChannelState<KC = Ed25519>
 where
-    KC: Curve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     reason: ChannelClosedReason,
     #[serde(bound = "")]
@@ -21,8 +18,7 @@ where
 
 impl<KC> ClosedChannelState<KC>
 where
-    KC: Curve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     /// Create a new closed channel state
     pub fn new(reason: ChannelClosedReason, metadata: StaticChannelMetadata<KC>, final_balances: Balances) -> Self {
@@ -51,8 +47,7 @@ use crate::state_machine::lifecycle::{ChannelState, LifeCycle, LifecycleStage};
 
 impl<KC> LifeCycle<KC> for ClosedChannelState<KC>
 where
-    KC: Curve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Closed
@@ -77,7 +72,7 @@ pub enum ChannelClosedReason {
     Normal,
     /// The channel was closed due to a timeout
     Timeout(TimeoutReason),
-    /// The channel was force closed via KES after dispute window passed
+    /// The channel was force closed via the arbiter after the dispute window passed
     ForceClosed,
     /// The channel was closed following a successful dispute (defender proved newer state)
     Disputed,

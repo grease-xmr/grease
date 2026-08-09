@@ -1,6 +1,6 @@
+use crate::arbiter::ArbiterConfiguration;
 use crate::channel_id::{ChannelId, ChannelIdMetadata};
 use crate::channel_metadata::StaticChannelMetadata;
-use crate::cryptography::dleq::Dleq;
 use crate::cryptography::keys::Curve25519Secret;
 use crate::cryptography::serializable_secret::SerializableSecret;
 pub use crate::grease_protocol::MerchantSeedInfo;
@@ -13,7 +13,6 @@ use crate::state_machine::timeouts::TimeoutReason;
 use crate::state_machine::{ChannelClosedReason, ClosedChannelState};
 use ciphersuite::{Ciphersuite, Ed25519};
 use log::*;
-use modular_frost::curve::Curve as FrostCurve;
 use monero::Address;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -73,7 +72,7 @@ where
 {
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
-    /// The customer's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
+    /// The customer's channel secret, $\hat{k}_a$. Its public key is #Pc in the channel-id transcript.
     channel_secret: SerializableSecret<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     pub(crate) partial_spend_key: Curve25519Secret,
@@ -94,29 +93,33 @@ where
 {
     /// Create a new `ChannelProposer` from the merchant's seed info and the customer's own parameters.
     ///
-    /// The customer provides their channel secret, closing address, and nonce.
-    /// The `ChannelIdMetadata` is constructed internally from the combined merchant + customer data.
+    /// The customer provides their channel secret, closing address, nonce, and the arbiter they pick from the
+    /// ones the seed offers. The `ChannelIdMetadata` is constructed internally from the combined merchant +
+    /// customer data.
     pub fn new(
         seed: MerchantSeedInfo<KC>,
+        arbiter: ArbiterConfiguration,
         channel_secret: Zeroizing<KC::F>,
         partial_spend_key: Curve25519Secret,
         customer_closing_address: Address,
         customer_nonce: u64,
     ) -> Result<Self, ProposeProtocolError> {
+        if !seed.accepts_arbiter(&arbiter) {
+            return Err(ProposeProtocolError::ArbiterNotAccepted(arbiter.canister_id().to_string()));
+        }
         let closing_addresses =
             ClosingAddresses::new_from_addresses(customer_closing_address, seed.merchant_closing_address)?;
-        let customer_channel_key = seed.merchant_channel_key * *channel_secret;
+        let customer_public_key = KC::generator() * *channel_secret;
         let channel_id = ChannelIdMetadata::new(
-            seed.merchant_channel_key,
-            customer_channel_key,
+            seed.merchant_public_key,
+            customer_public_key,
             seed.initial_balances,
             closing_addresses,
-            seed.kes_config.clone(),
+            arbiter,
             seed.merchant_nonce,
             customer_nonce,
         );
-        let metadata =
-            StaticChannelMetadata::new(seed.network, ChannelRole::Customer, channel_id, seed.kes_type.clone());
+        let metadata = StaticChannelMetadata::new(seed.network, ChannelRole::Customer, channel_id);
         Ok(ChannelProposer {
             metadata,
             seed_info: seed,
@@ -148,7 +151,7 @@ where
 {
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
-    /// The customer's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
+    /// The customer's channel secret, $\hat{k}_a$. Its public key is #Pc in the channel-id transcript.
     pub(crate) channel_secret: SerializableSecret<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     pub(crate) partial_spend_key: Curve25519Secret,
@@ -156,8 +159,7 @@ where
 
 impl<KC> AwaitingProposalResponse<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     /// Close the channel due to a lack of response from the peer.
     pub fn timeout(self, reason: TimeoutReason) -> ClosedChannelState<KC> {
@@ -222,7 +224,7 @@ where
     KC: Ciphersuite,
 {
     initial_seed_info: MerchantSeedInfo<KC>,
-    /// The merchant's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
+    /// The merchant's channel secret, $\hat{k}_b$, whose public key #Pm the seed advertises.
     channel_secret: Zeroizing<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     partial_spend_key: Curve25519Secret,
@@ -250,12 +252,8 @@ where
     ) -> Result<(AwaitingConfirmation<KC>, ProposalResponse), InvalidProposal> {
         self.verify_seed_info(&proposal.seed)?;
         self.review_proposal(&proposal)?;
-        let metadata = StaticChannelMetadata::new(
-            self.initial_seed_info.network,
-            ChannelRole::Merchant,
-            proposal.channel_id,
-            self.initial_seed_info.kes_type.clone(),
-        );
+        let metadata =
+            StaticChannelMetadata::new(self.initial_seed_info.network, ChannelRole::Merchant, proposal.channel_id);
         info!("Merchant Received Proposal: Proposal validated, transitioning to AwaitingConfirmation");
         let channel_id = metadata.channel_id().name();
         let response = ProposalResponse::Accepted(channel_id);
@@ -286,11 +284,11 @@ where
         if self.initial_seed_info.initial_balances != proposal.channel_id.initial_balance() {
             return Err(InvalidProposal::MismatchedBalances);
         }
-        if &self.initial_seed_info.merchant_channel_key != proposal.channel_id.merchant_key() {
+        if &self.initial_seed_info.merchant_public_key != proposal.channel_id.merchant_key() {
             return Err(InvalidProposal::MismatchedMerchantPublicKey);
         }
-        if &self.initial_seed_info.kes_config != proposal.channel_id.kes_config() {
-            return Err(InvalidProposal::MismatchedKesConfig);
+        if !self.initial_seed_info.accepts_arbiter(proposal.channel_id.arbiter_config()) {
+            return Err(InvalidProposal::MismatchedArbiterConfig);
         }
         if &self.initial_seed_info.merchant_closing_address != proposal.channel_id.closing_addresses().merchant() {
             return Err(InvalidProposal::MismatchedAddress);
@@ -311,7 +309,7 @@ where
 {
     pub metadata: StaticChannelMetadata<KC>,
     pub seed_info: MerchantSeedInfo<KC>,
-    /// The merchant's secret nonce, $\hat{k}_a$, used to derive the shared channel secret $\kappa$.
+    /// The merchant's channel secret, $\hat{k}_b$, whose public key #Pm the seed advertises.
     pub(crate) channel_secret: SerializableSecret<KC::F>,
     /// The partial wallet spend key for this (to-be-created) channel
     pub(crate) partial_spend_key: Curve25519Secret,
@@ -319,8 +317,7 @@ where
 
 impl<KC> AwaitingConfirmation<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     /// Close the channel because the customer rejected the proposal or timed out.
     pub fn timeout(self, reason: TimeoutReason) -> ClosedChannelState<KC> {
@@ -378,6 +375,9 @@ pub enum ProposeProtocolError {
 
     #[error("Invalid closing address in proposal: {0}")]
     ClosingAddressError(#[from] ClosingAddressError),
+
+    #[error("The merchant's seed does not offer the arbiter {0}")]
+    ArbiterNotAccepted(String),
 
     #[error("Invalid seed info: {0}")]
     InvalidSeedInfo(String),

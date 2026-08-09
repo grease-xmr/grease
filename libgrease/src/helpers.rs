@@ -56,14 +56,6 @@ pub fn xmr_scalar_as_hex(s: &XmrScalar) -> String {
     hex::encode(s.to_repr())
 }
 
-/// Convert an XmrScalar (Ed25519 scalar) to a BIG-endian hex string.
-/// This output can be used in Prover.toml files for Noir circuits.
-pub fn xmr_scalar_as_be_hex(s: &XmrScalar) -> String {
-    let mut bytes = s.to_repr();
-    bytes.reverse();
-    hex::encode(bytes)
-}
-
 /// Serialize an XmrScalar (Ed25519 scalar) as a hex string.
 pub fn xmr_scalar_to_hex<S>(scalar: &XmrScalar, s: S) -> Result<S::Ok, S::Error>
 where

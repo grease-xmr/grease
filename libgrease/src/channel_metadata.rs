@@ -1,11 +1,12 @@
 use crate::amount::MoneroDelta;
+use crate::arbiter::ArbiterConfiguration;
 use crate::balance::Balances;
 use crate::channel_id::ChannelIdMetadata;
-use crate::key_escrow_services::{KesConfiguration, KesImplementation};
 use crate::payment_channel::ChannelRole;
 use ciphersuite::{Ciphersuite, Ed25519};
 use monero::Network;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Information about the channel that stays constant throughout the channel's lifetime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,22 +22,21 @@ pub struct StaticChannelMetadata<KC: Ciphersuite = Ed25519> {
     role: ChannelRole,
     /// The channel ID
     channel_id: ChannelIdMetadata<KC>,
-    /// Which KES implementation this channel uses
-    kes_type: KesImplementation,
 }
 
 impl<KC: Ciphersuite> StaticChannelMetadata<KC> {
-    pub fn new(
-        network: Network,
-        role: ChannelRole,
-        channel_id: ChannelIdMetadata<KC>,
-        kes_type: KesImplementation,
-    ) -> Self {
-        Self { network, role, channel_id, kes_type }
+    pub fn new(network: Network, role: ChannelRole, channel_id: ChannelIdMetadata<KC>) -> Self {
+        Self { network, role, channel_id }
     }
 
     pub fn channel_id(&self) -> &ChannelIdMetadata<KC> {
         &self.channel_id
+    }
+
+    /// Mutable access to the channel id metadata, so the establishing state can bind it to the funding output's
+    /// linking tag. Nothing else in the channel's lifetime may change the id.
+    pub(crate) fn channel_id_mut(&mut self) -> &mut ChannelIdMetadata<KC> {
+        &mut self.channel_id
     }
 
     pub fn role(&self) -> ChannelRole {
@@ -47,13 +47,14 @@ impl<KC: Ciphersuite> StaticChannelMetadata<KC> {
         self.network
     }
 
-    pub fn kes_type(&self) -> &KesImplementation {
-        &self.kes_type
+    /// The arbiter the two parties agreed on when they negotiated this channel.
+    pub fn arbiter_configuration(&self) -> &ArbiterConfiguration {
+        self.channel_id.arbiter_config()
     }
 
-    /// Returns the KES configuration committed to in this channel's ID.
-    pub fn kes_configuration(&self) -> &KesConfiguration<KC> {
-        self.channel_id.kes_config()
+    /// The adjudication window `dw` agreed with the arbiter.
+    pub fn dispute_window(&self) -> Duration {
+        self.arbiter_configuration().dispute_window()
     }
 
     /// Returns the initial balance from the channel ID metadata.

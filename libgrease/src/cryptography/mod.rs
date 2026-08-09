@@ -1,110 +1,94 @@
 //! Cryptographic primitives for Grease payment channels.
 //!
-//! This module provides the cryptographic foundation for Grease, including zero-knowledge
-//! proofs, cross-curve operations, and encryption primitives. Types are generally curve-agnostic
-//! and protocol-independent where possible.
+//! This module provides the cryptographic foundation for the v2 (arbiter) design: verifiable encryption of
+//! adaptor offsets to a statement, the proof that binds a ciphertext to the adaptor point it claims to open,
+//! and the BLS12-381 attestation the arbiter publishes to unlock it. Types are curve-agnostic and
+//! protocol-independent where possible.
 //!
 //! # Architecture Overview
 //!
 //! ```text
 //!                          ┌─────────────────────────────────────────────┐
 //!                          │           Payment Channel Layer             │
+//!                          │   update · cooperative close · dispute      │
 //!                          └─────────────────────────────────────────────┘
 //!                                              │
-//!                                              ▼
-//!     ┌──────────────────────────────────────────────────────────────────┐
-//!     │                    VCOF (State Transitions)                      │
-//!     │  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────┐  │
-//!     │  │    vcof     │───▶│  vcof_impls  │───▶│    noir_prover      │  │
-//!     │  │  (traits)   │    │ (Grumpkin/   │    │  (circuit runner)   │  │
-//!     │  │             │    │  Poseidon2)  │    │                     │  │
-//!     │  └─────────────┘    └──────────────┘    └─────────────────────┘  │
-//!     │         │                  │                      │              │
-//!     │         ▼                  ▼                      ▼              │
-//!     │  ┌─────────────────────────────────────────────────────────────┐ │
-//!     │  │                      witness                                │ │
-//!     │  │         (Cross-curve scalar representation)                 │ │
-//!     │  │           Ed25519 ◀──────────────▶ SNARK curve              │ │
-//!     │  └─────────────────────────────────────────────────────────────┘ │
+//!                       ω (fresh offset per state, per party)
+//!                                              │
+//!     ┌────────────────────────────────────────▼─────────────────────────┐
+//!     │                Sealing an offset to a statement                  │
+//!     │  ┌──────────────────┐    ┌──────────┐    ┌────────────────────┐  │
+//!     │  │  binding_proof   │───▶│   pvss   │───▶│verifiable_encrypt. │  │
+//!     │  │ (cut-and-choose: │    │ (dual-   │    │ (EncryptToStatement│  │
+//!     │  │  ω ↔ Q = ω·G)    │    │  base    │    │  /DecryptWith-     │  │
+//!     │  │                  │    │  Feldman)│    │   Attestation)     │  │
+//!     │  └──────────────────┘    └──────────┘    └─────────┬──────────┘  │
+//!     └────────────────────────────────────────────────────┼─────────────┘
+//!                                                          │
+//!                                    σ_m, the arbiter's attestation on m
+//!                                                          │
+//!     ┌────────────────────────────────────────────────────▼─────────────┐
+//!     │                          attestation                             │
+//!     │      BLS12-381 / vetKD-compatible: H_P, H_F, G_T, pairing check  │
 //!     └──────────────────────────────────────────────────────────────────┘
-//!                                              │
-//!     ┌────────────────────────────────────────┼────────────────────────┐
-//!     │              Cross-Curve Proofs        │                        │
-//!     │  ┌─────────────┐    ┌──────────────┐   │   ┌─────────────────┐  │
-//!     │  │    dleq     │    │vcf_snark_dleq│   │   │adapter_signature│  │
-//!     │  │ (Ed25519 ↔  │    │ (SNARK-based │   │   │  (atomic swaps) │  │
-//!     │  │  SF curve)  │    │  DLEQ VCOF)  │   │   │                 │  │
-//!     │  └─────────────┘    └──────────────┘   │   └─────────────────┘  │
-//!     └────────────────────────────────────────┴────────────────────────┘
-//!                                              │
-//!     ┌────────────────────────────────────────┼────────────────────────┐
-//!     │              Encryption & Proofs       │                        │
-//!     │  ┌─────────────┐    ┌──────────────┐   │   ┌─────────────────┐  │
-//!     │  │ ecdh_encrypt│    │secret_encrypt│   │   │       pok       │  │
-//!     │  │ (scalar     │    │ (role-tagged │   │   │ (Schnorr PoK,   │  │
-//!     │  │  encryption)│    │  encryption) │   │   │  KES proofs)    │  │
-//!     │  └─────────────┘    └──────────────┘   │   └─────────────────┘  │
-//!     └────────────────────────────────────────┴────────────────────────┘
-//!                                              │
-//!     ┌────────────────────────────────────────┼────────────────────────┐
-//!     │              Foundation                │                        │
-//!     │  ┌─────────────┐    ┌──────────────┐   │   ┌─────────────────┐  │
-//!     │  │    keys     │    │    commit    │   │                       │
-//!     │  │ (Curve25519 │    │ (hash-based  │   │                       │
-//!     │  │  keypairs)  │    │ commitments) │   │                       │
-//!     │  └─────────────┘    └──────────────┘   │                       │
-//!     └─────────────────────────────────────────────────────────────────┘
+//!
+//!     ┌──────────────────────────────────────────────────────────────────┐
+//!     │                    Signatures & proofs of knowledge              │
+//!     │  ┌────────────────────┐             ┌──────────────────────────┐ │
+//!     │  │ adapter_signature  │             │           pok            │ │
+//!     │  │ (Schnorr adaptor;  │             │ (Schnorr proofs of       │ │
+//!     │  │  ω completes it)   │             │  knowledge)              │ │
+//!     │  └────────────────────┘             └──────────────────────────┘ │
+//!     └──────────────────────────────────────────────────────────────────┘
+//!
+//!     ┌──────────────────────────────────────────────────────────────────┐
+//!     │                            Foundation                            │
+//!     │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐  │
+//!     │  │   keys    │  │   commit  │  │    pok    │  │ecdh/ecdh_encr.│  │
+//!     │  └───────────┘  └───────────┘  └───────────┘  └───────────────┘  │
+//!     └──────────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! # Module Reference
 //!
-//! ## Core VCOF Infrastructure
+//! ## Sealing an offset and opening it again
 //!
-//! | Module           | Purpose                                                          |
-//! |------------------|------------------------------------------------------------------|
-//! | [`vcof`]         | Trait definitions for Verifiable Consecutive Oneway Functions    |
-//! | [`vcof_impls`]   | Production implementations using Grumpkin curve + Poseidon2 hash |
-//! | [`noir_prover`]  | Noir circuit execution and proof generation                      |
-//! | [`witness`]      | [`CrossCurveScalar`] - scalars valid in both Ed25519 and SNARK fields |
+//! | Module                    | Purpose                                                                          |
+//! |---------------------------|----------------------------------------------------------------------------------|
+//! | [`verifiable_encryption`] | `EncryptToStatement` / `DecryptWithAttestation` against the arbiter's master key  |
+//! | [`pvss`]                  | Dual-base Feldman PVSS with per-coefficient DLEQs — the shares the seal carries   |
+//! | [`binding_proof`]         | Cut-and-choose proof that the sealed shares open to ω with `Q = ω·G`, plus recovery |
+//! | [`attestation`]           | BLS12-381 attestation plumbing (vetKD-compatible): H_P, H_F, G_T, pairing verify  |
 //!
-//! ## Cross-Curve Cryptography
+//! ## Signatures and proofs of knowledge
 //!
-//! | Module                | Purpose                                                                      |
-//! |-----------------------|------------------------------------------------------------------------------|
-//! | [`dleq`]              | Discrete log equality proofs across curve pairs (Ed25519 ↔ BabyJubJub/Secp256k1/Grumpkin) |
-//! | [`adapter_signature`] | Schnorr adapter signatures for atomic swap protocols                         |
+//! | Module                | Purpose                                                                          |
+//! |-----------------------|----------------------------------------------------------------------------------|
+//! | [`adapter_signature`] | Schnorr adaptor signatures — the pre-signature an offset ω completes              |
+//! | [`pok`]               | Schnorr proofs of knowledge                                                       |
 //!
-//! ## Encryption & Commitments
+//! ## Encryption, commitments and keys
 //!
-//! | Module               | Purpose                                                      |
-//! |----------------------|--------------------------------------------------------------|
-//! | [`ecdh_encrypt`]     | Ephemeral ECDH encryption for scalar values                  |
-//! | [`secret_encryption`]| Role-tagged secrets (Customer/Merchant) with ECDH encryption |
-//! | [`pok`]              | Schnorr proofs of knowledge ([`SchnorrPoK`], [`KesPoK`])     |
-//! | [`commit`]           | Hash-based commitments with configurable digest algorithms   |
-//!
-//! ## Key Management & Data Types
-//!
-//! | Module         | Purpose                                                        |
-//! |----------------|----------------------------------------------------------------|
-//! | [`keys`]       | Curve25519 secret/public key types for Monero wallet operations|
+//! | Module                 | Purpose                                                            |
+//! |------------------------|--------------------------------------------------------------------|
+//! | [`ecdh`]               | Shared-secret derivation between two parties                       |
+//! | [`ecdh_encrypt`]       | Ephemeral ECDH encryption for scalar values                        |
+//! | [`Commit`]             | Hash-based commitments with configurable digest algorithms         |
+//! | [`keys`]               | Curve25519 secret/public key types for Monero wallet operations    |
+//! | [`encryption_context`] | Ambient key material that encrypts secrets at rest on serialization |
 //!
 //! # Curve Support
 //!
-//! The module supports multiple elliptic curves for different purposes:
-//!
-//! | Curve           | Field Size | Usage                                              |
-//! |-----------------|------------|----------------------------------------------------|
-//! | **Ed25519**     | ~253 bits  | Monero signatures, base curve for cross-curve proofs |
-//! | **Grumpkin**    | ~254 bits  | SNARK-friendly curve (BN254 cycle), Noir circuits  |
-//! | **BabyJubJub**  | ~251 bits  | SNARK-friendly curve (legacy support)              |
-//! | **Secp256k1**   | ~256 bits  | Bitcoin/Ethereum compatibility                     |
+//! | Curve            | Usage                                                                       |
+//! |------------------|-----------------------------------------------------------------------------|
+//! | **Ed25519**      | Monero signatures, adaptor offsets, PVSS and the binding proof               |
+//! | **BLS12-381**    | Arbiter master key, statement hashing and attestation verification (vetKD)   |
 //!
 //! # Security Considerations
 //!
 //! - All secret scalars implement [`Zeroize`](zeroize::Zeroize) for secure memory cleanup
-//! - Cross-curve scalar conversion requires careful handling of field order differences
 //! - Identity point rejection prevents trivial forgery attacks in proofs
+//! - Offsets are fresh and independent per state and per party; nothing is derived from a previous offset
 
 mod commit;
 pub mod encryption_context;
@@ -112,18 +96,12 @@ pub mod secret_bytes;
 pub mod serializable_secret;
 
 pub mod adapter_signature;
-pub mod dleq;
+pub mod attestation;
+pub mod binding_proof;
 pub mod ecdh;
 pub mod ecdh_encrypt;
 pub mod keys;
-#[cfg(feature = "mocks")]
-pub mod mocks;
-pub mod noir_prover;
 pub mod pok;
-pub mod secret_encryption;
-pub mod vcof;
-pub mod vcof_impls;
-mod vcof_snark_dleq;
-mod witness;
+pub mod pvss;
+pub mod verifiable_encryption;
 pub use commit::{Commit, HashCommitment256};
-pub use witness::{convert_scalar_dleq, AsXmrPoint, CrossCurveError, CrossCurvePoints, CrossCurveScalar, Offset};

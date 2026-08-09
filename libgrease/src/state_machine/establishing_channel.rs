@@ -1,18 +1,34 @@
+//! The `Establishing` lifecycle state.
+//!
+//! Spec: `docs/src/14_establishing_channel.typ` §`initProtocol`, with the message flow in
+//! `docs/diagrams/establish_channel_sequence_a.md` and `..._b.md`.
+//!
+//! Establishment runs in five moves, and the arbiter plays no part in any of them:
+//!
+//! 1. **Shared wallet.** The two parties run the commit-then-reveal key exchange in
+//!    [`multisig_setup`](crate::state_machine::multisig_setup) and end up holding the same 2-of-2 FROST wallet.
+//! 2. **Final channel id.** They jointly derive the funding output's linking tag `L_F` — each contributes a
+//!    partial tag from its own MuSig share — and bind the channel id to it. The provisional `XGT…` id from the
+//!    proposal becomes the final `XGC…` id, and every signature exchanged afterwards commits to it.
+//! 3. **Initial commitment transaction.** The FROST preprocessing round trip, after which each side can adapt
+//!    its partial signature.
+//! 4. **Initial state exchange.** Each party draws a fresh offset `ω`, adapter-signs the *counterparty's*
+//!    closing transaction with it, seals `ω` to the statement `m = (channel_id, 0)` under the arbiter's master
+//!    key, and sends the resulting [`ChannelInitPackage`]. Each verifies the counterparty's binding proof,
+//!    adaptor signature and payload signature before accepting the initial state.
+//! 5. **Funding.** The customer funds the shared wallet; once the funding transaction confirms, both sides move
+//!    to `Open`.
+
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
-use crate::channel_id::ChannelIdMetadata;
+use crate::channel_id::{ChannelId, ChannelIdMetadata};
 use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
-use crate::cryptography::adapter_signature::{AdaptedSignature, SchnorrSignature};
-use crate::cryptography::dleq::{Dleq, DleqProof};
+use crate::cryptography::binding_proof::BindingProofParams;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey, PublicKeyCommitment};
-use crate::cryptography::pok::KesPoKProofs;
-use crate::cryptography::secret_encryption::{EncryptedSecret, SecretWithRole};
 use crate::cryptography::serializable_secret::SerializableSecret;
-use crate::cryptography::{CrossCurveScalar, Offset};
-use crate::grease_protocol::channel_keys::{self, ChannelNonce, EphemeralChannelId};
-use crate::grease_protocol::establish_channel::{payload_signature_message, ChannelInitPackage, EstablishError};
-use crate::grease_protocol::kes_establishing::KesInitBundle;
+use crate::grease_protocol::establish_channel::{ChannelInitPackage, EstablishError, INITIAL_UPDATE_COUNT};
 use crate::grease_protocol::multisig_wallet::{LinkedMultisigWallets, MultisigWalletError, SharedPublicKey};
+use crate::grease_protocol::update_record::CloseHash;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::{ChannelRole, HasRole};
@@ -20,41 +36,38 @@ use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::lifecycle::ChannelState;
 use crate::state_machine::open_channel::EstablishedChannelState;
 use crate::state_machine::proposing_channel::{AwaitingConfirmation, AwaitingProposalResponse};
-use ciphersuite::Ed25519;
+use crate::wallet::multisig_wallet::{commitment_tx_message, signature_share_to_scalar};
+use crate::{XmrPoint, XmrScalar};
+use ciphersuite::{Ciphersuite, Ed25519};
 use log::*;
-use modular_frost::curve::Curve as FrostCurve;
-use rand_core::{CryptoRng, OsRng, RngCore};
+use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use zeroize::Zeroizing;
+
 //------------------------------------   Establishing Channel State  ------------------------------------------------//
 
 /// State for a channel being established.
 ///
-/// This state provides the cryptographic operations needed during channel establishment
-/// including wallet key exchange, KES client setup, and adapter signature verification.
+/// It carries the material the two parties build during establishment: the shared wallet, the final channel id,
+/// this party's fresh initial offset `ω` and the two [`ChannelInitPackage`]s that fix the initial state.
 ///
-/// The generic parameter `KC` specifies the Curve that the KES has elected to use. By default, the KES uses Ed25519,
-/// the same curve as Monero.
+/// The generic parameter `KC` is the curve the channel keys live on. It is `Ed25519` — the same curve as Monero —
+/// everywhere in practice, and the protocol steps that touch Monero material are implemented for that curve only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = "KC::F: ciphersuite::group::ff::PrimeFieldBits"))]
 pub struct EstablishingState<KC = Ed25519>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     // Variables specified at start of stage
     pub(crate) metadata: StaticChannelMetadata<KC>,
-    /// The channel nonce ($\hat{k}_a$ or $\hat{k}_b$) with its ECDH-MC shared secret.
-    pub(crate) channel_nonce: ChannelNonce<KC>,
-    /// The encrypted initial adapter offset to be sent to the KES, ($\chi$).
-    pub(crate) encrypted_offset: EncryptedSecret<KC>,
-    /// My DLEQ proof for the initial adapter offset (public data).
-    pub(crate) dleq_proof: DleqProof<KC, Ed25519>,
-    /// The channel witness, kept between `initialize_channel_secrets` and `generate_init_package`.
-    /// Encrypted at rest via [`CrossCurveScalar`]'s serde implementation.
-    pub(crate) initial_adapter_offset: CrossCurveScalar<KC>,
-    /// This parties half of the multisig wallet's private spend key
+    /// This party's channel key, `k_a` (customer) or `k_b` (merchant). Its public key is the party's key in the
+    /// channel-id transcript, and it is what signs this party's half of every [`UpdateRecord`] once the channel
+    /// is open.
+    ///
+    /// [`UpdateRecord`]: crate::grease_protocol::update_record::UpdateRecord
+    pub(crate) channel_secret: SerializableSecret<KC::F>,
+    /// This party's half of the multisig wallet's private spend key.
     pub(crate) wallet_partial_spend_key: Curve25519Secret,
 
     // Variables determined during the stage
@@ -64,7 +77,6 @@ where
         deserialize_with = "crate::helpers::deserialize_tx_map"
     )]
     pub(crate) funding_transaction_ids: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) kes_proof: Option<KesPoKProofs<KC>>,
     /// Data used to watch for the funding transaction. Implementation agnostic.
     #[serde(
         serialize_with = "crate::helpers::option_to_hex",
@@ -73,98 +85,50 @@ where
         default
     )]
     pub(crate) funding_tx_pipe: Option<Vec<u8>>,
-    /// The peer's encrypted initial adapter offset to be sent to the KES, ($\chi$).
+    /// The cut-and-choose profile this channel's binding proofs use. Production unless a test lowers it.
+    #[serde(default = "BindingProofParams::production")]
+    pub(crate) binding_proof_params: BindingProofParams,
+    /// Our fresh secret offset `ω_0` for the initial state, kept until that state is superseded or the channel
+    /// closes cooperatively. Encrypted at rest.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) peer_encrypted_offset: Option<EncryptedSecret<KC>>,
-    /// Peer's DLEQ proof received during establishment (public data).
+    pub(crate) initial_offset: Option<SerializableSecret<XmrScalar>>,
+    /// The package we sent the counterparty.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) peer_dleq_proof: Option<DleqProof<KC, Ed25519>>,
-    /// My adapted signature for the initial channel close transaction (public data).
+    pub(crate) my_init_package: Option<ChannelInitPackage>,
+    /// The counterparty's package, stored only after it verified in full.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) adapted_sig: Option<AdaptedSignature<Ed25519>>,
-    /// Peer's adapted signature for the initial channel close transaction received during establishment (public data).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) peer_adapted_sig: Option<AdaptedSignature<Ed25519>>,
-    /// Our payload signature (signs our init package fields with ephemeral key).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) payload_sig: Option<SchnorrSignature<KC>>,
-    /// Peer's payload signature received during init package exchange.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) peer_payload_sig: Option<SchnorrSignature<KC>>,
-    /// Peer's nonce public key from their init package.
-    #[serde(
-        serialize_with = "crate::helpers::option_serialize_ge",
-        deserialize_with = "crate::helpers::option_deserialize_ge",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
-    pub(crate) peer_nonce_pubkey: Option<KC::G>,
+    pub(crate) peer_init_package: Option<ChannelInitPackage>,
     #[serde(skip)]
     pub(crate) preprepare_data: Vec<u8>,
 }
 
-/// Type alias for the default KES curve (Ed25519).
+/// Type alias for the default channel curve (Ed25519).
 pub type DefaultEstablishingState = EstablishingState;
 
 impl<KC> EstablishingState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     //---------------------------------------  Constructors -------------------------------------------------------//
-    /// Constructor for EstablishingState.
-    ///
-    /// This generates a wallet key ring for the establishment phase as well as
-    /// a random channel witness (valid in both Ed25519 and KC), then:
-    /// 1. Generates a DLEQ proof showing the witness is the same discrete log on both curves
-    /// 2. Encrypts the offset to the KES public key from metadata
-    /// 3. Stores the witness for adapter signature generation in [`generate_init_package`]
-    ///
-    /// The adapter signature is deferred to `generate_init_package` because it signs a
-    /// commitment transaction message that requires the full channel metadata (peer data).
-    fn new_with_secrets<R: RngCore + CryptoRng>(
-        rng: &mut R,
+
+    fn new(
         metadata: StaticChannelMetadata<KC>,
-        nonce: ChannelNonce<KC>,
-        partial_spend_key: Curve25519Secret,
-    ) -> Result<Self, EstablishError>
-    where
-        KC::F: ciphersuite::group::ff::PrimeFieldBits,
-    {
-        let role = metadata.role();
-        let initial_adapter_offset = CrossCurveScalar::<KC>::random_with_rng(rng);
-        let (proof, public_points) = <Ed25519 as Dleq<KC>>::generate_dleq(rng, &initial_adapter_offset)
-            .map_err(EstablishError::DleqGenerationError)?;
-        let dleq_proof = DleqProof::new(proof, public_points);
-
-        let kes_pubkey = metadata.kes_configuration().kes_public_key;
-        let kes_w0 = initial_adapter_offset.as_foreign_scalar();
-        let kes_w0 = SecretWithRole::new(kes_w0, role);
-        let domain = crate::grease_protocol::kes_establishing::kes_offset_domain(&metadata.channel_id().name());
-        let encrypted_offset = EncryptedSecret::encrypt(kes_w0, &kes_pubkey, rng, domain);
-
-        debug!("Channel secrets initialized: DLEQ proof, encrypted offset, and witness stored.");
-        let this = Self {
+        channel_secret: SerializableSecret<KC::F>,
+        wallet_partial_spend_key: Curve25519Secret,
+    ) -> Self {
+        Self {
             metadata,
-            channel_nonce: nonce,
-            wallet_partial_spend_key: partial_spend_key,
-            encrypted_offset,
-            dleq_proof,
-            initial_adapter_offset,
-            peer_nonce_pubkey: None,
+            channel_secret,
+            wallet_partial_spend_key,
             multisig_wallet: None,
             funding_transaction_ids: Default::default(),
-            kes_proof: None,
             funding_tx_pipe: None,
-            peer_encrypted_offset: None,
-            peer_dleq_proof: None,
-            adapted_sig: None,
-            peer_adapted_sig: None,
-            payload_sig: None,
-            peer_payload_sig: None,
+            binding_proof_params: BindingProofParams::production(),
+            initial_offset: None,
+            my_init_package: None,
+            peer_init_package: None,
             preprepare_data: vec![],
-        };
-        Ok(this)
+        }
     }
 
     //---------------------------------------  Accessors -------------------------------------------------------//
@@ -174,44 +138,24 @@ where
         self.metadata.channel_id()
     }
 
+    /// The channel id as it stands: provisional (`XGT…`) until the funding output's linking tag is bound to it.
+    pub fn channel_id(&self) -> ChannelId {
+        self.metadata.channel_id().name()
+    }
+
     /// The partial wallet public key
     pub fn partial_wallet_public_key(&self) -> Curve25519PublicKey {
         Curve25519PublicKey::from_secret(&self.wallet_partial_spend_key)
     }
 
-    /// The public key for this channel nonce, $hat(k)_a /cdot G$
-    pub fn nonce_pubkey(&self) -> &KC::G {
-        &self.channel_nonce.ephemeral_pubkey
+    /// The package this party sent, if it has been generated.
+    pub fn my_init_package(&self) -> Option<&ChannelInitPackage> {
+        self.my_init_package.as_ref()
     }
 
-    /// Compute the per-channel KES public key ($P_g = \kappa \cdot P_K$).
-    ///
-    /// Both parties can derive this locally from their ECDH-MC shared secret ($\kappa$)
-    /// and the global KES public key ($P_K$), without needing the KES to send it.
-    ///
-    /// $\kappa$ is derived from the party's own channel nonce and the peer's nonce public
-    /// key (received during init package exchange), ensuring both sides compute the same
-    /// value via ECDH symmetry.
-    ///
-    /// Returns `None` if the peer's nonce public key has not been received yet.
-    pub fn kes_channel_pubkey(&self) -> Option<KC::G> {
-        let peer_nonce_pk = self.peer_nonce_pubkey.as_ref()?;
-        let channel_id = self.metadata.channel_id().name();
-        let kappa = channel_keys::ephemeral_channel_id::<KC>(self.channel_nonce.nonce(), peer_nonce_pk, &channel_id);
-        let kes_pubkey = self.metadata.kes_configuration().kes_public_key;
-        Some(kes_pubkey * kappa)
-    }
-
-    pub fn peer_dleq_proof(&self) -> Option<&DleqProof<KC, Ed25519>> {
-        self.peer_dleq_proof.as_ref()
-    }
-
-    pub fn peer_adapted_signature(&self) -> Option<&AdaptedSignature<Ed25519>> {
-        self.peer_adapted_sig.as_ref()
-    }
-
-    pub fn peer_encrypted_offset(&self) -> Option<&EncryptedSecret<KC>> {
-        self.peer_encrypted_offset.as_ref()
+    /// The counterparty's package, present only once it verified in full.
+    pub fn peer_init_package(&self) -> Option<&ChannelInitPackage> {
+        self.peer_init_package.as_ref()
     }
 
     pub fn multisig_address(&self) -> Option<String> {
@@ -226,29 +170,18 @@ where
         self.multisig_wallet.as_ref()
     }
 
+    /// The cut-and-choose profile this channel's binding proofs use.
+    pub fn binding_proof_params(&self) -> BindingProofParams {
+        self.binding_proof_params
+    }
+
+    /// Lower the binding-proof profile. Test-only: production soundness is not negotiable on a live channel.
+    #[cfg(any(test, feature = "mocks"))]
+    pub fn set_binding_proof_params(&mut self, params: BindingProofParams) {
+        self.binding_proof_params = params;
+    }
+
     //---------------------------------------  Setters -------------------------------------------------------//
-
-    /// Set the peer's adapted signature.
-    pub fn set_peer_adapted_signature(&mut self, adapted_signature: AdaptedSignature<Ed25519>) {
-        self.peer_adapted_sig = Some(adapted_signature);
-    }
-
-    /// Set the peer's DLEQ proof.
-    pub fn set_peer_dleq_proof(&mut self, dleq_proof: DleqProof<KC, Ed25519>) {
-        self.peer_dleq_proof = Some(dleq_proof);
-    }
-
-    /// Read the peer's adapted signature from the given reader and store it.
-    pub fn store_peer_adapted_signature<R: std::io::Read>(&mut self, reader: &mut R) -> Result<(), EstablishError> {
-        let adapted_signature = AdaptedSignature::<Ed25519>::read(reader)?;
-        self.set_peer_adapted_signature(adapted_signature);
-        Ok(())
-    }
-
-    /// Set the peer's encrypted offset.
-    pub fn set_peer_encrypted_offset(&mut self, offset: EncryptedSecret<KC>) {
-        self.peer_encrypted_offset = Some(offset);
-    }
 
     pub fn wallet_created(&mut self, wallet: MultisigWallet) {
         debug!("Multisig wallet has been created.");
@@ -268,17 +201,12 @@ where
         }
     }
 
-    pub fn kes_created(&mut self, kes_info: KesPoKProofs<KC>) {
-        let old = self.kes_proof.replace(kes_info);
-        if old.is_some() {
-            warn!("KES proof was already set and has been replaced.");
-        }
-    }
-
     pub fn funding_tx_confirmed(&mut self, transaction: TransactionRecord) {
         debug!("Funding transaction broadcasted");
         self.funding_transaction_ids.insert(transaction.transaction_id.clone(), transaction);
     }
+
+    //-----------------------------------  Initial commitment transaction  ---------------------------------------//
 
     /// Prepare the initial commitment transaction for signing.
     ///
@@ -291,18 +219,14 @@ where
         use crate::wallet::common::MINIMUM_FEE;
         use crate::wallet::multisig_wallet::translate_payments;
 
-        let wallet = self
-            .multisig_wallet
-            .as_mut()
-            .ok_or_else(|| EstablishError::MissingInformation("Multisig wallet not created yet".into()))?;
-
         // Build payment destinations from closing addresses and initial balance
-        let closing_addrs = self.metadata.channel_id().closing_addresses();
+        let closing_addrs = *self.metadata.channel_id().closing_addresses();
         let balances = self.metadata.initial_balance();
         let unadjusted = [(closing_addrs.merchant, balances.merchant), (closing_addrs.customer, balances.customer)];
         let fee = MoneroAmount::from_piconero(MINIMUM_FEE);
         let payments = translate_payments(unadjusted, fee).map_err(MultisigWalletError::from)?;
 
+        let wallet = self.require_wallet_mut()?;
         // Prepare the transaction (creates signing machine and generates nonces)
         let mut rng = wallet.deterministic_rng();
         wallet.prepare(payments, &mut rng).await.map_err(MultisigWalletError::from)?;
@@ -321,14 +245,9 @@ where
     /// This stores the peer's preprocess data in the wallet and calls `partial_sign()`
     /// to generate our signing share. After this, [`generate_init_package()`] can be called.
     pub fn receive_peer_preprocess_data(&mut self, data: Vec<u8>) -> Result<(), EstablishError> {
-        let wallet = self
-            .multisig_wallet
-            .as_mut()
-            .ok_or_else(|| EstablishError::MissingInformation("Multisig wallet not created yet".into()))?;
-
+        let wallet = self.require_wallet_mut()?;
         wallet.set_peer_process_data(data);
         wallet.partial_sign().map_err(MultisigWalletError::from)?;
-
         Ok(())
     }
 
@@ -341,131 +260,33 @@ where
         }
     }
 
-    //---------------------------------------  Verification -------------------------------------------------------//
-
-    /// Verify the peer's payload signature from a [`ChannelInitPackage`].
-    ///
-    /// The signature is verified against the `nonce_pubkey` included in the package.
-    /// Identity of the signer is established through the DLEQ proof and adapter
-    /// signature verification performed after this step.
-    fn verify_payload_signature(&self, package: &ChannelInitPackage<KC>) -> Result<(), EstablishError> {
-        let t0 = package.dleq_proof.public_points.foreign_point();
-        let channel_id = self.metadata.channel_id().name();
-        let dw = self.metadata.kes_configuration().dispute_window;
-        let msg = payload_signature_message::<KC>(&channel_id, &package.encrypted_offset, dw, t0);
-        if !package.payload_signature.verify(&package.nonce_pubkey, &msg) {
-            return Err(EstablishError::InvalidPayloadSignature(
-                "Peer's payload signature does not verify against nonce key".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Verify that the adaptor signature offset given to the KES.
-    ///
-    /// Per Section 4.6 of the white paper, each peer needs to verify that the value that the counterparty gave to the
-    /// KES is in fact w0.
-    ///
-    /// This is done in three steps:
-    /// 1. Verify the DLEQ proof provided by the peer. This proves that T_0 = w_0.G on the KES' curve is the same as
-    ///    Q_0 = w_0.G on Ed25519.
-    /// 2. Verify that the adapted signature, (s_hat, R_0, Q_0) _would_ be a valid signature for the channel closing
-    ///    transaction _if_ we knew w (where Q_0 = w_0.G), since this would give us (s, R), the signature we need.
-    /// 3. Since we've established that Q blinds w, if S0 == Q, then we know that the peer provided the correct offset
-    ///    to the KES.
-    pub fn verify_initial_offset<B: AsRef<[u8]>>(&self, adapter_sig_msg: B) -> Result<(), EstablishError> {
-        use crate::cryptography::AsXmrPoint;
-        // 1. Check the adapter signature is valid.
-        let sig = self
-            .peer_adapted_signature()
-            .ok_or_else(|| EstablishError::MissingInformation("Adapted signature".into()))?;
-        let wallet = self
-            .multisig_wallet
+    fn require_wallet(&self) -> Result<&MultisigWallet, EstablishError> {
+        self.multisig_wallet
             .as_ref()
-            .ok_or_else(|| EstablishError::MissingInformation("Multisig wallet".into()))?;
-        let peer_pubkey = wallet.peer_public_key().as_point();
-        if !sig.verify(&peer_pubkey, adapter_sig_msg) {
-            return Err(EstablishError::InvalidDataFromPeer(
-                "Adapted signature verification failed".into(),
-            ));
-        }
-        trace!("VALID: Peer's adapted signature is valid.");
-        // 2. Check that Q matches the DLEQ proof's xmr_point.
-        let q0 = sig.adapter_commitment();
-        let dleq_proof =
-            self.peer_dleq_proof().ok_or_else(|| EstablishError::MissingInformation("DLEQ proof".into()))?;
-        if q0 != *dleq_proof.public_points.as_xmr_point() {
-            return Err(EstablishError::InvalidDataFromPeer(
-                "Peer public key does not match DLEQ proof".into(),
-            ));
-        }
-        trace!("Peer DLEQ proof Q0 matches adapter signature Q0.");
-        // 3. Verify the DLEQ proof itself.
-        dleq_proof.verify().map_err(EstablishError::AdapterSigOffsetError)?;
-        trace!("Peer DLEQ proof verified successfully.");
-        debug!("Adapter signature offset verified successfully.");
-        Ok(())
+            .ok_or_else(|| EstablishError::MissingInformation("Multisig wallet not created yet".into()))
     }
 
-    /// Verify the KES proof-of-knowledge against both parties' offset public points.
-    ///
-    /// The KES proof contains bound Schnorr proofs demonstrating the KES knows each
-    /// party's decrypted offset secret and the per-channel private key $k_g$. This method:
-    /// 1. Extracts offset public points from own and peer DLEQ proofs (KC curve)
-    /// 2. Gets the per-channel KES public key $P_g$ (set during establishment)
-    /// 3. Delegates to [`KesPoKProofs::verify_for`] for verification
-    pub fn verify_kes_proof(&self) -> Result<(), EstablishError> {
-        let kes_proof =
-            self.kes_proof.as_ref().ok_or_else(|| EstablishError::MissingInformation("KES proof".into()))?;
-        let my_dleq = &self.dleq_proof;
-        let peer_dleq = self
-            .peer_dleq_proof()
-            .ok_or_else(|| EstablishError::MissingInformation(format!("{} DLEQ proof", HasRole::role(self).other())))?;
-        let kes_channel_pubkey = self.kes_channel_pubkey().ok_or_else(|| {
-            EstablishError::MissingInformation(
-                "KES per-channel public key (P_g) — peer nonce pubkey not received".into(),
-            )
-        })?;
-        // Determine which offset is customer/merchant based on our role
-        let (customer_offset, merchant_offset) = match HasRole::role(self) {
-            ChannelRole::Customer => (my_dleq.public_points.foreign_point(), peer_dleq.public_points.foreign_point()),
-            ChannelRole::Merchant => (peer_dleq.public_points.foreign_point(), my_dleq.public_points.foreign_point()),
-        };
-        kes_proof.verify_for(customer_offset, merchant_offset, &kes_channel_pubkey)?;
-        debug!("KES proof-of-knowledge verified successfully.");
-        Ok(())
+    fn require_wallet_mut(&mut self) -> Result<&mut MultisigWallet, EstablishError> {
+        self.multisig_wallet
+            .as_mut()
+            .ok_or_else(|| EstablishError::MissingInformation("Multisig wallet not created yet".into()))
     }
 
     //---------------------------------------  State transition ------------------------------------------------------//
+
     pub fn requirements_met(&self) -> bool {
-        let mut missing = Vec::with_capacity(10);
+        let mut missing = Vec::with_capacity(6);
         if self.multisig_wallet.is_none() {
-            missing.push("Multisig wallet")
+            missing.push("Multisig wallet");
         }
-        if self.kes_proof.is_none() {
-            missing.push("KES PoK proofs");
+        if !self.metadata.channel_id().is_finalized() {
+            missing.push("Final channel id (the funding output's linking tag has not been bound to it)");
         }
-        // Add checks for all other Optional fields in this struct:
-        if self.peer_dleq_proof.is_none() {
-            missing.push("Peer DLEQ proof");
+        if self.my_init_package.is_none() {
+            missing.push("Our initial-state package");
         }
-        if self.peer_adapted_sig.is_none() {
-            missing.push("Peer adapted signature");
-        }
-        if self.peer_encrypted_offset.is_none() {
-            missing.push("Peer encrypted offset for KES");
-        }
-        if self.adapted_sig.is_none() {
-            missing.push("Adapted signature for initial channel state");
-        }
-        if self.payload_sig.is_none() {
-            missing.push("Payload signature");
-        }
-        if self.peer_payload_sig.is_none() {
-            missing.push("Peer payload signature");
-        }
-        if self.peer_nonce_pubkey.is_none() {
-            missing.push("Peer nonce public key");
+        if self.peer_init_package.is_none() {
+            missing.push("The counterparty's initial-state package");
         }
         if self.funding_tx_pipe.is_none() {
             error!("Funding transaction pipe data is required to detect channel funding, but it is missing.");
@@ -474,13 +295,13 @@ where
         if !self.is_fully_funded() {
             missing.push("Funding transaction fully funded");
         }
-        if !missing.is_empty() {
+        if missing.is_empty() {
+            debug!("EstablishingState requirements met");
+            true
+        } else {
             let msg = missing.join(", ");
             debug!("EstablishingState requirements not met: {msg}");
             false
-        } else {
-            debug!("EstablishingState requirements met");
-            true
         }
     }
 
@@ -506,153 +327,166 @@ where
             return Err((self, LifeCycleError::InvalidStateTransition));
         }
         debug!("Transitioning to Established wallet state");
-        let kes_channel_pubkey = self.kes_channel_pubkey();
-        let dynamic = DynamicChannelMetadata::new(self.metadata.initial_balance(), 0);
+        let dynamic = DynamicChannelMetadata::new(self.metadata.initial_balance(), INITIAL_UPDATE_COUNT);
         let open_channel = EstablishedChannelState {
             metadata: self.metadata,
             dynamic,
             multisig_wallet: self.multisig_wallet.unwrap(),
             funding_transactions: self.funding_transaction_ids,
             current_update: None,
-            kes_channel_pubkey,
         };
         Ok(open_channel)
     }
 }
 
-// --- HasRole, HasPublicKey, HasSecretKey implementations ---
+//----------------------------------  The v2 establishment protocol (Ed25519)  ---------------------------------------//
+
+impl EstablishingState<Ed25519> {
+    /// This party's share of the funding output's linking tag `L_F`, to be sent to the counterparty.
+    ///
+    /// Neither party holds the shared wallet's spend key, so neither can compute `L_F` alone; the two partials
+    /// sum to it. See [`MultisigWallet::partial_linking_tag`].
+    pub fn partial_linking_tag(&self) -> Result<XmrPoint, EstablishError> {
+        let tag = self.require_wallet()?.partial_linking_tag().map_err(MultisigWalletError::from)?;
+        Ok(tag)
+    }
+
+    /// Bind the channel id to the funding output's linking tag and return the resulting final id.
+    ///
+    /// `peer_partial` is the counterparty's half of `L_F`. Both parties combine the same two partials, so both
+    /// arrive at the same final id. This is the point at which the provisional `XGT…` id quoted during
+    /// negotiation is replaced: it must happen before any initial-state material is exchanged, because every
+    /// signature in a [`ChannelInitPackage`] commits to the channel id.
+    ///
+    /// Refuses to re-bind an id that is already final — that would silently rename a channel the counterparty
+    /// already refers to by its current id.
+    pub fn finalize_channel_id(&mut self, peer_partial: &XmrPoint) -> Result<ChannelId, EstablishError> {
+        let linking_tag = self.require_wallet()?.linking_tag(peer_partial).map_err(MultisigWalletError::from)?;
+        let id = self.metadata.channel_id_mut().finalize(linking_tag)?;
+        debug!("Channel id bound to the funding output: {id}");
+        Ok(id)
+    }
+
+    /// The canonical hash of the closing transaction *held by* `holder` at the initial state.
+    ///
+    /// The two parties hold different closing transactions, so the two adaptor signatures exchanged during
+    /// establishment are never over the same bytes.
+    pub fn initial_close_hash(&self, holder: ChannelRole) -> Result<CloseHash, EstablishError> {
+        let id = self.channel_id();
+        let balances = self.metadata.initial_balance();
+        let msg = commitment_tx_message(
+            &id,
+            INITIAL_UPDATE_COUNT,
+            holder,
+            balances.customer.to_piconero(),
+            balances.merchant.to_piconero(),
+        );
+        Ok(CloseHash::try_from(msg)?)
+    }
+
+    /// Generate this party's [`ChannelInitPackage`]: a fresh offset `ω`, the adaptor signature over the
+    /// *counterparty's* closing transaction, `ω` sealed to `m = (channel_id, 0)` under the arbiter's master key,
+    /// and the binding proof tying the two together.
+    ///
+    /// Requires the shared wallet, a final channel id, and a completed FROST partial signature
+    /// ([`prepare_initial_transaction`](Self::prepare_initial_transaction) followed by
+    /// [`receive_peer_preprocess_data`](Self::receive_peer_preprocess_data)): the adaptor signature adapts *that*
+    /// partial signature, so revealing `ω` yields a share the wallet can complete into a broadcastable close.
+    pub fn generate_init_package<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<ChannelInitPackage, EstablishError> {
+        self.require_final_channel_id()?;
+        let signing_key = self.wallet_signing_key()?;
+        let peer_close_hash = self.initial_close_hash(HasRole::role(self).other())?;
+        let (package, omega) = ChannelInitPackage::create(
+            &self.channel_id(),
+            &peer_close_hash,
+            self.metadata.dispute_window(),
+            &signing_key,
+            self.metadata.arbiter_configuration().master_public_key(),
+            self.binding_proof_params,
+            rng,
+        )?;
+        self.initial_offset = Some(omega.into());
+        self.my_init_package = Some(package.clone());
+        debug!("Initial-state package generated for state {INITIAL_UPDATE_COUNT}");
+        Ok(package)
+    }
+
+    /// Verify the counterparty's [`ChannelInitPackage`] and, only if every check passes, accept the initial
+    /// state.
+    ///
+    /// The three checks are the ones the sequence diagram fixes: the adaptor signature verifies under the
+    /// counterparty's wallet key over *our* closing transaction, the binding proof holds for
+    /// `m = (channel_id, 0)` and targets exactly that signature's adaptor point `Q`, and the payload signature
+    /// binds the bundle to the channel parameters.
+    pub fn receive_peer_init_package(&mut self, package: ChannelInitPackage) -> Result<(), EstablishError> {
+        self.require_final_channel_id()?;
+        let peer_pubkey = self.require_wallet()?.peer_public_key().as_point();
+        let own_close_hash = self.initial_close_hash(HasRole::role(self))?;
+        package.verify(
+            &self.channel_id(),
+            &own_close_hash,
+            self.metadata.dispute_window(),
+            &peer_pubkey,
+            self.metadata.arbiter_configuration().master_public_key(),
+        )?;
+        debug!("The counterparty's initial-state package verified; accepting state {INITIAL_UPDATE_COUNT}");
+        self.peer_init_package = Some(package);
+        Ok(())
+    }
+
+    /// The wallet signing share this party adapts. Available once the FROST preprocessing round trip has
+    /// completed.
+    fn wallet_signing_key(&self) -> Result<XmrScalar, EstablishError> {
+        let share = self.require_wallet()?.my_signing_share().ok_or_else(|| {
+            EstablishError::MissingInformation(
+                "Wallet signing share — the initial commitment transaction has not been partially signed".into(),
+            )
+        })?;
+        Ok(signature_share_to_scalar(share))
+    }
+
+    fn require_final_channel_id(&self) -> Result<(), EstablishError> {
+        if self.metadata.channel_id().is_finalized() {
+            Ok(())
+        } else {
+            Err(EstablishError::MissingInformation(
+                "Final channel id — the funding output's linking tag has not been bound to it yet".into(),
+            ))
+        }
+    }
+}
+
+// --- HasRole implementation ---
 
 impl<KC> HasRole for EstablishingState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     fn role(&self) -> ChannelRole {
         self.metadata.role()
     }
 }
 
-// --- Peer info accessors ---
-
-impl<KC> EstablishingState<KC>
-where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
-{
-    /// Generate a [`ChannelInitPackage`] containing an encrypted offset, adapted signature,
-    /// and DLEQ proof for the initial channel state.
-    ///
-    /// The adapter signature is generated here (rather than in `initialize_channel_secrets`)
-    /// because it signs a commitment transaction message built from the full channel metadata.
-    ///
-    /// Requires that `prepare_initial_transaction()` has been called and `partial_sign()` completed.
-    pub fn generate_init_package<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<ChannelInitPackage<KC>, EstablishError> {
-        // Check that the initial commitment transaction is ready and has been signed.
-        let Some(wallet) = self.multisig_wallet.as_ref() else {
-            return Err(EstablishError::MissingInformation("Multisig wallet not created yet".into()));
-        };
-
-        // Generate the commitment transaction message binding the signature to the channel state
-        let msg = self.commitment_message();
-
-        let initial_witness = Curve25519Secret::from(*self.initial_adapter_offset.offset());
-        let adapted_sig = wallet.adapt_signature(&initial_witness, &msg).map_err(MultisigWalletError::from)?;
-        let adapted_signature = adapted_sig.clone();
-        self.adapted_sig = Some(adapted_sig);
-        let dleq_proof = self.dleq_proof.clone();
-        // Sign the payload with the raw nonce key to bind the package to channel parameters
-        let payload_signature = self.sign_init_package(rng, &dleq_proof);
-        self.payload_sig = Some(payload_signature.clone());
-        let nonce_pubkey = KC::generator() * self.channel_nonce.nonce();
-        let encrypted_offset = self.encrypted_offset.clone();
-        Ok(ChannelInitPackage { encrypted_offset, adapted_signature, dleq_proof, payload_signature, nonce_pubkey })
-    }
-
-    /// Generate the commitment transaction message for the initial channel state.
-    ///
-    /// This binds the adapter signature to the channel ID and initial balances.
-    pub fn commitment_message(&self) -> Vec<u8> {
-        use crate::wallet::multisig_wallet::commitment_tx_message;
-        let channel_id = self.metadata.channel_id().name();
-        let balances = self.metadata.initial_balance();
-        commitment_tx_message(&channel_id, 0, balances.customer.to_piconero(), balances.merchant.to_piconero())
-    }
-
-    fn sign_init_package<R: RngCore + CryptoRng>(
-        &self,
-        rng: &mut R,
-        dleq: &DleqProof<KC, Ed25519>,
-    ) -> SchnorrSignature<KC> {
-        let t0 = dleq.public_points.foreign_point();
-        let channel_id = self.metadata.channel_id().name();
-        let dw = self.metadata.kes_configuration().dispute_window;
-        let encrypted_offset = &self.encrypted_offset;
-        let msg = payload_signature_message::<KC>(&channel_id, encrypted_offset, dw, t0);
-        SchnorrSignature::<KC>::sign(self.channel_nonce.nonce(), &msg, rng)
-    }
-
-    /// Creates a unique channel keypair, $\kappa$ ([`EphemeralChannelId`]) to send to the KES. Both the customer and merchant know the
-    /// secret key. The KES uses this value to derive a unique public key for the channel that it then shares with the parties.
-    ///
-    /// Uses the party's nonce ($\hat{k}$) and the peer's nonce public key (received during
-    /// init package exchange) to derive a shared secret via ECDH-MC, then encrypts it to
-    /// the KES global public key. Both parties derive the same shared secret via ECDH symmetry.
-    pub fn generate_kes_channel_id<R: RngCore + CryptoRng>(
-        &self,
-        rng: &mut R,
-    ) -> Result<EphemeralChannelId<KC>, EstablishError> {
-        let peer_nonce_pk = self
-            .peer_nonce_pubkey
-            .ok_or_else(|| EstablishError::MissingInformation("Peer nonce public key not received".into()))?;
-        let kes_config = self.metadata.kes_configuration();
-        let channel_id = self.metadata.channel_id().name();
-        Ok(channel_keys::new_ephemeral_channel_id::<KC, _, R>(
-            channel_id,
-            self,
-            self.channel_nonce.nonce(),
-            &peer_nonce_pk,
-            &kes_config.kes_public_key,
-            rng,
-        ))
-    }
-}
-
 // ---------------------------------- From conversions for proposal states ------------------------------------------
 
-/// Helper to build a [`ChannelNonce`] from a proposal's channel secret and metadata.
-fn channel_nonce_from_proposal<KC: FrostCurve>(
-    secret: SerializableSecret<KC::F>,
-    metadata: &StaticChannelMetadata<KC>,
-) -> ChannelNonce<KC> {
-    let peer_pubkey = &metadata.kes_configuration().peer_public_key;
-    let channel_id = metadata.channel_id().name();
-    ChannelNonce::new(Zeroizing::new(*secret), peer_pubkey, &channel_id)
-}
-
-impl<KC> TryFrom<AwaitingProposalResponse<KC>> for EstablishingState<KC>
+impl<KC> From<AwaitingProposalResponse<KC>> for EstablishingState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
-    type Error = EstablishError;
-    fn try_from(state: AwaitingProposalResponse<KC>) -> Result<Self, Self::Error> {
-        let channel_nonce = channel_nonce_from_proposal(state.channel_secret, &state.metadata);
-        EstablishingState::new_with_secrets(&mut OsRng, state.metadata, channel_nonce, state.partial_spend_key)
+    fn from(state: AwaitingProposalResponse<KC>) -> Self {
+        EstablishingState::new(state.metadata, state.channel_secret, state.partial_spend_key)
     }
 }
 
-impl<KC> TryFrom<AwaitingConfirmation<KC>> for EstablishingState<KC>
+impl<KC> From<AwaitingConfirmation<KC>> for EstablishingState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
-    type Error = EstablishError;
-    fn try_from(state: AwaitingConfirmation<KC>) -> Result<Self, Self::Error> {
-        let channel_nonce = channel_nonce_from_proposal(state.channel_secret, &state.metadata);
-        EstablishingState::new_with_secrets(&mut OsRng, state.metadata, channel_nonce, state.partial_spend_key)
+    fn from(state: AwaitingConfirmation<KC>) -> Self {
+        EstablishingState::new(state.metadata, state.channel_secret, state.partial_spend_key)
     }
 }
 
@@ -662,22 +496,14 @@ where
 ///
 /// Constructed on-demand when the merchant needs to perform establishment operations,
 /// then unwrapped via [`into_inner`](MerchantEstablishing::into_inner) to return the state.
-pub struct MerchantEstablishing<KC = Ed25519>
-where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
-{
-    inner: EstablishingState<KC>,
+pub struct MerchantEstablishing {
+    inner: EstablishingState,
     wallet_setup: MerchantSetup<MultisigWalletKeyNegotiation>,
 }
 
-impl<KC> MerchantEstablishing<KC>
-where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
-{
+impl MerchantEstablishing {
     /// Wrap an `EstablishingState`, returning an error if the state is not for a merchant.
-    pub fn new(state: EstablishingState<KC>, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
+    pub fn new(state: EstablishingState, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
         let role = HasRole::role(&state);
         if role != ChannelRole::Merchant {
             return Err(EstablishError::WrongRole { expected: ChannelRole::Merchant, got: role });
@@ -694,8 +520,18 @@ where
     }
 
     /// Unwrap and return the underlying `EstablishingState`.
-    pub fn into_inner(self) -> EstablishingState<KC> {
+    pub fn into_inner(self) -> EstablishingState {
         self.inner
+    }
+
+    /// Borrow the underlying state.
+    pub fn state(&self) -> &EstablishingState {
+        &self.inner
+    }
+
+    /// Mutably borrow the underlying state.
+    pub fn state_mut(&mut self) -> &mut EstablishingState {
+        &mut self.inner
     }
 
     /// Generate and return a commitment to the merchant's public key.
@@ -722,25 +558,6 @@ where
         Ok(())
     }
 
-    /// Borrow the underlying state.
-    pub fn state(&self) -> &EstablishingState<KC> {
-        &self.inner
-    }
-
-    /// Mutably borrow the underlying state.
-    pub fn state_mut(&mut self) -> &mut EstablishingState<KC> {
-        &mut self.inner
-    }
-
-    /// Generate a [`ChannelInitPackage`] containing the merchant's encrypted offset,
-    /// adapted signature, and DLEQ proof for the initial channel state.
-    pub fn generate_init_package<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<ChannelInitPackage<KC>, EstablishError> {
-        self.inner.generate_init_package(rng)
-    }
-
     /// Prepare the initial commitment transaction for signing.
     ///
     /// Delegates to [`EstablishingState::prepare_initial_transaction`].
@@ -760,89 +577,27 @@ where
         self.inner.receive_peer_preprocess_data(data)
     }
 
-    /// Receive and verify the customer's [`ChannelInitPackage`].
-    ///
-    /// Verifies the payload signature, then stores the customer's adapted signature,
-    /// DLEQ proof, and encrypted offset, and verifies the initial offset using
-    /// the 3-step verification (adapter sig + Q match + DLEQ).
-    pub fn receive_customer_init_package(&mut self, package: ChannelInitPackage<KC>) -> Result<(), EstablishError> {
-        self.inner.verify_payload_signature(&package)?;
-        self.inner.peer_payload_sig = Some(package.payload_signature.clone());
-        self.inner.peer_nonce_pubkey = Some(package.nonce_pubkey);
-        self.inner.set_peer_encrypted_offset(package.encrypted_offset);
-        self.inner.set_peer_adapted_signature(package.adapted_signature);
-        self.inner.set_peer_dleq_proof(package.dleq_proof);
-        // Verify the adapter signature and DLEQ proof
-        let msg = self.inner.commitment_message();
-        self.inner.verify_initial_offset(&msg)
+    /// The merchant's share of the funding output's linking tag `L_F`, to send to the customer.
+    pub fn partial_linking_tag(&self) -> Result<XmrPoint, EstablishError> {
+        self.inner.partial_linking_tag()
     }
 
-    /// Returns `true` if both own and peer encrypted offsets are available.
-    pub fn has_both_offsets(&self) -> bool {
-        self.inner.peer_encrypted_offset.is_some()
+    /// Bind the channel id to `L_F`, combining the customer's partial linking tag with the merchant's own.
+    pub fn finalize_channel_id(&mut self, customer_partial: &XmrPoint) -> Result<ChannelId, EstablishError> {
+        self.inner.finalize_channel_id(customer_partial)
     }
 
-    /// Bundle both encrypted offsets, payload signatures, and the ephemeral channel ID
-    /// ($\kappa$) for forwarding to the KES in a single message.
-    ///
-    /// The ephemeral channel ID is generated internally from the merchant's channel nonce
-    /// and encrypted to the KES global public key.
-    pub fn bundle_for_kes<R: RngCore + CryptoRng>(&self, rng: &mut R) -> Result<KesInitBundle<KC>, EstablishError> {
-        let merchant_encrypted_offset = self.inner.encrypted_offset.clone();
-        let customer_encrypted_offset = self
-            .inner
-            .peer_encrypted_offset
-            .clone()
-            .ok_or_else(|| EstablishError::MissingInformation("Customer encrypted offset (peer)".into()))?;
-        let merchant_dleq = &self.inner.dleq_proof;
-        let customer_dleq = self
-            .inner
-            .peer_dleq_proof
-            .as_ref()
-            .ok_or_else(|| EstablishError::MissingInformation("Customer DLEQ proof (peer)".into()))?;
-        let merchant_payload_sig = self
-            .inner
-            .payload_sig
-            .clone()
-            .ok_or_else(|| EstablishError::MissingInformation("Merchant payload signature".into()))?;
-        let customer_payload_sig = self
-            .inner
-            .peer_payload_sig
-            .clone()
-            .ok_or_else(|| EstablishError::MissingInformation("Customer payload signature (peer)".into()))?;
-
-        let channel_id = self.inner.metadata.channel_id().name();
-        let dispute_window = self.inner.metadata.kes_configuration().dispute_window;
-        let merchant_t0 = *merchant_dleq.public_points.foreign_point();
-        let customer_t0 = *customer_dleq.public_points.foreign_point();
-        // Nonce pubkeys: merchant own = G * nonce, customer = stored from their init package
-        let merchant_ephemeral_pubkey = KC::generator() * self.inner.channel_nonce.nonce();
-        let customer_ephemeral_pubkey = self
-            .inner
-            .peer_nonce_pubkey
-            .ok_or_else(|| EstablishError::MissingInformation("Customer nonce pubkey (peer)".into()))?;
-
-        let ephemeral_channel_id = self.inner.generate_kes_channel_id(rng)?;
-
-        Ok(KesInitBundle {
-            channel_id,
-            dispute_window,
-            customer_encrypted_offset,
-            customer_t0,
-            customer_ephemeral_pubkey,
-            customer_payload_sig,
-            merchant_encrypted_offset,
-            merchant_t0,
-            merchant_ephemeral_pubkey,
-            merchant_payload_sig,
-            ephemeral_channel_id,
-        })
+    /// Generate the merchant's [`ChannelInitPackage`] for the initial channel state.
+    pub fn generate_init_package<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<ChannelInitPackage, EstablishError> {
+        self.inner.generate_init_package(rng)
     }
 
-    /// Store a KES proof-of-knowledge received from the KES and verify it.
-    pub fn receive_kes_proof(&mut self, proof: KesPoKProofs<KC>) -> Result<(), EstablishError> {
-        self.inner.kes_created(proof);
-        self.inner.verify_kes_proof()
+    /// Verify and accept the customer's [`ChannelInitPackage`].
+    pub fn receive_customer_init_package(&mut self, package: ChannelInitPackage) -> Result<(), EstablishError> {
+        self.inner.receive_peer_init_package(package)
     }
 
     /// Stores the details of the funding transaction, passing through to the underlying EstablishingState call.
@@ -855,22 +610,14 @@ where
 ///
 /// Constructed on-demand when the customer needs to perform establishment operations,
 /// then unwrapped via [`into_inner`](CustomerEstablishing::into_inner) to return the state.
-pub struct CustomerEstablishing<KC = Ed25519>
-where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
-{
-    inner: EstablishingState<KC>,
+pub struct CustomerEstablishing {
+    inner: EstablishingState,
     wallet_setup: CustomerSetup<MultisigWalletKeyNegotiation>,
 }
 
-impl<KC> CustomerEstablishing<KC>
-where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
-{
+impl CustomerEstablishing {
     /// Wrap an `EstablishingState`, returning an error if the state is not for a customer.
-    pub fn new(state: EstablishingState<KC>, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
+    pub fn new(state: EstablishingState, rpc_url: impl Into<String>) -> Result<Self, EstablishError> {
         let role = HasRole::role(&state);
         if role != ChannelRole::Customer {
             return Err(EstablishError::WrongRole { expected: ChannelRole::Customer, got: role });
@@ -887,17 +634,17 @@ where
     }
 
     /// Unwrap and return the underlying `EstablishingState`.
-    pub fn into_inner(self) -> EstablishingState<KC> {
+    pub fn into_inner(self) -> EstablishingState {
         self.inner
     }
 
     /// Borrow the underlying state.
-    pub fn state(&self) -> &EstablishingState<KC> {
+    pub fn state(&self) -> &EstablishingState {
         &self.inner
     }
 
     /// Mutably borrow the underlying state.
-    pub fn state_mut(&mut self) -> &mut EstablishingState<KC> {
+    pub fn state_mut(&mut self) -> &mut EstablishingState {
         &mut self.inner
     }
 
@@ -929,15 +676,6 @@ where
         Ok(())
     }
 
-    /// Generate a [`ChannelInitPackage`] containing the customer's encrypted offset,
-    /// adapted signature, and DLEQ proof for the initial channel state.
-    pub fn generate_init_package<R: RngCore + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<ChannelInitPackage<KC>, EstablishError> {
-        self.inner.generate_init_package(rng)
-    }
-
     /// Prepare the initial commitment transaction for signing.
     ///
     /// Delegates to [`EstablishingState::prepare_initial_transaction`].
@@ -957,32 +695,27 @@ where
         self.inner.receive_peer_preprocess_data(data)
     }
 
-    /// Receive and verify the merchant's [`ChannelInitPackage`].
-    ///
-    /// Verifies the payload signature, then stores the merchant's adapted signature,
-    /// DLEQ proof, and encrypted offset, and verifies the initial offset using
-    /// the 3-step verification (adapter sig + Q match + DLEQ).
-    pub fn receive_merchant_init_package(&mut self, package: ChannelInitPackage<KC>) -> Result<(), EstablishError> {
-        self.inner.verify_payload_signature(&package)?;
-        self.inner.peer_payload_sig = Some(package.payload_signature.clone());
-        self.inner.peer_nonce_pubkey = Some(package.nonce_pubkey);
-        self.inner.set_peer_encrypted_offset(package.encrypted_offset);
-        self.inner.set_peer_adapted_signature(package.adapted_signature);
-        self.inner.set_peer_dleq_proof(package.dleq_proof);
-        // Verify the adapter signature and DLEQ proof
-        let msg = self.inner.commitment_message();
-        self.inner.verify_initial_offset(&msg)
+    /// The customer's share of the funding output's linking tag `L_F`, to send to the merchant.
+    pub fn partial_linking_tag(&self) -> Result<XmrPoint, EstablishError> {
+        self.inner.partial_linking_tag()
     }
 
-    /// Store a KES proof-of-knowledge received from the KES and verify it.
-    pub fn receive_kes_proof(&mut self, proof: KesPoKProofs<KC>) -> Result<(), EstablishError> {
-        self.inner.kes_created(proof);
-        self.inner.verify_kes_proof()
+    /// Bind the channel id to `L_F`, combining the merchant's partial linking tag with the customer's own.
+    pub fn finalize_channel_id(&mut self, merchant_partial: &XmrPoint) -> Result<ChannelId, EstablishError> {
+        self.inner.finalize_channel_id(merchant_partial)
     }
 
-    /// Return a reference to the customer's encrypted offset for the KES (if generated).
-    pub fn encrypted_offset_for_kes(&self) -> &EncryptedSecret<KC> {
-        &self.inner.encrypted_offset
+    /// Generate the customer's [`ChannelInitPackage`] for the initial channel state.
+    pub fn generate_init_package<R: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<ChannelInitPackage, EstablishError> {
+        self.inner.generate_init_package(rng)
+    }
+
+    /// Verify and accept the merchant's [`ChannelInitPackage`].
+    pub fn receive_merchant_init_package(&mut self, package: ChannelInitPackage) -> Result<(), EstablishError> {
+        self.inner.receive_peer_init_package(package)
     }
 
     /// Stores the details of the funding transaction, passing through to the underlying EstablishingState call.
@@ -999,8 +732,7 @@ use crate::wallet::multisig_wallet::MultisigWallet;
 
 impl<KC> LifeCycle<KC> for EstablishingState<KC>
 where
-    KC: FrostCurve,
-    Ed25519: Dleq<KC>,
+    KC: Ciphersuite,
 {
     fn stage(&self) -> LifecycleStage {
         LifecycleStage::Establishing

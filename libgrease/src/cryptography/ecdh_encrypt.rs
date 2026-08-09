@@ -1,23 +1,22 @@
-//! KES encryption functions implementing the EncryptMessage and DecryptMessage algorithms.
+//! `EncryptMessage` / `DecryptMessage` over ephemeral ECDH.
 //!
 //! This module provides curve-agnostic encryption for scalar values using ephemeral ECDH key exchange.
-//! See the KES specification (`docs/src/40_kes.typ`) for the algorithm details.
 
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_field_element, read_group_element, write_field_element, write_group_element};
 use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
-use modular_frost::sign::Writable;
+use crate::io::Writable;
 use rand_core::{CryptoRng, RngCore};
 use std::io::Read;
 use zeroize::Zeroize;
 
-/// Default domain separator for KES encryption hash function.
+/// Default domain separator for the encryption hash function.
 pub const DEFAULT_ENCRYPT_DOMAIN: &[u8] = b"ECDHMessageEncrypt";
 
 /// An encrypted scalar value using ephemeral ECDH key exchange.
 ///
-/// Implements the KES `EncryptMessage` and `DecryptMessage` algorithms from the KES specification.
+/// Implements the `EncryptMessage` and `DecryptMessage` algorithms.
 /// The encryption uses a random nonce `r` to compute a shared secret with the recipient's
 /// public key, then masks the message scalar with this shared secret.
 #[derive(Clone, Debug)]
@@ -97,8 +96,7 @@ impl<C: Ciphersuite> Writable for EncryptedScalar<C> {
 mod tests {
     use super::*;
     use ciphersuite::group::ff::Field;
-    use ciphersuite::Ed25519;
-    use grease_babyjubjub::BabyJubJub;
+    use ciphersuite::{Ed25519, Secp256k1};
 
     #[test]
     fn encrypt_decrypt_roundtrip_ed25519() {
@@ -114,13 +112,13 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_decrypt_roundtrip_babyjubjub() {
+    fn encrypt_decrypt_roundtrip_secp256k1() {
         let mut rng = rand_core::OsRng;
-        let private_key = <BabyJubJub as Ciphersuite>::random_nonzero_F(&mut rng);
-        let public_key = BabyJubJub::generator() * private_key;
-        let message = <BabyJubJub as Ciphersuite>::F::random(&mut rng);
+        let private_key = <Secp256k1 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let public_key = Secp256k1::generator() * private_key;
+        let message = <Secp256k1 as Ciphersuite>::F::random(&mut rng);
 
-        let encrypted = EncryptedScalar::<BabyJubJub>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
+        let encrypted = EncryptedScalar::<Secp256k1>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
         let decrypted = encrypted.decrypt(&private_key, DEFAULT_ENCRYPT_DOMAIN);
 
         assert_eq!(message, decrypted);

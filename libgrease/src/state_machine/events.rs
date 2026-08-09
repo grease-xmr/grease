@@ -1,8 +1,8 @@
 use crate::amount::MoneroDelta;
-use crate::cryptography::pok::KesPoKProofs;
+use crate::channel_id::ChannelId;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::state_machine::closing_channel::ChannelCloseRecord;
-use crate::state_machine::open_channel::UpdateRecord;
+use crate::state_machine::open_channel::AppliedUpdate;
 use crate::state_machine::proposing_channel::{NewChannelProposal, RejectProposalReason};
 use crate::state_machine::timeouts::TimeoutReason;
 use crate::wallet::multisig_wallet::MultisigWallet;
@@ -18,13 +18,14 @@ pub enum LifeCycleEvent<KC: Ciphersuite = Ed25519> {
     RejectProposal(Box<RejectProposalReason>),
     Timeout(Box<TimeoutReason>),
     MultiSigWalletCreated(Box<MultisigWallet>),
+    /// The parties jointly derived the funding output's linking tag `L_F` and bound the channel id to it. The
+    /// provisional `XGT…` id the proposal phase quoted is replaced by the final `XGC…` id carried here, and every
+    /// signature exchanged from this point on commits to it.
+    ChannelIdFinalized(Box<ChannelId>),
     FundingTxWatcher(Vec<u8>),
-    /// The KES client has been initialized with cryptographic secrets for this channel.
-    KesClientInitialized,
-    KesCreated(Box<KesPoKProofs<KC>>),
     FundingTxConfirmed(Box<TransactionRecord>),
     FinalTxConfirmed(Box<TransactionId>),
-    ChannelUpdate(Box<(MoneroDelta, UpdateRecord)>),
+    ChannelUpdate(Box<(MoneroDelta, AppliedUpdate)>),
     CloseChannel(Box<ChannelCloseRecord>),
     OnForceClose,
     OnDisputeResolved,
@@ -37,9 +38,8 @@ impl<KC: Ciphersuite> Display for LifeCycleEvent<KC> {
             LifeCycleEvent::MerchantAcceptedProposal(_) => write!(f, "MerchantAcceptedProposal"),
             LifeCycleEvent::Timeout(_) => write!(f, "OnTimeout"),
             LifeCycleEvent::MultiSigWalletCreated(_) => write!(f, "OnMultiSigWalletCreated"),
+            LifeCycleEvent::ChannelIdFinalized(_) => write!(f, "ChannelIdFinalized"),
             LifeCycleEvent::FundingTxWatcher(_) => write!(f, "SaveFundingTxWatcher"),
-            LifeCycleEvent::KesClientInitialized => write!(f, "KesClientInitialized"),
-            LifeCycleEvent::KesCreated(_) => write!(f, "KesCreated"),
             LifeCycleEvent::FundingTxConfirmed(_) => write!(f, "FundingTxConfirmed"),
             LifeCycleEvent::ChannelUpdate(_) => write!(f, "ChannelUpdate"),
             LifeCycleEvent::CloseChannel(_) => write!(f, "CloseChannel"),

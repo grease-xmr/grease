@@ -11,35 +11,85 @@ use crate::amount::{MoneroAmount, MoneroDelta};
 use crate::balance::Balances;
 use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::dleq::Dleq;
+use crate::cryptography::binding_proof::BindingProof;
+use crate::grease_protocol::update_record::UpdateRecord;
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::closing_channel::{ChannelCloseRecord, ClosingChannelState};
 use crate::state_machine::error::LifeCycleError;
-use crate::state_machine::{ChannelClosedReason, Witness};
+use crate::cryptography::keys::Curve25519Secret;
+use crate::state_machine::ChannelClosedReason;
+use crate::XmrPoint;
 use ciphersuite::{Ciphersuite, Ed25519};
 use log::*;
-use modular_frost::curve::Curve as FrostCurve;
 use monero::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
-/// Container struct carrying all the information needed to record a payment channel update.
+/// Everything a party retains locally about one applied channel update.
+///
+/// The cross-signed [`UpdateRecord`] is the only part that is *shared* evidence — it is what a party presents to
+/// the arbiter in a dispute, and it is the single source of truth for which state the channel is in. The rest is
+/// this party's own material for that state: the fresh offset `ω` it drew, the two pre-signatures, the peer's
+/// sealed offset, and the FROST preprocessing needed to rebuild the commitment transaction.
+///
+/// # Why the peer's binding proof is retained, and only the latest one
+///
+/// A dispute close is completed by recovering the *peer's* offset from the *peer's* sealed offset under the
+/// arbiter's attestation, so the disputing party must still hold the proof at dispute time — nothing else
+/// carries the sealed shares. Under K-6's construction those share ciphertexts **are** the verifiably encrypted
+/// offset; there is no separate ciphertext to keep instead.
+///
+/// Exactly one proof is retained — this state's — and it is replaced wholesale on every update, because a
+/// retained older proof could never be opened anyway: the arbiter attests the *high-water* statement once and
+/// then tombstones the channel, so no attestation for an earlier `m_i` will ever exist. Keeping a history would
+/// cost ~23.6 KB per update for material that is unopenable by construction.
+///
+/// The proof and the pre-signature it goes with must describe the same offset, which is the invariant
+/// [`AppliedUpdate::proof_matches_presignature`] states: the proof's target `Q` is the adaptor point of
+/// `peer_adapted_signature`, so recovering `ω` from the proof is exactly what completes that pre-signature.
+/// Holding them in one struct that is swapped atomically by [`EstablishedChannelState::store_update`] is what
+/// keeps them from drifting apart.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct UpdateRecord {
-    // My half of the spend authority for this transaction.
-    pub my_offset: Witness,
+pub struct AppliedUpdate {
+    /// The cross-signed record for this state.
+    pub record: UpdateRecord,
+    /// Our fresh, independent offset `ω` for this state — the secret the peer needs to complete its own close.
+    pub my_offset: Curve25519Secret,
+    /// Our pre-signature over the *peer's* commitment transaction, adapted by `my_offset`.
     pub my_adapted_signature: AdaptedSignature<Ed25519>,
+    /// The peer's pre-signature over *our* commitment transaction.
     pub peer_adapted_signature: AdaptedSignature<Ed25519>,
+    /// The peer's offset for this state, verifiably encrypted to `m = (channel_id, update_count)`. This is what
+    /// a dispute close feeds to [`recover_offset`](crate::cryptography::binding_proof::recover_offset) once the
+    /// arbiter attests `m`.
+    pub peer_binding_proof: BindingProof,
     // Data needed to reconstruct the Monero transaction for this update.
     pub my_preprocess: Vec<u8>,
     pub peer_preprocess: Vec<u8>,
 }
 
-impl Debug for UpdateRecord {
+impl AppliedUpdate {
+    /// The adaptor point `Q` of the pre-signature a dispute close completes — and the point the recovered peer
+    /// offset must be the discrete log of.
+    pub fn peer_adaptor_point(&self) -> XmrPoint {
+        self.peer_adapted_signature.adapter_commitment()
+    }
+
+    /// Whether the retained proof is the one that opens the pre-signature we hold.
+    ///
+    /// This holds by construction when the update protocol built the struct — `verify_update_package` checks the
+    /// sealed offset against the adaptor point of the very signature in the same package — but a dispute is
+    /// where a mismatch would cost money, so the claimant re-checks it rather than trusting local storage.
+    pub fn proof_matches_presignature(&self) -> bool {
+        *self.peer_binding_proof.q() == self.peer_adaptor_point()
+    }
+}
+
+impl Debug for AppliedUpdate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "UpdateRecord(...)")
+        write!(f, "AppliedUpdate(state {})", self.record.update_count())
     }
 }
 
@@ -51,17 +101,7 @@ pub struct EstablishedChannelState<KC: Ciphersuite = Ed25519> {
     /// Information needed to reconstruct the multisig wallet.
     pub(crate) multisig_wallet: MultisigWallet,
     pub(crate) funding_transactions: HashMap<TransactionId, TransactionRecord>,
-    pub(crate) current_update: Option<UpdateRecord>,
-    /// The per-channel KES public key ($P_g$) derived during establishment.
-    ///
-    /// Needed for force-close and dispute communication with the KES.
-    #[serde(
-        serialize_with = "crate::helpers::option_serialize_ge",
-        deserialize_with = "crate::helpers::option_deserialize_ge",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
-    pub(crate) kes_channel_pubkey: Option<KC::G>,
+    pub(crate) current_update: Option<AppliedUpdate>,
 }
 
 impl<KC: Ciphersuite> Debug for EstablishedChannelState<KC> {
@@ -79,8 +119,7 @@ impl<KC: Ciphersuite> Debug for EstablishedChannelState<KC> {
 impl<KC: Ciphersuite> EstablishedChannelState<KC> {
     pub fn to_channel_state(self) -> ChannelState<KC>
     where
-        KC: FrostCurve,
-        Ed25519: Dleq<KC>,
+        KC: Ciphersuite,
     {
         ChannelState::Open(self)
     }
@@ -93,7 +132,7 @@ impl<KC: Ciphersuite> EstablishedChannelState<KC> {
     ///
     /// # Panics
     /// Panics if no updates have been made yet. Use `has_updates()` to check first.
-    pub fn current_witness(&self) -> &Witness {
+    pub fn current_witness(&self) -> &Curve25519Secret {
         &self.current_update.as_ref().expect("No updates have been made yet").my_offset
     }
 
@@ -102,9 +141,9 @@ impl<KC: Ciphersuite> EstablishedChannelState<KC> {
         self.current_update.is_some()
     }
 
-    /// Returns the per-channel KES public key ($P_g$), if set during establishment.
-    pub fn kes_channel_pubkey(&self) -> Option<&KC::G> {
-        self.kes_channel_pubkey.as_ref()
+    /// The latest cross-signed [`UpdateRecord`] — what a dispute presents to the arbiter.
+    pub fn current_record(&self) -> Option<&UpdateRecord> {
+        self.current_update.as_ref().map(|update| &update.record)
     }
 
     pub fn multisig_address(&self) -> Option<String> {
@@ -141,7 +180,7 @@ impl<KC: Ciphersuite> EstablishedChannelState<KC> {
         }
     }
 
-    pub fn store_update(&mut self, delta: MoneroDelta, update: UpdateRecord) -> u64 {
+    pub fn store_update(&mut self, delta: MoneroDelta, update: AppliedUpdate) -> u64 {
         self.dynamic.apply_delta(delta);
         self.current_update = Some(update);
         self.update_count()

@@ -9,7 +9,7 @@ use crate::wallet::errors::WalletError;
 use ciphersuite::Ed25519;
 use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
 use log::*;
-use modular_frost::sign::Writable;
+use crate::io::Writable;
 use monero::Address;
 use rand_core::{CryptoRng, RngCore};
 use std::future::Future;

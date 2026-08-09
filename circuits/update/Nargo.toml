@@ -1,7 +1,0 @@
-[package]
-name = "GreaseUpdate"
-version = "0.2.0"
-type = "bin"
-
-[dependencies]
-library = { path = "../library" }

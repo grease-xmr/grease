@@ -3,8 +3,6 @@
 //! This module contains the building blocks for the Grease Payment Channel Protocol.
 
 pub mod adapter_signature;
-pub mod channel_keys;
-pub mod kes_establishing;
 pub mod multisig_wallet;
 pub mod utils;
 
@@ -14,6 +12,7 @@ pub mod establish_channel;
 pub mod force_close_channel;
 pub mod propose_channel;
 pub mod update_channel;
+pub mod update_record;
 
 // Re-exports
 pub use close_channel::*;
