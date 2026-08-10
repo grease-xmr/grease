@@ -1,10 +1,10 @@
 //! An in-process arbiter: the dispute state machine of `docs/src/40_arbiter.typ` §stateMachine, minus the
 //! consensus platform.
 //!
-//! [`MockArbiter`] implements [`ArbiterClient`] exactly as the specified algorithms `onPresentRecord` and
-//! `onWindowElapsed` describe, so protocol tests exercise real arbiter *semantics* — window restart on
-//! supersession, stale records ignored but logged, no key before expiry, a tombstone that forbids re-dispute —
-//! without an ICP replica. What it does *not* model is the threshold: it holds the master secret `z` whole and
+//! [`MockArbiter`] implements [`ArbiterClient`] exactly as the specified algorithms `onRegisterChannel`,
+//! `onPresentRecord` and `onWindowElapsed` describe, so protocol tests exercise real arbiter *semantics* —
+//! registration refused for duplicate or provisional ids, window restart on supersession, stale records ignored
+//! but logged, no key before expiry, a tombstone that forbids re-dispute — without an ICP replica. What it does *not* model is the threshold: it holds the master secret `z` whole and
 //! signs `σ_m = z·H_P(m)` itself, where production splits `z` across a committee that never reassembles it. That
 //! is the one and only cheat, and it is invisible to callers: the attestation it produces verifies under `Z` and
 //! decrypts sealed offsets identically.
@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use ciphersuite::group::ff::Field;
 use ic_bls12_381::{G1Affine, G1Projective, G2Affine, Scalar as BlsScalar};
 use rand_core::{CryptoRng, OsRng, RngCore};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -158,9 +159,31 @@ impl MockArbiter {
     }
 
     /// Register a channel's two signing keys, so presented records can be verified. In production this happens
-    /// when the channel is opened with the arbiter.
-    pub fn register_channel(&self, channel_id: ChannelId, pubkey_a: XmrPoint, pubkey_b: XmrPoint) {
-        self.channels.lock().unwrap().insert(channel_id, ChannelRegistration { pubkey_a, pubkey_b });
+    /// when the channel is opened with the arbiter, after funding — which is why only a finalized (`XGC…`) id is
+    /// registrable: a provisional id commits to no funding output, so a registration under it names nothing the
+    /// dispute path could act on.
+    ///
+    /// Registration is once-per-channel and refusing, never last-write-wins. Re-registration is an error *even
+    /// when the keys are identical*: an identical duplicate is exactly the observable signature of two channels
+    /// colliding on one id (K-20 §3.4), and an idempotent no-op would leave that collision invisible while the two
+    /// channels silently shared one high-water mark, window and tombstone. A caller retrying a registration it
+    /// fears was lost can distinguish the benign case with [`MockArbiter::is_registered`]; the arbiter itself
+    /// never guesses. A refused registration changes no state.
+    pub fn register_channel(&self, channel_id: ChannelId, pubkey_a: XmrPoint, pubkey_b: XmrPoint) -> Result<(), ArbiterError> {
+        channel_id.require_finalized()?;
+        match self.channels.lock().unwrap().entry(channel_id) {
+            Entry::Occupied(existing) => Err(ArbiterError::AlreadyRegistered(existing.key().clone())),
+            Entry::Vacant(slot) => {
+                slot.insert(ChannelRegistration { pubkey_a, pubkey_b });
+                Ok(())
+            }
+        }
+    }
+
+    /// Whether a channel id is in the registry. This is what lets a caller tell a lost-and-retried registration
+    /// (already present, keys already in force) from a genuine collision before it panics.
+    pub fn is_registered(&self, channel_id: &ChannelId) -> bool {
+        self.channels.lock().unwrap().contains_key(channel_id)
     }
 
     /// The master secret `z`. Test-only by construction — production `z` exists only as committee shares.
@@ -244,7 +267,7 @@ impl MockArbiter {
                 remaining_secs: state.window_expiry.saturating_sub(self.clock.now()),
             });
         }
-        Ok(attest(&self.master_secret, &statement_for(channel_id, state.high_water)))
+        Ok(attest(&self.master_secret, &statement_for(channel_id, state.high_water)?))
     }
 }
 
@@ -309,7 +332,7 @@ impl ArbiterClient for MockArbiter {
             .get(channel_id)
             .map(|s| s.high_water)
             .ok_or_else(|| ArbiterError::NoDispute(channel_id.clone()))?;
-        let statement = statement_for(channel_id, high_water);
+        let statement = statement_for(channel_id, high_water)?;
         let payload = wrap_for_transport(&sigma, transport_public_key)?;
         Ok(WrappedAttestation::new(statement, transport_public_key.clone(), payload))
     }
@@ -320,6 +343,7 @@ mod tests {
     use super::*;
     use ciphersuite::WrappedGroup;
     use crate::arbiter::client::TransportKeyPair;
+    use crate::channel_id::ProvisionalChannelIdError;
     use crate::cryptography::attestation::verify_attestation;
     use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, CLOSE_HASH_LEN};
     use crate::payment_channel::ChannelRole;
@@ -363,7 +387,8 @@ mod tests {
                 ChannelRole::Customer,
                 &self.secret_a,
                 &mut OsRng,
-            );
+            )
+            .unwrap();
             UpdateRecord::countersign(&half, &self.pubkey_a, ChannelRole::Merchant, &self.secret_b, &mut OsRng).unwrap()
         }
     }
@@ -373,7 +398,7 @@ mod tests {
         let mut rng = ChaCha20Rng::seed_from_u64(99);
         let (arbiter, clock) = MockArbiter::with_manual_clock(&mut rng);
         let parties = Parties::new();
-        arbiter.register_channel(channel_id(), parties.pubkey_a, parties.pubkey_b);
+        arbiter.register_channel(channel_id(), parties.pubkey_a, parties.pubkey_b).unwrap();
         (arbiter, clock, parties)
     }
 
@@ -504,16 +529,16 @@ mod tests {
 
         let transport = transport_keypair();
         let wrapped = block_on(arbiter.request_attestation(&channel_id(), transport.public_key())).unwrap();
-        assert_eq!(wrapped.statement(), &statement_for(&channel_id(), 7));
+        assert_eq!(wrapped.statement(), &statement_for(&channel_id(), 7).unwrap());
         assert_eq!(wrapped.transport_public_key(), transport.public_key());
 
         // The released key is a genuine BLS attestation of the high-water statement under the published Z, and it
         // only comes out through vetKD's `decrypt_and_verify`.
         let z = arbiter.configuration().master_public_key();
         let sigma = transport.unwrap_attestation(&wrapped, z).unwrap();
-        verify_attestation(&sigma, &statement_for(&channel_id(), 7), arbiter.configuration().master_public_key()).unwrap();
+        verify_attestation(&sigma, &statement_for(&channel_id(), 7).unwrap(), arbiter.configuration().master_public_key()).unwrap();
         // And it attests *only* that statement — a stale close has no key.
-        assert!(verify_attestation(&sigma, &statement_for(&channel_id(), 6), arbiter.configuration().master_public_key())
+        assert!(verify_attestation(&sigma, &statement_for(&channel_id(), 6).unwrap(), arbiter.configuration().master_public_key())
             .is_err());
 
         let state = block_on(arbiter.dispute_state(&channel_id())).unwrap().unwrap();
@@ -561,7 +586,7 @@ mod tests {
         let z = arbiter.configuration().master_public_key();
         let wrapped = block_on(arbiter.request_attestation(&channel_id(), transport.public_key())).unwrap();
         let mislabelled = WrappedAttestation::new(
-            statement_for(&channel_id(), 6),
+            statement_for(&channel_id(), 6).unwrap(),
             transport.public_key().clone(),
             wrapped.payload(),
         );
@@ -585,8 +610,8 @@ mod tests {
 
         let sigma = arbiter.attestation(&channel_id()).unwrap();
         let z = arbiter.configuration().master_public_key();
-        verify_attestation(&sigma, &statement_for(&channel_id(), 11), z).unwrap();
-        assert!(verify_attestation(&sigma, &statement_for(&channel_id(), 2), z).is_err());
+        verify_attestation(&sigma, &statement_for(&channel_id(), 11).unwrap(), z).unwrap();
+        assert!(verify_attestation(&sigma, &statement_for(&channel_id(), 2).unwrap(), z).is_err());
     }
 
     #[test]
@@ -632,7 +657,8 @@ mod tests {
             ChannelRole::Customer,
             &parties.secret_a,
             &mut OsRng,
-        );
+        )
+        .unwrap();
         let forged = UpdateRecord::countersign(&half, &parties.pubkey_a, ChannelRole::Merchant, &mallory, &mut OsRng).unwrap();
         assert!(matches!(block_on(arbiter.submit_dispute(&forged)), Err(ArbiterError::InvalidRecord(_))));
 
@@ -646,13 +672,52 @@ mod tests {
             ChannelRole::Customer,
             &mallory,
             &mut OsRng,
-        );
+        )
+        .unwrap();
         let impostor =
             UpdateRecord::countersign(&half, &mallory_pubkey, ChannelRole::Merchant, &parties.secret_b, &mut OsRng).unwrap();
         assert!(matches!(block_on(arbiter.submit_dispute(&impostor)), Err(ArbiterError::InvalidRecord(_))));
 
         // Neither rejected record created any state: a dispute opens only on a valid presentation.
         assert!(block_on(arbiter.dispute_state(&channel_id())).unwrap().is_none());
+    }
+
+    #[test]
+    fn re_registration_with_identical_keys_is_refused() {
+        // An identical duplicate is the K-20 §3.4 collision signature — two channels on one id sharing one key
+        // pair — so it must be loud, not an idempotent no-op.
+        let (arbiter, _clock, parties) = fixture();
+        let err = arbiter.register_channel(channel_id(), parties.pubkey_a, parties.pubkey_b).unwrap_err();
+        assert_eq!(err, ArbiterError::AlreadyRegistered(channel_id()));
+        // The refusal changed nothing: the original registration still verifies the parties' records.
+        assert!(arbiter.is_registered(&channel_id()));
+        block_on(arbiter.submit_dispute(&parties.record(1))).unwrap();
+    }
+
+    #[test]
+    fn re_registration_with_different_keys_is_refused_and_changes_nothing() {
+        let (arbiter, _clock, parties) = fixture();
+        let strangers = Parties::new();
+        let err = arbiter.register_channel(channel_id(), strangers.pubkey_a, strangers.pubkey_b).unwrap_err();
+        assert_eq!(err, ArbiterError::AlreadyRegistered(channel_id()));
+        // The first registration is intact: the live channel's dispute path was not silently broken. The
+        // original parties' records verify; the would-be usurpers' do not.
+        block_on(arbiter.submit_dispute(&parties.record(1))).unwrap();
+        assert!(matches!(block_on(arbiter.submit_dispute(&strangers.record(2))), Err(ArbiterError::InvalidRecord(_))));
+    }
+
+    #[test]
+    fn a_provisional_id_is_not_registrable() {
+        // An `XGT…` id commits to no funding output; a registration under it names nothing.
+        let mut rng = ChaCha20Rng::seed_from_u64(21);
+        let (arbiter, _clock) = MockArbiter::with_manual_clock(&mut rng);
+        let parties = Parties::new();
+        let provisional =
+            ChannelId::from_str("XGT4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+        let err = arbiter.register_channel(provisional.clone(), parties.pubkey_a, parties.pubkey_b).unwrap_err();
+        assert_eq!(err, ArbiterError::ProvisionalChannelId(ProvisionalChannelIdError(provisional.clone())));
+        // The refused registration left no state behind.
+        assert!(!arbiter.is_registered(&provisional));
     }
 
     #[test]

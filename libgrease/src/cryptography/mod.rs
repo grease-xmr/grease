@@ -77,6 +77,12 @@
 //! | [`keys`]               | Curve25519 secret/public key types for Monero wallet operations    |
 //! | [`encryption_context`] | Ambient key material that encrypts secrets at rest on serialization |
 //!
+//! ## Binding the channel id to the shared wallet
+//!
+//! | Module          | Purpose                                                                             |
+//! |-----------------|-------------------------------------------------------------------------------------|
+//! | [`linking_tag`] | Proof that a party's contribution to the joint funding linking tag `L_F` is correct  |
+//!
 //! # Curve Support
 //!
 //! | Curve            | Usage                                                                       |
@@ -103,8 +109,9 @@ pub mod binding_proof;
 pub mod ecdh;
 pub mod ecdh_encrypt;
 pub mod keys;
+pub mod linking_tag;
 pub mod pok;
 pub mod pvss;
 pub mod verifiable_encryption;
-pub use commit::{Commit, HashCommitment256};
+pub use commit::{Commit, HashCommitment256, HashCommitment512};
 pub use secure_digest::SecureDigest;

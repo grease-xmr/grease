@@ -31,10 +31,11 @@ use crate::grease_protocol::force_close_channel::{
     DisputeOutcome, ForceCloseProtocolClaimant, ForceCloseProtocolCommon, ForceCloseProtocolDefendant,
     ForceCloseProtocolError, PendingCloseStatus,
 };
-use crate::grease_protocol::update_channel::commitment_message;
-use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord, CLOSE_HASH_LEN};
+use crate::grease_protocol::adapter_signature::adapter_signature_message;
+use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord};
 use crate::monero::data_objects::TransactionId;
 use crate::payment_channel::{ChannelRole, HasRole};
+use crate::wallet::multisig_wallet::{commitment_pair_message, commitment_tx_message};
 use crate::{XmrPoint, XmrScalar};
 
 const CHANNEL: &str = "XGC4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383";
@@ -65,6 +66,10 @@ struct DisputeParty {
     peer_public_key: XmrPoint,
     master_pk: G2Point,
     record: UpdateRecord,
+    /// The channel balances at this state, in piconero. The record's own `close_hash` is the pair message over
+    /// these two, which is what lets a dispute recompute the per-holder hash it closes with.
+    customer_amount: u64,
+    merchant_amount: u64,
     /// The peer's sealed offset for this state — the object a dispute close feeds to `recover_offset`.
     peer_binding_proof: BindingProof,
     /// The peer's pre-signature over *our* commitment transaction.
@@ -102,6 +107,10 @@ impl ForceCloseProtocolCommon for DisputeParty {
 
     fn update_count(&self) -> u64 {
         self.record.update_count()
+    }
+
+    fn state_amounts(&self) -> (u64, u64) {
+        (self.customer_amount, self.merchant_amount)
     }
 
     fn arbiter_master_public_key(&self) -> G2Point {
@@ -173,7 +182,10 @@ impl Channel {
         let customer_secret = XmrScalar::random(&mut rng);
         let merchant_secret = XmrScalar::random(&mut rng);
         let channel = Channel { arbiter, clock, customer_secret, merchant_secret };
-        channel.arbiter.register_channel(channel_id(), channel.public(ChannelRole::Customer), channel.public(ChannelRole::Merchant));
+        channel
+            .arbiter
+            .register_channel(channel_id(), channel.public(ChannelRole::Customer), channel.public(ChannelRole::Merchant))
+            .unwrap();
         channel
     }
 
@@ -202,24 +214,43 @@ impl Channel {
         XmrScalar::random(&mut ChaCha20Rng::seed_from_u64(0x0ff5e7 ^ (update_count << 4) ^ tag))
     }
 
+    /// The channel balances at a state, in piconero: `(customer, merchant)`. One payment per state, so no two
+    /// states share a pair and a close hash belongs to exactly one of them.
+    fn amounts(&self, update_count: u64) -> (u64, u64) {
+        const TOTAL: u64 = 2_000_000_000_000;
+        let merchant = update_count * 1_000_000;
+        (TOTAL - merchant, merchant)
+    }
+
+    /// The message a state's adaptor signature covers: the commitment transaction *held by* `holder`.
+    fn adaptor_message(&self, update_count: u64, holder: ChannelRole) -> Vec<u8> {
+        let (customer, merchant) = self.amounts(update_count);
+        let msg = commitment_tx_message(&channel_id(), update_count, holder, customer, merchant);
+        let close_hash = CloseHash::try_from(msg).expect("the commitment message is a 64-byte challenge");
+        adapter_signature_message(&channel_id(), update_count, &close_hash).expect("the fixture id is final")
+    }
+
     /// The pre-signature `signer` sends for a state: over the *counterparty's* commitment transaction, adapted
     /// by the signer's own offset.
     fn presignature(&self, update_count: u64, signer: ChannelRole) -> AdaptedSignature<Ed25519> {
-        let msg = commitment_message(&channel_id(), update_count, signer.other());
         AdaptedSignature::<Ed25519>::sign(
             self.secret(signer),
             &self.offset(update_count, signer),
-            msg,
+            self.adaptor_message(update_count, signer.other()),
             &mut ChaCha20Rng::seed_from_u64(update_count),
         )
     }
 
-    /// The cross-signed record both parties hold for a state.
+    /// The cross-signed record both parties hold for a state, committing to the *pair* of commitment
+    /// transactions over the same two amounts a dispute recomputes from.
     fn record(&self, update_count: u64) -> UpdateRecord {
-        let close_hash = CloseHash::new([update_count as u8; CLOSE_HASH_LEN]);
+        let (customer, merchant) = self.amounts(update_count);
+        let close_hash = CloseHash::try_from(commitment_pair_message(&channel_id(), update_count, customer, merchant))
+            .expect("the pair message is a 64-byte challenge");
         let mut rng = ChaCha20Rng::seed_from_u64(0xdec0de ^ update_count);
         let halves = [ChannelRole::Customer, ChannelRole::Merchant].map(|role| {
             HalfSignedUpdateRecord::sign(channel_id(), update_count, close_hash, role, self.secret(role), &mut rng)
+                .expect("the fixture id is final")
         });
         UpdateRecord::from_halves(&halves[0], &halves[1]).expect("halves agree by construction")
     }
@@ -228,7 +259,7 @@ impl Channel {
     fn seal(&self, update_count: u64, owner: ChannelRole) -> BindingProof {
         prove_encrypted_offset(
             &self.offset(update_count, owner),
-            &statement_for(&channel_id(), update_count),
+            &statement_for(&channel_id(), update_count).expect("the fixture id is final"),
             &self.master_pk(),
             SecondBase::grease_default(),
             test_params(),
@@ -239,6 +270,7 @@ impl Channel {
     /// `role`'s local view of `update_count`.
     fn party(&self, role: ChannelRole, update_count: u64) -> DisputeParty {
         let peer = role.other();
+        let (customer_amount, merchant_amount) = self.amounts(update_count);
         DisputeParty {
             role,
             channel_id: channel_id(),
@@ -246,6 +278,8 @@ impl Channel {
             peer_public_key: self.public(peer),
             master_pk: self.master_pk(),
             record: self.record(update_count),
+            customer_amount,
+            merchant_amount,
             peer_binding_proof: self.seal(update_count, peer),
             peer_presignature: self.presignature(update_count, peer),
             peer_offset: self.offset(update_count, peer),
@@ -301,6 +335,7 @@ fn every_force_close_error_displays() {
         ForceCloseProtocolError::StatementMismatch { expected: 5, actual: 4 },
         ForceCloseProtocolError::OffsetTargetMismatch,
         ForceCloseProtocolError::SignatureAdaptationFailed("bad offset".into()),
+        ForceCloseProtocolError::CloseHashMismatch { update_count: 7 },
         ForceCloseProtocolError::TransactionCreationFailed("tx error".into()),
         ForceCloseProtocolError::BroadcastFailed("broadcast error".into()),
         ForceCloseProtocolError::UpdateCountTooLow { claimed: 5, actual: 3 },
@@ -427,14 +462,14 @@ fn an_uncontested_dispute_runs_from_presentation_to_a_completed_closing_signatur
     let sigma = block_on(claimant.collect_attestation(&channel.arbiter, &transport())).unwrap();
 
     // It unseals the counterparty's offset — the very scalar the counterparty drew.
-    let statement = claimant.statement(12);
+    let statement = claimant.statement(12).expect("the fixture id is final");
     let proof = claimant.peer_binding_proof().unwrap().clone();
     let omega = claimant.recover_offset(&proof, &statement, &sigma).unwrap();
     assert_eq!(omega, claimant.peer_offset, "recovery must produce the counterparty's actual offset");
 
     // Which completes the counterparty half of the closing signature over *our* commitment transaction.
     let signature = claimant.complete_closing_signature(&omega).unwrap();
-    let msg = commitment_message(&channel_id(), 12, ChannelRole::Merchant);
+    let msg = channel.adaptor_message(12, ChannelRole::Merchant);
     assert!(signature.verify(&claimant.peer_public_key(), &msg));
 
     let tx = block_on(claimant.broadcast_closing_tx(&signature)).unwrap();
@@ -479,14 +514,14 @@ fn a_stale_presentation_ends_frozen_with_no_offset_released() {
 
     // The honest party's close does complete, on state 11.
     let signature = block_on(honest.complete_force_close(&channel.arbiter, &transport())).unwrap();
-    let msg = commitment_message(&channel_id(), 11, ChannelRole::Merchant);
+    let msg = channel.adaptor_message(11, ChannelRole::Merchant);
     assert!(signature.verify(&honest.peer_public_key(), &msg));
 
     // And the attestation that exists is useless against the stale state: sigma_11 opens nothing sealed to m_2.
     let sigma = block_on(honest.collect_attestation(&channel.arbiter, &transport())).unwrap();
     let stale_proof = cheat.peer_binding_proof().unwrap().clone();
-    assert!(cheat.recover_offset(&stale_proof, &cheat.statement(2), &sigma).is_err());
-    assert!(cheat.recover_offset(&stale_proof, &cheat.statement(11), &sigma).is_err());
+    assert!(cheat.recover_offset(&stale_proof, &cheat.statement(2).unwrap(), &sigma).is_err());
+    assert!(cheat.recover_offset(&stale_proof, &cheat.statement(11).unwrap(), &sigma).is_err());
 }
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -582,7 +617,7 @@ fn a_proof_that_does_not_target_the_presignature_is_refused_before_recovery() {
     // Our *own* offset for this state is sealed to the same statement and decrypts perfectly — and is exactly
     // the wrong scalar, because it does not open the pre-signature we hold.
     let own = channel.seal(8, ChannelRole::Merchant);
-    let err = claimant.recover_offset(&own, &claimant.statement(8), &sigma).unwrap_err();
+    let err = claimant.recover_offset(&own, &claimant.statement(8).unwrap(), &sigma).unwrap_err();
     assert!(matches!(err, ForceCloseProtocolError::OffsetTargetMismatch), "{err}");
 
     // Storage that lost the pairing is caught at the same place, before a request is even made.
@@ -601,10 +636,10 @@ fn recovering_against_the_wrong_statement_fails() {
     let sigma = block_on(claimant.collect_attestation(&channel.arbiter, &transport())).unwrap();
     let proof = claimant.peer_binding_proof().unwrap().clone();
 
-    assert!(claimant.recover_offset(&proof, &claimant.statement(14), &sigma).is_err());
+    assert!(claimant.recover_offset(&proof, &claimant.statement(14).unwrap(), &sigma).is_err());
     assert!(claimant.recover_offset(&proof, &Statement::new(b"XGCsomeotherchannel".to_vec(), 15), &sigma).is_err());
     // The right statement still works, so the failures above are the statement's doing and nothing else.
-    assert!(claimant.recover_offset(&proof, &claimant.statement(15), &sigma).is_ok());
+    assert!(claimant.recover_offset(&proof, &claimant.statement(15).unwrap(), &sigma).is_ok());
 }
 
 #[test]
@@ -616,7 +651,7 @@ fn completing_with_the_wrong_offset_fails_rather_than_producing_a_bad_signature(
     assert!(matches!(err, ForceCloseProtocolError::SignatureAdaptationFailed(_)), "{err}");
     // The right offset completes a signature that verifies under the counterparty's key.
     let signature = claimant.complete_closing_signature(&claimant.peer_offset).unwrap();
-    assert!(signature.verify(&claimant.peer_public_key(), commitment_message(&channel_id(), 3, ChannelRole::Customer)));
+    assert!(signature.verify(&claimant.peer_public_key(), channel.adaptor_message(3, ChannelRole::Customer)));
 }
 
 #[test]
@@ -627,7 +662,7 @@ fn the_completed_signature_is_over_our_own_commitment_transaction() {
     let claimant = channel.party(ChannelRole::Merchant, 21);
     let signature = claimant.complete_closing_signature(&claimant.peer_offset).unwrap();
     let peer = claimant.peer_public_key();
-    assert!(signature.verify(&peer, commitment_message(&channel_id(), 21, ChannelRole::Merchant)));
-    assert!(!signature.verify(&peer, commitment_message(&channel_id(), 21, ChannelRole::Customer)));
-    assert!(!signature.verify(&peer, commitment_message(&channel_id(), 20, ChannelRole::Merchant)));
+    assert!(signature.verify(&peer, channel.adaptor_message(21, ChannelRole::Merchant)));
+    assert!(!signature.verify(&peer, channel.adaptor_message(21, ChannelRole::Customer)));
+    assert!(!signature.verify(&peer, channel.adaptor_message(20, ChannelRole::Merchant)));
 }

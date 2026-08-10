@@ -3,11 +3,17 @@ use crate::state_machine::lifecycle::{ChannelState, LifeCycle};
 use crate::storage::traits::StateStore;
 use ron::ser::PrettyConfig;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A file-based store for payment channel state.
 ///
-/// Each channel is saved in a file with the channel ID as the filename, e.g. `XGCa2edd1f8091cc375b12357b427a748ba.ron`
+/// Each channel lives in a single file named after its *stable* storage key: the provisional channel id,
+/// e.g. `XGT4a7024e7….ron`. The provisional id hashes every negotiated field and no funding tag, so it is
+/// fixed from the proposal onward — when [`finalize`](crate::channel_id::ChannelIdMetadata::finalize) flips
+/// the channel's current id to `XGC…`, the finalized state overwrites the file its provisional state lived
+/// in rather than starting a new one under the new name. No rename ever happens, so no orphaned
+/// pre-finalization snapshot survives to resolve later (K-20 finding F8). The current, arbiter-facing id is
+/// a property of the stored state, not of the filename.
 pub struct FileStore {
     path: PathBuf,
 }
@@ -28,22 +34,60 @@ impl FileStore {
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
+
+    /// The path a channel's single state file lives at, keyed by the invariant provisional id.
+    fn file_for(&self, key: &ChannelId) -> PathBuf {
+        self.path.join(format!("{key}.ron"))
+    }
+
+    /// Resolve a final (`XGC…`) id by scanning the store for the state whose *current* name matches.
+    ///
+    /// Finalizing recomputes the id's hash over a transcript that absorbs the funding linking tags, so a final
+    /// id does not reveal the provisional key its record is filed under and cannot be turned into a filename.
+    /// Files that fail to parse are skipped — they cannot be the requested channel — with a warning.
+    fn find_by_current_id(&self, channel_id: &ChannelId) -> Result<ChannelState, anyhow::Error> {
+        fs::read_dir(&self.path)?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "ron"))
+            .filter_map(|p| {
+                read_state(&p).inspect_err(|e| log::warn!("Skipping unparseable state file {}: {e}", p.display())).ok()
+            })
+            .find(|state| state.name() == *channel_id)
+            .ok_or_else(|| anyhow::anyhow!("no channel with id {channel_id} in the store"))
+    }
+}
+
+/// Read and deserialize one channel state file.
+fn read_state(path: &Path) -> Result<ChannelState, anyhow::Error> {
+    let val = fs::read_to_string(path)?;
+    Ok(ron::de::from_str(&val)?)
 }
 
 impl StateStore for FileStore {
+    /// Save `state` under its stable storage key, the provisional channel id.
+    ///
+    /// The key is derived from the state's own metadata, so a state written after finalization lands in the
+    /// same file its provisional predecessor occupied — overwritten in place, never renamed, never orphaned.
     fn write_channel(&mut self, state: &ChannelState) -> Result<(), anyhow::Error> {
-        let file_path = self.path.join(format!("{}.ron", state.name()));
+        let file_path = self.file_for(&state.metadata().channel_id().provisional_name());
         let config = PrettyConfig::new().compact_arrays(true).compact_maps(true);
         let val = ron::ser::to_string_pretty(&state, config)?;
         fs::write(&file_path, &val)?;
         Ok(())
     }
 
+    /// Resolve `channel_id` — provisional or final — to the channel's single current state.
+    ///
+    /// A provisional (`XGT…`) id *is* the storage key, so it is read directly; if the channel has since
+    /// finalized this returns the finalized state (whose `name()` is the `XGC…` id), because that state
+    /// overwrote the provisional snapshot in place. A final id is resolved by matching each stored state's
+    /// current name. Either way the result is the current state — a stale pre-finalization snapshot no
+    /// longer exists to be returned.
     fn load_channel(&self, channel_id: &ChannelId) -> Result<ChannelState, anyhow::Error> {
-        let file_path = self.path.join(format!("{channel_id}.ron"));
-        let val = fs::read_to_string(&file_path)?;
-        let state: ChannelState = ron::de::from_str(&val)?;
-        Ok(state)
+        match channel_id.is_finalized() {
+            false => read_state(&self.file_for(channel_id)),
+            true => self.find_by_current_id(channel_id),
+        }
     }
 }
 
@@ -55,7 +99,7 @@ mod test {
     use crate::state_machine::lifecycle::LifecycleStage;
     use crate::state_machine::{CustomerEstablishing, EstablishingState, MerchantEstablishing};
     use crate::tests::establish_channel_tests::{
-        establish_wallet, finalize_channel_ids, fund_both, test_params,
+        declare_funding_outputs, establish_wallet, finalize_channel_ids, fund_both, test_params,
     };
     use crate::tests::propose_channel_tests::propose_channel;
     use rand_core::OsRng;
@@ -84,6 +128,18 @@ mod test {
         let mut state = round_trip(store, c.into_inner());
         re_inject_signing_share(&mut state);
         CustomerEstablishing::new(state, URL).expect("re-wrap customer")
+    }
+
+    /// The names of the `.ron` files currently in the store directory, sorted.
+    fn ron_files(dir: &Path) -> Vec<String> {
+        let mut files: Vec<String> = std::fs::read_dir(dir)
+            .expect("read store dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".ron"))
+            .collect();
+        files.sort();
+        files
     }
 
     /// Re-derive the signing share from the wallet's spend key after deserialization.
@@ -124,6 +180,9 @@ mod test {
                 merchant.state_mut().set_binding_proof_params(test_params());
                 customer.state_mut().set_binding_proof_params(test_params());
                 establish_wallet(&mut merchant, &mut customer);
+                // The customer declares the output it funds the channel with, before either side is reloaded:
+                // the declaration has to survive the round trip or the linking tags cannot be derived after it.
+                declare_funding_outputs(&mut merchant, &mut customer);
 
                 // Round-trip: both parties after wallet setup
                 let mut merchant = reload_merchant(&mut store, merchant);
@@ -137,12 +196,35 @@ mod test {
                 let mut merchant = reload_merchant(&mut store, merchant);
                 let mut customer = reload_customer(&mut store, customer);
 
-                // ---- Step 4: Bind the channel id to the funding output ----
-                // The channel id changes here, so everything stored afterwards lives under the final id.
+                // ---- Step 4: Bind the channel id to the funding outputs ----
+                // The channel id changes here. The storage key does not: state is filed under the invariant
+                // provisional id, so the finalized writes below overwrite the provisional snapshot in place.
+                let provisional_id = merchant.state().name();
+                assert!(!provisional_id.is_finalized());
                 finalize_channel_ids(&mut merchant, &mut customer);
 
                 let mut merchant = reload_merchant(&mut store, merchant);
                 let mut customer = reload_customer(&mut store, customer);
+
+                // K-20 finding F8: a lookup by the provisional id must resolve the *current* (finalized)
+                // state, not a stale pre-finalization snapshot, and no second file may be left behind.
+                // (Both parties share the channel id, and so — in this shared test directory — one file.)
+                let final_id = merchant.state().name();
+                assert!(final_id.is_finalized());
+                assert_ne!(provisional_id, final_id);
+                let by_provisional = store.load_channel(&provisional_id).expect("provisional id resolves");
+                assert_eq!(
+                    by_provisional.as_lifecycle().name(),
+                    final_id,
+                    "a provisional lookup must resolve the finalized state, not resurrect the provisional one"
+                );
+                let by_final = store.load_channel(&final_id).expect("final id resolves the same record");
+                assert_eq!(by_final.as_lifecycle().name(), final_id);
+                assert_eq!(
+                    ron_files(&dir),
+                    vec![format!("{provisional_id}.ron")],
+                    "finalization must not orphan the provisional state file"
+                );
 
                 // ---- Step 5: Customer generates its initial-state package ----
                 // Signing shares were re-injected by reload_*
@@ -191,16 +273,46 @@ mod test {
                 store.write_channel(&cs_m).expect("write established merchant");
                 let loaded_m = store.load_channel(&id).expect("load established merchant");
                 assert_eq!(loaded_m.as_lifecycle().stage(), LifecycleStage::Open);
+                // The state-0 record was assembled from two halves that had themselves been through the store,
+                // and it survives the open channel's own round trip.
+                let open_m = loaded_m.to_open().map_err(|(_, e)| e).expect("an open channel");
+                assert_eq!(
+                    open_m.current_record().map(|r| r.update_count()),
+                    Some(0),
+                    "an opened channel must carry its state-0 record"
+                );
 
                 let cs_c = established_c.to_channel_state();
                 store.write_channel(&cs_c).expect("write established customer");
                 let loaded_c = store.load_channel(&id).expect("load established customer");
                 assert_eq!(loaded_c.as_lifecycle().stage(), LifecycleStage::Open);
 
+                // The whole lifecycle lived in the one file keyed by the provisional id.
+                assert_eq!(ron_files(&dir), vec![format!("{provisional_id}.ron")]);
+
                 let _ = std::fs::remove_dir_all(&dir);
                 Ok(())
             }
             let _ = inner().map_err(|(_s, e)| panic!("{e}"));
         });
+    }
+
+    /// Both lookup paths must miss cleanly for a channel the store has never seen: the provisional form
+    /// reads its key's file directly, the final form scans for a matching current name.
+    #[test]
+    fn unknown_ids_do_not_resolve() {
+        use std::str::FromStr;
+
+        let dir = std::env::temp_dir().join(format!("grease_file_store_miss_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = FileStore::new(dir.clone()).expect("create file store");
+
+        let hex = "4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383";
+        let provisional = ChannelId::from_str(&format!("XGT{hex}")).unwrap();
+        let final_id = ChannelId::from_str(&format!("XGC{hex}")).unwrap();
+        assert!(store.load_channel(&provisional).is_err(), "an unknown provisional id must not resolve");
+        assert!(store.load_channel(&final_id).is_err(), "an unknown final id must not resolve");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

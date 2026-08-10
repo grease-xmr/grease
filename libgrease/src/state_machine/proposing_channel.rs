@@ -97,6 +97,27 @@ where
     /// The customer provides their channel secret, closing address, nonce, and the arbiter they pick from the
     /// ones the seed offers. The `ChannelIdMetadata` is constructed internally from the combined merchant +
     /// customer data.
+    ///
+    /// # `partial_spend_key` must be fresh for every channel
+    ///
+    /// Channel-id separation no longer rests on this: each funding linking tag is `L_j = (d_j + x)·H_p(K_j)`
+    /// over its own output's one-time key, and every funding transaction carries its own `R_j`, so two channels
+    /// get different tags even when they share a spend key ([`crate::cryptography::linking_tag`]).
+    ///
+    /// The requirement stands on wallet grounds instead. Two channels built from the same pair of
+    /// `partial_spend_key`s share one joint spend key `P`, hence one shared address: their deposits land in the
+    /// same wallet, are scanned together, and cannot be told apart by their owners; and a spend key that leaks
+    /// compromises every channel derived from it rather than one. Draw a fresh key per channel.
+    ///
+    /// # `customer_nonce` must be fresh for every channel
+    ///
+    /// The nonce is the customer's second, independent line of defence: drawn uniformly at random, it
+    /// guarantees on its own that no two of the customer's channels share an id, even if a spend key were
+    /// ever repeated. The merchant's nonce arrives with the seed and is shared by every proposal made from
+    /// it, and every other customer-side field may legitimately repeat (a static closing address, a repeated
+    /// channel key), so from one seed the customer's nonce is the only field *guaranteed* to separate two
+    /// channels' provisional ids. A customer that reuses it bears the collision risk itself. See
+    /// [`crate::channel_id::ChannelIdMetadata`], *Nonce freshness is mandatory*.
     pub fn new(
         seed: MerchantSeedInfo<KC>,
         arbiter: ArbiterConfiguration,
@@ -227,7 +248,8 @@ where
     initial_seed_info: MerchantSeedInfo<KC>,
     /// The merchant's channel secret, $\hat{k}_b$, whose public key #Pm the seed advertises.
     channel_secret: Zeroizing<KC::F>,
-    /// The partial wallet spend key for this (to-be-created) channel
+    /// The partial wallet spend key for this (to-be-created) channel. Must be fresh per channel — see
+    /// [`AwaitProposal::new`].
     partial_spend_key: Curve25519Secret,
 }
 
@@ -235,6 +257,9 @@ impl<KC> AwaitProposal<KC>
 where
     KC: Ciphersuite,
 {
+    /// `partial_spend_key` must be freshly generated for every channel, and in particular must not be derived
+    /// from the seed — the seed is reused across proposals by design. See
+    /// [`ChannelProposer::new`](super::ChannelProposer::new) for what a repeated spend key costs.
     pub fn new(
         initial_seed_info: MerchantSeedInfo<KC>,
         channel_secret: Zeroizing<KC::F>,

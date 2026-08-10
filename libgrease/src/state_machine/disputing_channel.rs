@@ -230,6 +230,11 @@ impl<KC: Ciphersuite> ForceCloseProtocolCommon for DisputingChannelState<KC> {
         self.last_update.record.update_count()
     }
 
+    fn state_amounts(&self) -> (u64, u64) {
+        let balances = self.dynamic.current_balances;
+        (balances.customer.to_piconero(), balances.merchant.to_piconero())
+    }
+
     fn arbiter_master_public_key(&self) -> G2Point {
         *self.metadata.arbiter_configuration().master_public_key()
     }

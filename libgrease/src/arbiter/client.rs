@@ -27,7 +27,7 @@ use std::fmt::{Debug, Formatter};
 use thiserror::Error;
 
 use crate::arbiter::config::ArbiterConfiguration;
-use crate::channel_id::ChannelId;
+use crate::channel_id::{ChannelId, ProvisionalChannelIdError};
 use crate::cryptography::attestation::{AttestationError, G1Point, G2Point, Statement};
 use crate::grease_protocol::update_record::UpdateRecord;
 
@@ -36,8 +36,13 @@ use crate::grease_protocol::update_record::UpdateRecord;
 /// This is the single place the protocol turns a [`ChannelId`] into the [`Statement`] bytes the arbiter attests
 /// and offsets are encrypted to. The channel id is absorbed as its canonical `XGC…` string; both the encryptor and
 /// the arbiter must derive `m` this way or dispute-path decryption silently fails.
-pub fn statement_for(channel_id: &ChannelId, update_count: u64) -> Statement {
-    Statement::new(channel_id.as_str().as_bytes().to_vec(), update_count)
+///
+/// A provisional (`XGT…`) id is refused: it commits to no funding output, so a statement over it — and everything
+/// sealed to that statement — would not be bound to one channel. The id can reach here from a peer or arbiter
+/// message (a presented record, a dispute-state reply), which is why this is a `Result` rather than an assertion.
+pub fn statement_for(channel_id: &ChannelId, update_count: u64) -> Result<Statement, ProvisionalChannelIdError> {
+    channel_id.require_finalized()?;
+    Ok(Statement::new(channel_id.as_str().as_bytes().to_vec(), update_count))
 }
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -53,6 +58,14 @@ pub enum ArbiterError {
     /// The channel is unknown to the arbiter — it was never registered with it.
     #[error("the arbiter does not know channel {0}")]
     UnknownChannel(ChannelId),
+    /// The channel id is already registered. Registration is once-per-channel and never overwrites — an identical
+    /// duplicate is refused too, because it is the observable signature of two channels colliding on one id.
+    #[error("channel {0} is already registered with the arbiter; registration is once per channel")]
+    AlreadyRegistered(ChannelId),
+    /// The channel id is provisional (`XGT…`): it commits to no funding output, so nothing registrable exists and
+    /// no statement can be formed — let alone attested — over it.
+    #[error(transparent)]
+    ProvisionalChannelId(#[from] ProvisionalChannelIdError),
     /// The channel is tombstoned: it was already resolved and cannot be disputed again.
     #[error("channel {0} has already been resolved; it cannot be disputed again")]
     AlreadyResolved(ChannelId),
@@ -103,7 +116,9 @@ pub struct DisputeStateView {
 
 impl DisputeStateView {
     /// The statement the arbiter will attest (or has attested): `m = (channel_id, high_water)`.
-    pub fn high_water_statement(&self) -> Statement {
+    ///
+    /// The id in this view arrived in an arbiter reply, so a provisional one is refused rather than trusted.
+    pub fn high_water_statement(&self) -> Result<Statement, ProvisionalChannelIdError> {
         statement_for(&self.channel_id, self.high_water)
     }
 
@@ -343,10 +358,24 @@ mod tests {
 
     #[test]
     fn statement_binds_the_channel_id_string_and_count() {
-        let m = statement_for(&channel_id(), 7);
+        let m = statement_for(&channel_id(), 7).expect("a final id yields a statement");
         assert_eq!(m.channel_id(), channel_id().as_str().as_bytes());
         assert_eq!(m.update_count(), 7);
-        assert_ne!(m, statement_for(&channel_id(), 8));
+        assert_ne!(m, statement_for(&channel_id(), 8).unwrap());
+    }
+
+    /// F2 of the K-20 review: a provisional id must be refused at the boundary that turns an id into the
+    /// statement bytes offsets are sealed to and the arbiter attests.
+    #[test]
+    fn a_provisional_channel_id_yields_no_statement() {
+        let provisional =
+            ChannelId::from_str("XGT4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+        let err = statement_for(&provisional, 7).expect_err("a provisional id must be refused");
+        assert_eq!(err.0, provisional);
+
+        // The same refusal surfaces through a dispute-state view carrying an arbiter-supplied id.
+        let view = DisputeStateView { channel_id: provisional, high_water: 7, window_expiry: 1_000, resolved: false };
+        assert!(view.high_water_statement().is_err());
     }
 
     #[test]
@@ -355,7 +384,7 @@ mod tests {
         assert_eq!(view.remaining_secs(400), 600);
         assert_eq!(view.remaining_secs(1_000), 0);
         assert_eq!(view.remaining_secs(5_000), 0);
-        assert_eq!(view.high_water_statement(), statement_for(&channel_id(), 4));
+        assert_eq!(view.high_water_statement().unwrap(), statement_for(&channel_id(), 4).unwrap());
     }
 
     #[test]
@@ -375,8 +404,11 @@ mod tests {
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<ActionLogEntry>(&json).unwrap(), entry);
 
-        let wrapped =
-            WrappedAttestation::new(statement_for(&channel_id(), 4), TransportPublicKey::new(vec![1, 2, 3]), vec![9u8; 48]);
+        let wrapped = WrappedAttestation::new(
+            statement_for(&channel_id(), 4).unwrap(),
+            TransportPublicKey::new(vec![1, 2, 3]),
+            vec![9u8; 48],
+        );
         let json = serde_json::to_string(&wrapped).unwrap();
         assert_eq!(serde_json::from_str::<WrappedAttestation>(&json).unwrap(), wrapped);
     }

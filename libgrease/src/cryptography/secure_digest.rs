@@ -2,9 +2,10 @@
 //!
 //! `flexible-transcript` 0.3.4 deleted its own `SecureDigest` and relaxed `DigestTranscript<D>` to plain
 //! `D: Send + Clone + Digest`. Grease still needs the "at least 32 bytes of output" guarantee that trait
-//! carried, because two places truncate a digest to exactly 32 bytes and are only sound when the digest is at
-//! least that wide: [`ChannelIdMetadata`](crate::channel_id::ChannelIdMetadata) and the `SharedPublicKey`
-//! commitment in [`crate::grease_protocol::multisig_wallet`].
+//! carried, because [`ChannelIdMetadata`](crate::channel_id::ChannelIdMetadata) truncates a digest to exactly
+//! 32 bytes and is only sound when the digest is at least that wide. (The `SharedPublicKey` commitment in
+//! [`crate::grease_protocol::multisig_wallet`] used to be the second such place; it now keeps the whole
+//! 64-byte `Blake2b512` challenge and no longer truncates.)
 //!
 //! So the trait is re-declared here rather than replaced with plain [`Digest`].
 

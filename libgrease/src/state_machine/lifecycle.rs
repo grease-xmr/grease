@@ -257,6 +257,7 @@ pub mod test {
         let halves = [ChannelRole::Customer, ChannelRole::Merchant].map(|role| {
             let secret = XmrScalar::random(&mut rng);
             HalfSignedUpdateRecord::sign(channel_id.clone(), update_count, close_hash, role, &secret, &mut rng)
+                .expect("the fixture id is final")
         });
         UpdateRecord::from_halves(&halves[0], &halves[1]).expect("halves agree by construction")
     }
@@ -272,7 +273,7 @@ pub mod test {
         // cut-and-choose profile keeps these plumbing tests fast; soundness is the binding proof's own concern.
         let peer_binding_proof = prove_encrypted_offset(
             &peer_omega,
-            &statement_for(&channel_id, update_count),
+            &statement_for(&channel_id, update_count).expect("the fixture id is final"),
             &generate_master_keypair(&mut rand_core::OsRng).1,
             SecondBase::grease_default(),
             BindingProofParams::new(6, 3).unwrap(),

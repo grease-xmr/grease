@@ -2,7 +2,7 @@
 
 = The Grease Channel Lifecycle
 
-== Overall design description
+== Overall design description <overallDesign>
 
 Grease builds on the Monet@monet design, a payment channel protocol that introduced the use of a third-party arbiter to resolve channel
 disputes.
@@ -10,9 +10,15 @@ disputes.
 A Grease payment channel is a 2-party bidirectional channel. The most common use case is in a multi-payment arrangement between a customer
 and a merchant, and so we will label the parties as such.
 
-To set up a new channel, the customer and merchant agree on the funds to be locked in the channel. They're usually all provided by the
-customer, but it doesn't need to be. These funds are sent to a new 2-of-2 multisig wallet, which is created on the Monero blockchain for the
-sole purpose of serving the channel.
+To set up a new channel, the customer and merchant agree on the funds to be locked in the channel. These funds are sent to a new 2-of-2
+multisig wallet, created on the Monero blockchain for the sole purpose of serving the channel.
+
+Usually the customer provides all of them, but it does not have to. Either party may contribute, each with one funding output, and a merchant
+that wants a balance to spend from — liquidity for refunds, or a genuinely two-sided channel — funds alongside the customer. Both parties
+sign the channel's initial state _before_ anyone broadcasts a funding transaction, so neither has to part with money on the strength of the
+other's good behaviour (@preSigning). This is possible because FCMP++ lets a spend be signed against a funding output that has been
+determined but not yet mined; under fixed-size ring signatures it was not, and a channel could only be funded by the party willing to go
+first.
 
 The idea is that a _commitment transaction_, so-called for reasons that will be made clear later, spends the funds out of the multisig
 wallet back to the customer and merchant can be trustlessly, securely and rapidly updated many thousands of times by the customer and
@@ -57,11 +63,13 @@ On a high level, the payment channel lifecycle goes through 6 phases:
 
 - `New` - The channel has just been created and is entering the establishment negotiation phase. Basic information is swapped in this phase,
   including the public keys of the peers, the nominated arbiter, and the initial balance. The channel parameters agreed here — initial
-  balances, public keys and closing addresses — feed the channel id, which is finalized once the funding output exists and commits to it (See
-  @channelId). If both parties are satisfied with the proposed channel parameters, the channel moves to the `Establishing` state.
-- `Establishing` - The channel is being established. This phase creates and funds the multisig wallet. Once both parties have verified the
-  funding transaction, the parties will share an `AckChannelEstablished` message. Once acknowledged, an `OnChannelEstablished` event is
-  emitted, and the channel will move to the `Open` state.
+  balances, public keys and closing addresses — feed the channel id, which is finalized once the funding outputs are declared and commits to
+  them (See @channelId). If both parties are satisfied with the proposed channel parameters, the channel moves to the `Establishing` state.
+- `Establishing` - The channel is being established. This phase creates the multisig wallet, has each funding party declare the output it
+  will contribute, finalizes the channel id against those outputs, and signs both the state-0 exits and the initial channel state — all
+  before any funding transaction is broadcast (@initProtocol). The funding parties then broadcast. Once both parties have verified that every
+  declared funding output appeared on chain as declared, they share an `AckChannelEstablished` message. Once acknowledged, an
+  `OnChannelEstablished` event is emitted, and the channel will move to the `Open` state.
 - `Open` - The channel is open and ready for use. Any number of channel update events can occur in this phase and the channel can remain in
   this state indefinitely. The channel remains in this state until the channel is closed via the amicable `Closing` state or the `Disputing`
   state. At each update, both parties cryptographically _commit_ to the new state of the channel and collaborate to produce a new,

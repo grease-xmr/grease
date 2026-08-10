@@ -194,7 +194,8 @@ fn cross_signed_record(update_count: u64) -> UpdateRecord {
         ChannelRole::Customer,
         &customer_secret,
         &mut OsRng,
-    );
+    )
+    .unwrap();
     let b = HalfSignedUpdateRecord::sign(
         channel_id(),
         update_count,
@@ -202,7 +203,8 @@ fn cross_signed_record(update_count: u64) -> UpdateRecord {
         ChannelRole::Merchant,
         &merchant_secret,
         &mut OsRng,
-    );
+    )
+    .unwrap();
     let record = UpdateRecord::from_halves(&a, &b).unwrap();
     record
         .verify(&(Ed25519::generator() * customer_secret), &(Ed25519::generator() * merchant_secret))

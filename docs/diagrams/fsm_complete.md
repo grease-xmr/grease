@@ -25,10 +25,12 @@ stateDiagram-v2
         note right of Establishing
             <b>Responsibilities:</b>
             - Create the 2-of-2 multisig wallet
+            - Declare each party's funding output
             - Finalize the channel id (commits to L_F)
-            - Exchange the initial adapter signature,
-              verifiably encrypted offset and binding proof
-            - Fund and confirm the funding transaction
+            - Pre-sign the state-0 exits and the initial
+              state: adapter signature, verifiably
+              encrypted offset and binding proof
+            - Broadcast and confirm the funding outputs
         end note
     }
 
@@ -91,18 +93,24 @@ provisional channel id from that metadata.
 
 ### Establishing
 
-The parties create the 2-of-2 multisig wallet, finalize the channel id (which commits to the funding output's linking tag `L_F`), and
-exchange the initial channel state. The initial state is built exactly like a later update: each party adapter-signs the counterparty's
-closing transaction with a fresh secret offset and hands over a *verifiably encrypted offset* together with a binding proof. No
-zero-knowledge circuit is involved, and the arbiter is not contacted — it holds no state for the channel until a dispute is opened.
+The parties create the 2-of-2 multisig wallet, each funding party declares the output it will contribute, and the channel id is finalized
+against those outputs (it commits to their linking tags `L_F`). Only then is the initial channel state exchanged, and it is built exactly
+like a later update: each party adapter-signs the counterparty's closing transaction with a fresh secret offset and hands over a *verifiably
+encrypted offset* together with a binding proof. No zero-knowledge circuit is involved, and the arbiter is not contacted — it holds no state
+for the channel until a dispute is opened.
+
+All of this happens *before* any funding transaction is broadcast. State 0 is one exit transaction per funding output, each returning that
+output to the party that contributed it, so once the initial state is signed every funder holds a way out that does not depend on the
+counterparty. The funding parties broadcast last.
 
 **Requirements for transition to Open:**
 1. Multisig wallet created
-2. Channel id finalized (commits to `L_F`)
-3. Initial verifiably encrypted offsets and binding proofs exchanged and verified
-4. Funding transaction confirmed
+2. Every funding output declared and verified against the declaring party's committed balance
+3. Channel id finalized (commits to `L_F`)
+4. Initial verifiably encrypted offsets and binding proofs exchanged and verified
+5. Every declared funding output confirmed on chain as declared
 
-**Events:** `MultisigWalletCreated`, `ChannelIdFinalized`, `InitialStateExchanged`, `FundingTxConfirmed`
+**Events:** `MultisigWalletCreated`, `FundingOutputsDeclared`, `ChannelIdFinalized`, `InitialStateExchanged`, `FundingTxConfirmed`
 
 ### Open
 
@@ -144,7 +152,7 @@ keeps no per-channel state outside an open dispute, so there is nothing to clean
 | State | Merchant | Customer |
 |-------|----------|----------|
 | Proposing | Proposer (shares seed, accepts) | Proposee (builds proposal) |
-| Establishing | Multisig + initial-state exchange | Multisig + initial-state exchange, funds the wallet |
+| Establishing | Multisig + initial-state exchange, funds the wallet if it takes a balance | Multisig + initial-state exchange, funds the wallet |
 | Open | Update proposer (by convention) | Update proposee |
 | Closing | Initiator or responder | Initiator or responder |
 | Disputing | Claimant or defendant | Claimant or defendant |

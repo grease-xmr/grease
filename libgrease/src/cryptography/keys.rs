@@ -1,4 +1,4 @@
-use crate::cryptography::commit::HashCommitment256;
+use crate::cryptography::commit::HashCommitment512;
 use crate::cryptography::encryption_context::{get_encryption_context, has_encryption_context};
 use crate::cryptography::secret_bytes::SecretBytes;
 use crate::cryptography::Commit;
@@ -16,9 +16,9 @@ use std::fmt::Debug;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// A commitment to a Monero wallet public key. It's always a 256-bit Blake2b hash due to the implementation of
-/// [`Commit`] for [`Curve25519PublicKey`].
-pub type PublicKeyCommitment = HashCommitment256<Blake2b512>;
+/// A commitment to a Monero wallet public key. It's always the full 512-bit Blake2b challenge due to the
+/// implementation of [`Commit`] for [`Curve25519PublicKey`].
+pub type PublicKeyCommitment = HashCommitment512<Blake2b512>;
 
 pub trait SecretKey: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> {}
 
@@ -280,9 +280,10 @@ impl Commit<Blake2b512> for Curve25519PublicKey {
     fn commit(&self) -> Self::Committed {
         let mut t = RecommendedTranscript::new(b"Curve25519PublicKeyCommitment");
         t.append_message(b"Ed25519.EdwardsPoint", self.to_compressed().to_bytes());
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(&t.challenge(b"commitment"));
-        HashCommitment256::new(hash)
+        let challenge = t.challenge(b"commitment");
+        let mut hash = [0u8; 64];
+        hash.copy_from_slice(challenge.as_slice());
+        HashCommitment512::new(hash)
     }
 }
 
@@ -430,10 +431,8 @@ mod test {
     /// `DigestTranscript<Blake2b512>`, so this vector spans both that crate and `blake2 0.10` — the pair the
     /// serai migration replaces.
     ///
-    /// The transcript is reconstructed here rather than read out of `commit()` because `commit()` cannot
-    /// currently be called: it copies the 64-byte challenge into a 32-byte array and panics unconditionally
-    /// (`copy_from_slice` length mismatch). No live path reaches it — the wallet handshake commits through
-    /// `SharedPublicKey` instead — so the defect is recorded here rather than fixed under a guard ticket.
+    /// The transcript is reconstructed independently of `commit()` so the vector spans the raw transcript as
+    /// well as the commitment `commit()` returns: the commitment is the whole 64-byte challenge, untruncated.
     #[test]
     fn public_key_commitment_transcript_is_frozen() {
         let key = Curve25519PublicKey::from_hex(FIXED_PUBLIC_KEY).expect("valid point");
@@ -441,8 +440,10 @@ mod test {
         t.append_message(b"Ed25519.EdwardsPoint", key.to_compressed().to_bytes());
         let challenge = t.challenge(b"commitment");
         assert_eq!(hex::encode(challenge.as_slice()), COMMITMENT_CHALLENGE);
-        // The first 32 bytes are what `commit()` is meant to return, and will once the truncation is repaired.
-        assert_eq!(&COMMITMENT_CHALLENGE[..64], "456666cc3eeaeb4f282da56c3f0fe1a980a3b30b5a4accff7d1f2729cfc2f3f1");
+        // `commit()` returns the whole challenge.
+        let commitment = key.commit();
+        assert_eq!(hex::encode(commitment.as_bytes()), COMMITMENT_CHALLENGE);
+        assert!(key.verify(&commitment));
     }
 
 }

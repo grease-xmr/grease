@@ -36,6 +36,11 @@ pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
     #[serde(serialize_with = "crate::helpers::serialize_ge", deserialize_with = "crate::helpers::deserialize_ge")]
     pub merchant_public_key: KC::G,
     /// The merchant nonce, which blinds the channel-id hash and lets the merchant recognise this proposal.
+    ///
+    /// Must be drawn uniformly at random per seed. It is the merchant's own guard against two of its
+    /// channels sharing an id — and because the seed may be reused across proposals, channels opened from
+    /// one seed share it, leaving the customer's nonce to separate their ids. See
+    /// [`crate::channel_id::ChannelIdMetadata`], *Nonce freshness is mandatory*.
     pub merchant_nonce: u64,
 }
 
@@ -113,6 +118,8 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
         self
     }
 
+    /// The merchant's channel nonce. Draw it uniformly at random for every seed — see
+    /// [`MerchantSeedInfo::merchant_nonce`] for what its freshness buys.
     pub fn with_channel_nonce(mut self, nonce: u64) -> Self {
         self.channel_nonce = Some(nonce);
         self

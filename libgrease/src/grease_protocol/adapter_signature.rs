@@ -1,11 +1,7 @@
-use crate::channel_id::ChannelId;
-use crate::cryptography::adapter_signature::AdaptedSignature;
-use crate::cryptography::keys::Curve25519Secret;
+use crate::channel_id::{ChannelId, ProvisionalChannelIdError};
 use crate::grease_protocol::update_record::CloseHash;
 use crate::payment_channel::HasRole;
 use crate::XmrScalar;
-use crate::Ed25519;
-use rand_core::{CryptoRng, RngCore};
 use thiserror::Error;
 
 /// Domain-separation tag for the adapter-signature message. Versioned: a layout change gets a new tag.
@@ -17,19 +13,35 @@ pub const ADAPTER_SIG_DST: &[u8] = b"Grease AdapterSig v2";
 
 /// The transcript-based commitment message an adapter signature signs for state `update_count`.
 ///
-/// Binds `(channel_id, update_count, close_hash)`, where `close_hash` is the canonical closing-transaction hash
-/// the state's [`UpdateRecord`][crate::grease_protocol::update_record::UpdateRecord] commits to (sourced from
-/// [`commitment_tx_message`][crate::wallet::multisig_wallet::commitment_tx_message]). Anyone holding an update
-/// record can therefore recompute this message from the record's own fields.
-pub fn adapter_signature_message(channel_id: &ChannelId, update_count: u64, close_hash: &CloseHash) -> Vec<u8> {
+/// Binds `(channel_id, update_count, close_hash)`, where `close_hash` is the **per-holder** hash of the
+/// commitment transaction this signature authorizes broadcasting, from
+/// [`commitment_tx_message`][crate::wallet::multisig_wallet::commitment_tx_message].
+///
+/// It is *not* a field of the state's [`UpdateRecord`][crate::grease_protocol::update_record::UpdateRecord]: a
+/// record carries one hash per state and each party holds its own closing transaction, so what the record commits
+/// to is the hash of the *pair*
+/// ([`commitment_pair_message`][crate::wallet::multisig_wallet::commitment_pair_message]). A holder recomputes
+/// this message from the record's `(channel_id, update_count)` plus the state's two balances, and the record's
+/// pair hash — over those same two balances — is what validates them.
+///
+/// A provisional (`XGT…`) id is refused: a completed (adapted) signature over this message is an ordinary
+/// Schnorr signature a peer will verify and act on, so the message must never come into existence over an id
+/// that commits to no funding output. A `Result` rather than an assertion, because both the signing and the
+/// verifying side of the exchange pass through here and verification runs on peer input in release builds.
+pub fn adapter_signature_message(
+    channel_id: &ChannelId,
+    update_count: u64,
+    close_hash: &CloseHash,
+) -> Result<Vec<u8>, ProvisionalChannelIdError> {
     use blake2::Blake2b512;
     use flexible_transcript::{DigestTranscript, Transcript};
 
+    channel_id.require_finalized()?;
     let mut transcript = DigestTranscript::<Blake2b512>::new(ADAPTER_SIG_DST);
     transcript.append_message(b"channel_id", channel_id.as_str().as_bytes());
     transcript.append_message(b"update_count", update_count.to_le_bytes());
     transcript.append_message(b"close_hash", close_hash.as_bytes());
-    transcript.challenge(b"adapter_sig_message").to_vec()
+    Ok(transcript.challenge(b"adapter_sig_message").to_vec())
 }
 
 pub trait AdapterSignatureHandler: HasRole {
@@ -44,27 +56,14 @@ pub trait AdapterSignatureHandler: HasRole {
 
     /// Return the current adapter signature offset.
     fn adapter_signature_offset(&self) -> &XmrScalar;
-
-    /// Generate a new adapter signature over the closing transaction of state `update_count`, using the current
-    /// secret key and offset. The message is [`adapter_signature_message`].
-    fn new_adapter_signature<R: RngCore + CryptoRng>(
-        &self,
-        secret_key: &Curve25519Secret,
-        channel_id: &ChannelId,
-        update_count: u64,
-        close_hash: &CloseHash,
-        rng: &mut R,
-    ) -> Result<AdaptedSignature<Ed25519>, AdapterSignatureError> {
-        let offset = self.adapter_signature_offset();
-        let msg = adapter_signature_message(channel_id, update_count, close_hash);
-        Ok(AdaptedSignature::<Ed25519>::sign(secret_key.as_scalar(), offset, msg, rng))
-    }
 }
 
 #[derive(Debug, Error)]
 pub enum AdapterSignatureError {
     #[error("Could not provide result because the following information is missing: {0}")]
     MissingInformation(String),
+    #[error(transparent)]
+    ProvisionalChannelId(#[from] ProvisionalChannelIdError),
 }
 
 #[cfg(test)]
@@ -79,7 +78,7 @@ mod tests {
 
     fn fixed_message() -> Vec<u8> {
         let id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
-        adapter_signature_message(&id, 7, &CloseHash::new([0xaa; 64]))
+        adapter_signature_message(&id, 7, &CloseHash::new([0xaa; 64])).expect("a final id yields a message")
     }
 
     /// Freezes the adapter-signature message under the live `"Grease AdapterSig v2"` domain tag.
@@ -107,8 +106,18 @@ mod tests {
         let id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
         let other_id = ChannelId::from_str(&CHANNEL_ID.replace("XGC0", "XGC1")).expect("valid channel id");
         let base = fixed_message();
-        assert_ne!(adapter_signature_message(&other_id, 7, &CloseHash::new([0xaa; 64])), base);
-        assert_ne!(adapter_signature_message(&id, 8, &CloseHash::new([0xaa; 64])), base);
-        assert_ne!(adapter_signature_message(&id, 7, &CloseHash::new([0xab; 64])), base);
+        assert_ne!(adapter_signature_message(&other_id, 7, &CloseHash::new([0xaa; 64])).unwrap(), base);
+        assert_ne!(adapter_signature_message(&id, 8, &CloseHash::new([0xaa; 64])).unwrap(), base);
+        assert_ne!(adapter_signature_message(&id, 7, &CloseHash::new([0xab; 64])).unwrap(), base);
+    }
+
+    /// F2 of the K-20 review: an adapted signature completes into an ordinary Schnorr signature, so its message
+    /// must be refused — not silently produced — over a provisional (`XGT…`) id.
+    #[test]
+    fn a_provisional_channel_id_yields_no_message() {
+        let provisional = ChannelId::from_str(&CHANNEL_ID.replace("XGC", "XGT")).expect("valid provisional id");
+        let err = adapter_signature_message(&provisional, 7, &CloseHash::new([0xaa; 64]))
+            .expect_err("a provisional id must be refused");
+        assert_eq!(err.0, provisional);
     }
 }

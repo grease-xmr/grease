@@ -18,16 +18,21 @@
 use crate::amount::MoneroAmount;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey};
 use crate::grease_protocol::multisig_wallet::LinkedMultisigWallets;
+use crate::payment_channel::multisig_keyring::{musig_2_of_2, sort_pubkeys};
 use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::ChannelRole;
 use crate::wallet::common::{block_count, create_signable_tx, scan_wallet};
-use crate::wallet::multisig_wallet::MultisigWallet;
+use crate::wallet::multisig_wallet::{FundingOutputRef, MultisigWallet};
 use crate::wallet::watch_only::WatchOnlyWallet;
 use crate::wallet::{connect_to_rpc, MoneroRpc};
+use crate::{XmrPoint, XmrScalar};
+use ciphersuite::group::Group;
+use modular_frost::Participant;
 use monero::Network as MoneroNetwork;
 use monero_interface::prelude::*;
 use monero_oxide::ed25519::{Point as MoneroPoint, Scalar as MoneroScalar};
 use monero_wallet::address::{MoneroAddress, Network};
+use monero_wallet::extra::Extra;
 use monero_wallet::send::Change;
 use monero_wallet::ViewPair;
 use rand_chacha::ChaCha20Rng;
@@ -294,4 +299,112 @@ async fn regtest_multisig_wallet_scans_the_tip_block() {
     let found = wallet.scan(None).await.expect("multisig scan failed");
     assert_eq!(found, 1, "the multisig wallet never scanned the tip block it was funded in");
     assert_eq!(wallet.outputs().len(), 1);
+}
+
+/// Two linked multisig wallets over one negotiated pair of spend keys, on `rpc_url`.
+fn linked_multisig_wallets(rng: &mut ChaCha20Rng, rpc_url: &str) -> (MultisigWallet, MultisigWallet) {
+    let mut customer = MultisigWalletKeyNegotiation::random(rng, ChannelRole::Customer, MoneroNetwork::Mainnet, rpc_url);
+    let mut merchant = MultisigWalletKeyNegotiation::random(rng, ChannelRole::Merchant, MoneroNetwork::Mainnet, rpc_url);
+    let (customer_key, merchant_key) = (customer.shared_public_key(), merchant.shared_public_key());
+    customer.set_peer_public_key(merchant_key).expect("roles are compatible");
+    merchant.set_peer_public_key(customer_key).expect("roles are compatible");
+    (
+        MultisigWallet::try_from(customer).expect("a fully negotiated wallet"),
+        MultisigWallet::try_from(merchant).expect("a fully negotiated wallet"),
+    )
+}
+
+/// The joint spend key `x` behind the wallets' `P`: the two interpolated MuSig shares sum to it. Taken from
+/// the MuSig interpolation rather than from the wallet, and asserted against `P` by the caller.
+fn joint_spend_scalar(a: &MultisigWallet, b: &MultisigWallet) -> XmrScalar {
+    let mut sorted = [*a.my_public_key(), *b.my_public_key()];
+    sort_pubkeys(&mut sorted);
+    let share = |wallet: &MultisigWallet| {
+        let keys = musig_2_of_2(wallet.my_spend_key(), &sorted).expect("musig");
+        let participants = vec![Participant::new(1).unwrap(), Participant::new(2).unwrap()];
+        **keys.view(participants).expect("the 2-of-2 signing set").secret_share()
+    };
+    share(a) + share(b)
+}
+
+/// The transaction public key `R` of a published transaction, read off its `extra` field the way a funding
+/// declaration's recipient would.
+async fn transaction_public_key(rpc: &MoneroRpc, tx_hash: [u8; 32]) -> XmrPoint {
+    let tx = rpc.transaction(tx_hash).await.expect("the published transaction must be fetchable");
+    let extra = Extra::read(&mut tx.prefix().extra.as_slice()).expect("a well-formed extra field");
+    let (keys, _additional) = extra.keys().expect("a transaction paying an address carries a key");
+    XmrPoint(keys[0].into())
+}
+
+/// **The empirical half of the linking-tag claim.** `derive_funding_output` reimplements Monero's output
+/// derivation, because monero-oxide keeps `SharedKeyDerivations` private — the cofactor multiplication, the
+/// varint index encoding and the `ViewPair` conventions are all places to be silently wrong in a way that
+/// stays self-consistent. This pins all three against an output a real `monerod` produced, and pins the
+/// linking tag against the key image that output's spend would publish.
+///
+/// The funding transaction is a *normal* one, not a coinbase: coinbase outputs are derived differently, and a
+/// channel is never funded by one.
+#[tokio::test]
+#[ignore = "spawns a regtest monerod"]
+async fn regtest_derivation_matches_a_scanned_output() {
+    let node = RegtestNode::start().await;
+    let rpc = node.rpc().await;
+
+    // A single-signature wallet to fund from. Coinbase outputs need 60 confirmations, and decoy selection
+    // needs a populated chain behind them.
+    let birthday = rpc.latest_block_number().await.unwrap() as u64 + 1;
+    let spend_secret = Curve25519Secret::random(&mut OsRng);
+    let spend_public = Curve25519PublicKey::from_secret(&spend_secret);
+    let view_secret = Curve25519Secret::random(&mut OsRng);
+    let mut source = WatchOnlyWallet::new(rpc.clone(), view_secret.clone(), spend_public.clone(), Some(birthday))
+        .expect("cannot build the funding wallet");
+    mine(&rpc, &source.address(), 80).await;
+    mine(&rpc, &elsewhere(), 300).await;
+    assert_eq!(source.scan(None, None).await.expect("scan failed"), 80);
+
+    // The channel's shared wallet, with a birthday taken before the funding transaction exists.
+    let mut rng = ChaCha20Rng::seed_from_u64(0xD00D1E);
+    let (mut customer, merchant) = linked_multisig_wallets(&mut rng, &node.rpc_url);
+    customer.reset_birthday().await.expect("reset_birthday failed");
+
+    // Fund the shared address from a normal transaction and confirm it.
+    const FUNDING: u64 = 1_000_000_000_000;
+    let inputs = source
+        .find_spendable_outputs(MoneroAmount::from_piconero(FUNDING * 3))
+        .expect("the mined coinbase outputs are not spendable");
+    let change = Change::new(view_pair_of(&spend_public, &view_secret), None);
+    let signable = create_signable_tx(&rpc, &mut OsRng, inputs, vec![(customer.address(), FUNDING)], change, vec![])
+        .await
+        .expect("create_signable_tx failed against the real chain");
+    let sender = Zeroizing::new(MoneroScalar::from(*spend_secret.to_dalek_scalar()));
+    let funding_tx = signable.sign(&mut OsRng, &sender).expect("signing the funding transaction failed");
+    rpc.publish_transaction(&funding_tx).await.expect("the daemon rejected the funding transaction");
+    mine(&rpc, &elsewhere(), 1).await;
+
+    assert_eq!(customer.scan(None).await.expect("multisig scan failed"), 1, "the funding output was not found");
+    let output = customer.outputs()[0].clone();
+    assert_eq!(output.commitment().amount, FUNDING, "the scanned output is not the one we paid");
+
+    // A declaration carries nothing but `(R_j, i_j)`; everything else is derived.
+    let declared = FundingOutputRef::new(
+        transaction_public_key(&rpc, output.transaction()).await,
+        output.index_in_transaction(),
+    );
+    let derived = customer.derive_funding_output(&declared).expect("the customer derives the output");
+    assert_eq!(derived, merchant.derive_funding_output(&declared).expect("the merchant derives it too"));
+
+    // The scanner's own answers, from a real chain, are the ground truth.
+    let key_offset: XmrScalar = output.key_offset().into();
+    assert_eq!(derived.derivation, key_offset, "d_j is not Monero's key offset");
+    assert_eq!(derived.one_time_key, XmrPoint(output.key().into()), "K_j is not the scanned output key");
+
+    // And the tag is the key image a spend of that output publishes: `(d_j + x)·H_p(K_j)`.
+    let x = joint_spend_scalar(&customer, &merchant);
+    assert_eq!(XmrPoint::generator() * x, customer.joint_public_spend_key().as_point(), "x must be P's dlog");
+    let generator = XmrPoint(MoneroPoint::biased_hash(output.key().compress().to_bytes()).into());
+    let expected = generator * (x + key_offset);
+
+    let partial = merchant.partial_linking_tag(&derived).expect("the merchant's partial");
+    let tag = customer.linking_tag(&derived, &partial).expect("the two partials combine");
+    assert_eq!(tag, expected, "the linking tag is not the key image this funding output's spend would publish");
 }

@@ -38,6 +38,7 @@
 #include "18_channel_dispute.typ"
 #include "40_arbiter.typ"
 #include "50_limitations.typ"
+#include "60_comparison_to_timelock.typ"
 
 #outline(title: "Table of Algorithms", target: figure.where(kind: "algorithm"))
 

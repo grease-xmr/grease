@@ -4,6 +4,10 @@ Grease assumes that Monero will never implement state management features such a
 that would let a channel enforce its own dispute resolution on the base layer. Lacking them, Grease delegates that role to an external
 arbiter, and its principal limitations follow from that separation.
 
+One thing that separation does _not_ cost is safe funding. A design built on timelocks would gate a funder's refund behind an expiry; Grease
+instead signs every party's exit before any funding transaction is broadcast (@preSigning), which FCMP++ permits and which needs no base-layer
+condition at all.
+
 == Bilateral channels only
 
 Grease is a two-party channel and does not attempt multi-hop routing — an explicit anti-principle of the design. Taking the Lightning Network

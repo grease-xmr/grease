@@ -131,7 +131,7 @@ for state $i$, a party needs that party's offset $wn(i)$, whose public point is 
 
 At each update to state $i$, the parties agree the statement
 $ m_i = (#raw("id"), i) quad ("on channel" #raw("id") ", state" i "is the latest"), $
-where `id` is the channel identifier (@channelId), which commits to the funding output. Each party generates a _fresh_ offset $wn(i)$ for
+where `id` is the channel identifier (@channelId), which commits to the funding outputs. Each party generates a _fresh_ offset $wn(i)$ for
 the counterparty's state-$i$ close, and hands the counterparty an `EncryptToStatement` ciphertext of that offset addressed to $m_i$ — a
 *verifiably encrypted offset*. Because it is worthless unless it is honest, it travels with a non-interactive proof — constructed in @bindingProof — establishing, as a single
 statement, that
@@ -294,15 +294,40 @@ $GG_2$ encodings at Ed25519 width lands near $20$ KB and under-budgets the updat
 
 == The dispute state machine <stateMachine>
 
-The arbiter keeps a small amount of *non-secret* state per channel: a monotonically increasing *high-water mark*, an *adjudication window*
-anchored to a consensus clock, a *resolved tombstone*, and a public append-only *action log*. When a party presents a cross-signed record,
-the arbiter runs the lifecycle shown in @arbiter_lifecycle.
+The arbiter keeps a small amount of *non-secret* state per channel: the two verification keys $(P_A, P_B)$ registered when the channel is
+opened with it, a monotonically increasing *high-water mark*, an *adjudication window* anchored to a consensus clock, a *resolved
+tombstone*, and a public append-only *action log*. When a party presents a cross-signed record, the arbiter runs the lifecycle shown in
+@arbiter_lifecycle.
+
+*Registration comes first, and it is deliberately narrow.* A channel enters the arbiter's registry exactly once, under its finalized id,
+carrying nothing but the two keys its records will be verified against. Two rules are normative, not incidental to any implementation:
+
+- *Only a finalized id is registrable.* A provisional `XGT…` id commits to no funding output (@channelId), so a registration under it names
+  nothing the dispute path could ever act on. The arbiter refuses it.
+- *An id is registered at most once, and registration never overwrites.* A second registration under an already-registered id is refused —
+  *even when it carries the identical key pair*. An identical duplicate is precisely the observable signature of two channels colliding on
+  one id: accepted as an idempotent no-op, the colliding channels would silently share one high-water mark, one window and one tombstone,
+  and nothing anywhere would notice; accepted last-write-wins with different keys, the first channel's dispute path would be silently
+  severed. Refusing makes the collision loud at the first moment it is visible. The benign case — a party re-sending a registration it
+  fears was lost — is distinguishable by querying the registry, so the refusal costs an honest caller nothing.
+
+A refused registration changes no state.
+
+#algo(
+  caption: [Registering a channel with the arbiter.],
+  title: [`onRegisterChannel(id: ChannelId, P_A, P_B)`],
+  [
+    + *if* `id` is not finalized (a provisional `XGT…` id): *return* Fail(`ProvisionalChannelId`).
+    + *if* the registry already holds `id`: *return* Fail(`AlreadyRegistered`) — even for an identical $(P_A, P_B)$.
+    + Store $(P_A, P_B)$ under `id`. Return Ok.
+  ],
+)<onRegister>
 
 The record a party presents is the same object the parties sign on _every_ update:
 
 ```rs
 pub struct UpdateRecord {
-  /// The globally unique channel id (commits to the funding output)
+  /// The globally unique channel id (commits to the funding outputs)
   channel_id: ChannelId,
   /// The monotonic update count for this state
   update_count: u64,
@@ -317,7 +342,7 @@ pub struct UpdateRecord {
 
 Verifying an `UpdateRecord` is two Schnorr checks and a well-formedness check on the record itself — a valid `channel_id`, an update count,
 and a present `close_hash`. That both parties signed the record is what vouches that `close_hash` is the legitimate closing transaction for
-this state; the arbiter does not open the id or reconstruct the transaction, so it never learns the funding output, the linking tag, or the
+this state; the arbiter does not open the id or reconstruct the transaction, so it never learns the funding outputs, their linking tags, or the
 balances. It sees only an opaque id and an update count.
 
 #figure(
@@ -350,8 +375,10 @@ balances. It sees only an opaque id and an update count.
   caption: [The arbiter's response to a presented record.],
   title: [`onPresentRecord(rec: UpdateRecord)`],
   [
-    + Validate `signature_a` and `signature_b` over the record, and that `rec` is well-formed (a valid `channel_id`, an update count, and a
-      present `close_hash`). If not, *return* Fail(`Invalid`).
+    + Look up the registered key pair $(P_A, P_B)$ for `rec.channel_id` (@onRegister); *if* the id is not registered, *return*
+      Fail(`Unknown`).
+    + Validate `signature_a` and `signature_b` under $(P_A, P_B)$, and that `rec` is well-formed (a valid `channel_id`, an update count,
+      and a present `close_hash`). If not, *return* Fail(`Invalid`).
     + Fetch the `DisputeState` for `rec.channel_id`; create one if absent.
     + *if* `state.resolved`: *return* Fail(`AlreadyResolved`).
     + *if* `rec.update_count > state.high_water`:
@@ -380,7 +407,7 @@ When the window elapses with no higher record, the arbiter attests the high-wate
 Two rules keep the attestation honest and useful. First, *the window anchors to the platform's consensus clock or a beacon round, never to a
 host's wall-clock* — a single operator that controlled a clock could otherwise freeze the window or fast-forward through it, whereas
 consensus time cannot be moved by a minority below the fault threshold. Second, *the attestation binds the specific close it authorizes*,
-and it does so without the arbiter inspecting the transaction: $m_i$ names `id`, which commits to the funding output (@channelId), and the
+and it does so without the arbiter inspecting the transaction: $m_i$ names `id`, which commits to the funding outputs (@channelId), and the
 offset it unseals is bound at update time to the adaptor point of _this_ state's closing signature (its binding proof). So even
 though the released $sigma_(m_i)$ is public, it completes nothing but the one close it names — a stale or foreign transaction has no
 matching offset to complete.
@@ -429,15 +456,15 @@ watchtower grants it exactly one capability — to _recognize_ this channel's cl
 The design leaks strikingly little, but "little" is not "nothing", and it is worth being exact about what the general public, a watchtower,
 and the arbiter chain can each learn.
 
-/ A completed close on Monero: an ordinary transaction. To anyone who does not already hold the funding output's linking tag $L_F$, it is
-  indistinguishable from any other spend — one-time stealth addresses, amounts hidden by confidential transactions, and under FCMP++ the
-  spend proven against the whole membership set, publishing only $L_F$ as the double-spend tag and never revealing _which_ output was
+/ A completed close on Monero: an ordinary transaction. To anyone who does not already hold the channel's funding linking tags $L_F$, it is
+  indistinguishable from any other spend — one-time stealth addresses, amounts hidden by confidential transactions, and the spend proven
+  against the whole membership set, publishing the tags in $L_F$ only as its double-spend tags and never revealing _which_ outputs were
   consumed. Monero's base-layer privacy is entirely undisturbed by the arbiter.
 
-/ Holding $L_F$: a _watch capability_ and nothing more. The linking tag is deterministic in the funding output's key and — this being the
-  whole point of a Monero key image — cannot be linked back to that output by anyone who does not already hold it. So whoever has $L_F$ can
+/ Holding $L_F$: a _watch capability_ and nothing more. Each tag is deterministic in its funding output's key and — this being the whole
+  point of a Monero key image — cannot be linked back to that output by anyone who does not already hold it. So whoever has $L_F$ can
   recognize the one transaction that closes this channel, and learn nothing else: not the balances, not the addresses, not the identities.
-  The parties compute $L_F$ jointly and may delegate it to a watchtower for exactly this recognition duty.
+  The parties derive $L_F$ jointly (@linkingTagExchange) and may delegate it to a watchtower for exactly this recognition duty.
 
 / The arbiter chain: only `id` (which _commits to_ $L_F$ without revealing it), an update count, and a close-transaction hash — never $L_F$,
   the balances, or the addresses. A bystander therefore cannot find the Monero close from the arbiter chain: `id` is opaque, and without
@@ -600,7 +627,7 @@ mark, an adjudication window, a tombstone, and a public log, and its only power 
 unseals exactly the offset that closes at it. A stale close is frozen rather than punished, so cheating cannot pay. Trust reduces to two
 platform boundaries — the validator set's fault threshold and governance over the key-holding subnet; the worst residual failure is a
 bounded rollback to a past state both parties signed, public and attributable on the honest execution path, and only with a colluding
-channel party. It leaks strikingly little — the arbiter never sees balances, addresses, or the funding output's linking tag in the clear,
+channel party. It leaks strikingly little — the arbiter never sees balances, addresses, or the funding outputs' linking tags in the clear,
 and a bystander cannot link its opaque records to a Monero close. An optional fee-and-deposit bond funds the service and rewards cooperation
 without ever holding a channel secret, and a time-beacon extension (@extensions) can trade capacity-sized collateral for survival of an
 arbiter halt. Instantiated on a consensus-held threshold-BLS key, with the deployment's upgrade path closed, the arbiter gives Grease fair

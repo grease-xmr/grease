@@ -2,7 +2,6 @@
 sequenceDiagram
     participant C as Customer
     participant M as Merchant
-    participant L1 as Monero blockchain
 
     M->>C: Create wallet
     note right of C: Wallet creation protocol -> Pc, kc, Pm, km
@@ -16,21 +15,31 @@ sequenceDiagram
         note left of M: Closed
     end
 
-    C->>M: Generate Tx0
-    note right of C: Wallet transaction protocol -> (sc, Rc)\n(sm, Rm)
-    M->>C: Ok/Abort
+    note over C,M: Funding declaration. Transactions are built, not broadcast
 
-    C->>C: Adapt signature (Rc, sc) -> (Rc, Qc, ŝc), fresh ωc
-    C->>C: Encrypt ωc to statement m0 -> deposit Xc\nProve Xc seals the dlog of Qc
-    C->>M: (Rc, Qc, ŝc), deposit Xc, binding proof, signed record
+    C->>M: Declare funding output (Rc, ic) and out-proof
+    M->>M: Derive Kc from the shared view key\nVerify the out-proof and the amount
+    opt Merchant also funds
+        M->>C: Declare funding output (Rm, im) and out-proof
+        C->>C: Derive Km from the shared view key\nVerify the out-proof and the amount
+    end
+    alt All declarations verify
+        note over C,M: Funding outputs determined, still unmined
+    else Any declaration fails
+        M-xC: Error: funding declaration rejected
+        note left of M: Closed, nothing funded
+    end
 
-    M->>M: Verify binding proof for Xc
-    M->>M: Verify adapter signature (Rc, Qc, ŝc)
-    alt All verifications PASS
-        M->>M: Generate (Rm, Qm, ŝm), deposit Xm, binding proof as above
-        M->>C: (Rm, Qm, ŝm), deposit Xm, binding proof, signed record
-    else any verification FAILED
-        M-xC: Error: Verification failed
-        note left of M: Closed
+    note over C,M: Linking tags, one per funding output
+
+    M->>C: Partial tags Tm, DLEQ proof of correct contribution
+    C->>C: Verify each Tm against the merchant's verification share Vm
+    C->>M: Partial tags Tc, DLEQ proof of correct contribution
+    M->>M: Verify each Tc against the customer's verification share Vc
+    alt All contributions verify
+        note right of C: L_F = one tag per funding output\nProvisional XGT id finalized to XGC
+    else Any contribution fails
+        M-xC: Error: invalid linking tag contribution
+        note left of M: Closed, id left provisional
     end
 ```

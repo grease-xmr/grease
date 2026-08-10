@@ -990,6 +990,35 @@ mod tests {
 
     const PRODUCTION_ENCODED_LEN: usize = 23_641;
 
+    /// The frozen channel id from `channel_id.rs`'s own known-answer vector.
+    const KAT_CHANNEL_ID: &str = "XGC0845ec076e64984475627c8c1a154defceaeea2ce3cd39c55b02823b4f70a4";
+
+    /// `Blake2b512(binding_proof.to_bytes())`, split only to fit the line width. The only known-answer freeze of
+    /// the canonical [`BindingProof::to_bytes`] encoding — the wire format [`BindingProof::from_bytes`] parses
+    /// and serde wraps in hex. Crosses `ic_bls12_381`'s G2 compression and `dalek-ff-group`'s scalar encoding: a
+    /// failure here says the proof encoding moved, and a proof serialized under the old pin no longer parses —
+    /// or no longer means the same bytes — under the new.
+    const PROOF_DIGEST: &str = concat!(
+        "6235d944f0ed5a961d1a774f320a3b4d78fbfb39d6cba7a2f946f5d09e813f26",
+        "968c029bb53947aa43359e7160083f563301b399bcc710b7f398cfc99bb46931",
+    );
+
+    /// Every input spelled out: `ω = 42`, the master secret `z` a fixed constant, the statement
+    /// `m = (channel_id, 0)` over a frozen channel id, an `(8, 4)` proof profile and the default second base.
+    /// `prove_encrypted_offset` takes no RNG — every choice in it is PRF-derived — so the proof is a
+    /// deterministic function of these five values.
+    #[test]
+    fn binding_proof_encoding_is_frozen() {
+        use blake2::{Blake2b512, Digest};
+        let master_pk = master_public_key(&BlsScalar::from(0x1234_5678_90ab_cdef_u64));
+        let statement = Statement::new(KAT_CHANNEL_ID.as_bytes().to_vec(), 0);
+        let params = BindingProofParams::new(8, 4).expect("valid profile");
+        let proof = prove_encrypted_offset(&Scalar::from(42u64), &statement, &master_pk, SecondBase::grease_default(), params)
+            .expect("proof");
+        assert_eq!(hex::encode(Blake2b512::digest(proof.to_bytes())), PROOF_DIGEST);
+        assert_eq!(hex::encode(proof.q().to_bytes()), "ce1a32994e835c193e2bf33909f44373ae2cf94ddef0fd922035c483670637c2");
+    }
+
     #[test]
     fn production_soundness_clears_the_2_100_floor() {
         // C(104, 52) ≈ 2^100.3. The floor is 100 bits because a prover can grind the Fiat-Shamir challenge.

@@ -62,10 +62,11 @@ use crate::channel_id::ChannelId;
 use crate::cryptography::adapter_signature::{AdaptedSignature, SchnorrSignature};
 use crate::cryptography::attestation::{G1Point, G2Point, Statement};
 use crate::cryptography::binding_proof::{self, BindingProof, BindingProofError};
-use crate::grease_protocol::update_channel::commitment_message;
-use crate::grease_protocol::update_record::{UpdateRecord, UpdateRecordError};
+use crate::grease_protocol::adapter_signature::adapter_signature_message;
+use crate::grease_protocol::update_record::{CloseHash, UpdateRecord, UpdateRecordError};
 use crate::monero::data_objects::TransactionId;
 use crate::payment_channel::{ChannelRole, HasRole};
+use crate::wallet::multisig_wallet::{commitment_pair_message, commitment_tx_message};
 use crate::{XmrPoint, XmrScalar};
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -153,6 +154,9 @@ pub trait ForceCloseProtocolCommon: HasRole {
     /// The update count of the state we hold.
     fn update_count(&self) -> u64;
 
+    /// The channel balances at the state under dispute, in piconero: `(customer, merchant)`.
+    fn state_amounts(&self) -> (u64, u64);
+
     /// The arbiter's master public key `Z`, as pinned by this channel's configuration. Never read from a reply.
     fn arbiter_master_public_key(&self) -> G2Point;
 
@@ -177,8 +181,11 @@ pub trait ForceCloseProtocolCommon: HasRole {
     fn note_dispute_state(&mut self, view: &DisputeStateView);
 
     /// The dispute statement for a state: `m = (channel_id, update_count)`.
-    fn statement(&self, update_count: u64) -> Statement {
-        statement_for(&self.channel_id(), update_count)
+    ///
+    /// Fails on a provisional (`XGT…`) channel id: [`statement_for`] refuses to form a statement over an id
+    /// that commits to no funding output.
+    fn statement(&self, update_count: u64) -> Result<Statement, ForceCloseProtocolError> {
+        Ok(statement_for(&self.channel_id(), update_count)?)
     }
 
     /// The channel's two signing keys in the order [`UpdateRecord::verify`] expects: customer, then merchant.
@@ -197,6 +204,25 @@ pub trait ForceCloseProtocolCommon: HasRole {
     fn verify_record(&self, record: &UpdateRecord) -> Result<(), ForceCloseProtocolError> {
         let (pubkey_a, pubkey_b) = self.record_verification_keys();
         record.verify(&pubkey_a, &pubkey_b).map_err(ForceCloseProtocolError::from)
+    }
+
+    /// The canonical hash of the commitment transaction *we* hold at the state under dispute — the per-holder
+    /// hash the pre-signature we are completing was signed over.
+    ///
+    /// Recomputed rather than stored, and checked against the record before it is used: the record's own
+    /// `close_hash` is [`commitment_pair_message`] over the same two amounts, so a state object whose balances
+    /// have drifted from the record it presents is refused here instead of producing a signature that verifies
+    /// against nothing.
+    fn own_close_hash(&self) -> Result<CloseHash, ForceCloseProtocolError> {
+        let id = self.channel_id();
+        id.require_finalized()?;
+        let count = self.update_count();
+        let (customer, merchant) = self.state_amounts();
+        let pair = CloseHash::try_from(commitment_pair_message(&id, count, customer, merchant))?;
+        if pair != *self.latest_record()?.close_hash() {
+            return Err(ForceCloseProtocolError::CloseHashMismatch { update_count: count });
+        }
+        Ok(CloseHash::try_from(commitment_tx_message(&id, count, self.role(), customer, merchant))?)
     }
 
     /// Read the arbiter's public dispute state against the state we hold.
@@ -269,7 +295,7 @@ pub trait ForceCloseProtocolClaimant: ForceCloseProtocolCommon + Send + Sync {
             DisputeOutcome::Open { .. } => return Err(ForceCloseProtocolError::DisputeWindowActive),
         }
         let wrapped = arbiter.request_attestation(&self.channel_id(), transport.public_key()).await?;
-        let expected = self.statement(self.update_count());
+        let expected = self.statement(self.update_count())?;
         if wrapped.statement() != &expected {
             return Err(ForceCloseProtocolError::StatementMismatch {
                 expected: expected.update_count(),
@@ -306,13 +332,16 @@ pub trait ForceCloseProtocolClaimant: ForceCloseProtocolCommon + Send + Sync {
     /// Complete the counterparty half of the closing signature with the recovered offset.
     ///
     /// The pre-signature we hold covers *our own* commitment transaction — that is the asymmetry of the update
-    /// exchange — so the message is the one for `holder = our role`. [`AdaptedSignature::adapt`] verifies the
-    /// completed signature before returning it, so a wrong offset fails here rather than at broadcast.
+    /// exchange — so the message is the one for `holder = our role`. The holder now travels inside the close
+    /// hash rather than beside it: [`own_close_hash`](ForceCloseProtocolCommon::own_close_hash) is the
+    /// per-holder [`commitment_tx_message`] hash, and it is the only thing that separates our message from the
+    /// counterparty's. [`AdaptedSignature::adapt`] verifies the completed signature before returning it, so a
+    /// wrong offset fails here rather than at broadcast.
     fn complete_closing_signature(
         &self,
         peer_offset: &XmrScalar,
     ) -> Result<SchnorrSignature<Ed25519>, ForceCloseProtocolError> {
-        let msg = commitment_message(&self.channel_id(), self.update_count(), self.role());
+        let msg = adapter_signature_message(&self.channel_id(), self.update_count(), &self.own_close_hash()?)?;
         self.peer_presignature()?
             .adapt(peer_offset, &self.peer_public_key(), &msg)
             .map_err(|e| ForceCloseProtocolError::SignatureAdaptationFailed(e.to_string()))
@@ -325,7 +354,7 @@ pub trait ForceCloseProtocolClaimant: ForceCloseProtocolCommon + Send + Sync {
         transport: &TransportKeyPair,
     ) -> Result<SchnorrSignature<Ed25519>, ForceCloseProtocolError> {
         let sigma = self.collect_attestation(arbiter, transport).await?;
-        let statement = self.statement(self.update_count());
+        let statement = self.statement(self.update_count())?;
         let proof = self.peer_binding_proof()?.clone();
         let omega = self.recover_offset(&proof, &statement, &sigma)?;
         self.complete_closing_signature(&omega)
@@ -452,6 +481,11 @@ pub enum ForceCloseProtocolError {
     #[error("Failed to complete the closing signature: {0}")]
     SignatureAdaptationFailed(String),
 
+    /// The balances this state holds are not the ones its record commits to, so no close hash recomputed from
+    /// them can be the one the pre-signature was signed over.
+    #[error("the balances held for state {update_count} do not match the record's close hash")]
+    CloseHashMismatch { update_count: u64 },
+
     #[error("Transaction creation failed: {0}")]
     TransactionCreationFailed(String),
 
@@ -466,6 +500,9 @@ pub enum ForceCloseProtocolError {
 
     #[error("Arbiter error: {0}")]
     Arbiter(#[from] ArbiterError),
+
+    #[error(transparent)]
+    ProvisionalChannelId(#[from] crate::channel_id::ProvisionalChannelIdError),
 
     #[error("Serialization error: {0}")]
     SerializationError(String),

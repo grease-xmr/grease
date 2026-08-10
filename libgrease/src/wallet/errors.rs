@@ -1,3 +1,4 @@
+use crate::cryptography::linking_tag::LinkingTagError;
 use modular_frost::FrostError;
 use monero_interface::{FeeError, InterfaceError, PublishTransactionError, TransactionsError};
 use monero_wallet::send::SendError;
@@ -22,6 +23,8 @@ pub enum WalletError {
     SendError(#[from] SendError),
     #[error("Multisig protocol error: {0}")]
     FrostError(#[from] FrostError),
+    #[error("Invalid contribution to the funding linking tag: {0}")]
+    LinkingTagError(#[from] LinkingTagError),
     #[error("Error deserializing: {0}")]
     DeserializeError(String),
     #[error("Error signing transaction: {0}")]

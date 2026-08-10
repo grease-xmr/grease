@@ -1,6 +1,6 @@
 use crate::amount::MoneroAmount;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
-use crate::cryptography::{Commit, HashCommitment256};
+use crate::cryptography::{Commit, HashCommitment512};
 use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_group_element, write_group_element, Readable};
 use crate::payment_channel::multisig_keyring::sort_pubkeys;
@@ -8,6 +8,7 @@ use crate::payment_channel::{ChannelRole, HasRole};
 use crate::wallet::errors::WalletError;
 use crate::Ed25519;
 use crate::cryptography::SecureDigest;
+use blake2::Blake2b512;
 use flexible_transcript::{DigestTranscript, Transcript};
 use log::*;
 use crate::io::Writable;
@@ -200,19 +201,21 @@ impl Writable for SharedPublicKey {
     }
 }
 
-impl<D: SecureDigest + Send + Clone> Commit<D> for SharedPublicKey {
-    type Committed = HashCommitment256<D>;
-    type Transcript = DigestTranscript<D>;
+/// The handshake commitment is the *whole* 512-bit challenge, not a 32-byte prefix of it, so the impl is pinned
+/// to `Blake2b512` rather than generic over `D`: only a digest whose output width is statically 64 bytes can
+/// fill the commitment without truncating.
+impl Commit<Blake2b512> for SharedPublicKey {
+    type Committed = HashCommitment512<Blake2b512>;
+    type Transcript = DigestTranscript<Blake2b512>;
 
     fn commit(&self) -> Self::Committed {
         let mut transcript = Self::Transcript::new(b"pubkey-t-m");
         transcript.append_message(b"role", self.role);
         transcript.append_message(b"my_pubkey", self.public_key.to_compressed().as_bytes());
         let commitment = transcript.challenge(b"merchant-public-key-commitment");
-        let mut data = [0u8; 32];
-        // The compiler guarantees that the output size of the hash function is at least 32 bytes.
-        data.copy_from_slice(&commitment[0..32]);
-        HashCommitment256::new(data)
+        let mut data = [0u8; 64];
+        data.copy_from_slice(commitment.as_slice());
+        HashCommitment512::new(data)
     }
 }
 
@@ -246,10 +249,13 @@ mod tests {
     fn shared_public_key_commitment_is_frozen() {
         let key = Curve25519PublicKey::from_hex(FIXED_PUBLIC_KEY).expect("valid point");
         let commitment: PublicKeyCommitment = SharedPublicKey::new(ChannelRole::Merchant, key).commit();
-        assert_eq!(
-            hex::encode(commitment.as_bytes()),
-            "d214bc4da458706535af1a186c2d5be7a2ec7ceeda151e0c4dafd410c36f949d"
+        // The full 64-byte challenge. Its first 32 bytes are exactly the value this vector pinned while the
+        // commitment was truncated, so the transcript is unchanged — only the width the commitment keeps.
+        let expected = concat!(
+            "d214bc4da458706535af1a186c2d5be7a2ec7ceeda151e0c4dafd410c36f949d",
+            "57fbd6505ee9a80990d88d21f4fd6774a8b2d2aebc188e3e7a23b9fed6efd0df",
         );
+        assert_eq!(hex::encode(commitment.as_bytes()), expected);
     }
 
     /// The role is absorbed before the key, so the two parties' commitments to the same point differ.

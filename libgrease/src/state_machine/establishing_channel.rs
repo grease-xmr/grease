@@ -3,21 +3,28 @@
 //! Spec: `docs/src/14_establishing_channel.typ` §`initProtocol`, with the message flow in
 //! `docs/diagrams/establish_channel_sequence_a.md` and `..._b.md`.
 //!
-//! Establishment runs in five moves, and the arbiter plays no part in any of them:
+//! Establishment runs in six moves, and the arbiter plays no part in any of them:
 //!
 //! 1. **Shared wallet.** The two parties run the commit-then-reveal key exchange in
 //!    [`multisig_setup`](crate::state_machine::multisig_setup) and end up holding the same 2-of-2 FROST wallet.
-//! 2. **Final channel id.** They jointly derive the funding output's linking tag `L_F` — each contributes a
-//!    partial tag from its own MuSig share — and bind the channel id to it. The provisional `XGT…` id from the
-//!    proposal becomes the final `XGC…` id, and every signature exchanged afterwards commits to it.
-//! 3. **Initial commitment transaction.** The FROST preprocessing round trip, after which each side can adapt
+//! 2. **Funding declaration.** Each funding party names the transaction public key `R_j` and output index
+//!    `i_j` of the output it will contribute. Both parties then derive that output's one-time key `K_j` and
+//!    derivation scalar `d_j` themselves, from the shared view key — nothing but `(R_j, i_j)` is taken from the
+//!    counterparty's message.
+//! 3. **Final channel id.** For each declared output the parties jointly derive its linking tag
+//!    `L_j = (d_j + x)·H_p(K_j)`, the key image its spend will publish — each contributes a partial tag from
+//!    its own offset MuSig share, with a proof that it did so honestly — and bind the channel id to the set.
+//!    The provisional `XGT…` id from the proposal becomes the final `XGC…` id, and every signature exchanged
+//!    afterwards commits to it.
+//! 4. **Initial commitment transaction.** The FROST preprocessing round trip, after which each side can adapt
 //!    its partial signature.
-//! 4. **Initial state exchange.** Each party draws a fresh offset `ω`, adapter-signs the *counterparty's*
+//! 5. **Initial state exchange.** Each party draws a fresh offset `ω`, adapter-signs the *counterparty's*
 //!    closing transaction with it, seals `ω` to the statement `m = (channel_id, 0)` under the arbiter's master
-//!    key, and sends the resulting [`ChannelInitPackage`]. Each verifies the counterparty's binding proof,
-//!    adaptor signature and payload signature before accepting the initial state.
-//! 5. **Funding.** The customer funds the shared wallet; once the funding transaction confirms, both sides move
-//!    to `Open`.
+//!    key, and sends the resulting [`ChannelInitPackage`]. Each verifies the counterparty's binding proof and
+//!    adaptor signature before accepting the initial state.
+//! 6. **Funding.** Only now do the funding parties broadcast, each holding everything the counterparty owes it
+//!    ([`ready_to_fund`](EstablishingState::ready_to_fund)); once the funding transactions confirm, both sides
+//!    move to `Open`.
 
 use crate::amount::MoneroAmount;
 use crate::balance::Balances;
@@ -25,20 +32,24 @@ use crate::channel_id::{ChannelId, ChannelIdMetadata};
 use crate::channel_metadata::{DynamicChannelMetadata, StaticChannelMetadata};
 use crate::cryptography::binding_proof::BindingProofParams;
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret, PublicKey, PublicKeyCommitment};
+use crate::cryptography::linking_tag::PartialLinkingTag;
 use crate::cryptography::serializable_secret::SerializableSecret;
 use crate::grease_protocol::establish_channel::{ChannelInitPackage, EstablishError, INITIAL_UPDATE_COUNT};
 use crate::grease_protocol::multisig_wallet::{LinkedMultisigWallets, MultisigWalletError, SharedPublicKey};
-use crate::grease_protocol::update_record::CloseHash;
+use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord};
 use crate::monero::data_objects::{TransactionId, TransactionRecord};
 use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::lifecycle::ChannelState;
-use crate::state_machine::open_channel::{EstablishedChannelState, UpdateHistory};
+use crate::state_machine::open_channel::{AppliedUpdate, EstablishedChannelState, UpdateHistory};
 use crate::state_machine::proposing_channel::{AwaitingConfirmation, AwaitingProposalResponse};
-use crate::wallet::multisig_wallet::commitment_tx_message;
-use crate::{XmrPoint, XmrScalar};
+use crate::wallet::multisig_wallet::{
+    commitment_pair_message, commitment_tx_message, DerivedFundingOutput, FundingOutputRef,
+};
 use crate::Ed25519;
+use crate::XmrScalar;
+use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
 use log::*;
 use rand_core::{CryptoRng, RngCore};
@@ -63,8 +74,9 @@ where
     // Variables specified at start of stage
     pub(crate) metadata: StaticChannelMetadata<KC>,
     /// This party's channel key, `k_a` (customer) or `k_b` (merchant). Its public key is the party's key in the
-    /// channel-id transcript, and it is what signs this party's half of every [`UpdateRecord`] once the channel
-    /// is open.
+    /// channel-id transcript, and that is all it is: the channel id is derived from it during negotiation and
+    /// nothing afterwards signs with it. Every [`UpdateRecord`] half — state 0's included — is signed with the
+    /// *wallet spend key*, because that is the key the arbiter registers and the dispute path verifies against.
     ///
     /// [`UpdateRecord`]: crate::grease_protocol::update_record::UpdateRecord
     pub(crate) channel_secret: SerializableSecret<KC::F>,
@@ -99,6 +111,13 @@ where
     /// The counterparty's package, stored only after it verified in full.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) peer_init_package: Option<ChannelInitPackage>,
+    /// This party's funding-output declaration, present once it has declared. `None` for a party that
+    /// committed no initial balance and therefore funds nothing.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) my_funding_output: Option<FundingOutputRef>,
+    /// The counterparty's funding-output declaration, as received.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) peer_funding_output: Option<FundingOutputRef>,
     #[serde(skip)]
     pub(crate) preprepare_data: Vec<u8>,
 }
@@ -128,6 +147,8 @@ where
             initial_offset: None,
             my_init_package: None,
             peer_init_package: None,
+            my_funding_output: None,
+            peer_funding_output: None,
             preprepare_data: vec![],
         }
     }
@@ -157,6 +178,37 @@ where
     /// The counterparty's package, present only once it verified in full.
     pub fn peer_init_package(&self) -> Option<&ChannelInitPackage> {
         self.peer_init_package.as_ref()
+    }
+
+    /// The cross-signed record for state 0, assembled from the two halves the packages carry. Present exactly
+    /// once both packages have been exchanged and verified.
+    ///
+    /// [`UpdateRecord::from_halves`] is order-independent and byte-identical on both sides, so the two parties
+    /// end up holding the same record rather than two records that merely agree on their fields.
+    pub fn initial_record(&self) -> Result<UpdateRecord, EstablishError> {
+        let mine = self.require_package(&self.my_init_package, "Our initial-state package")?;
+        let peer = self.require_package(&self.peer_init_package, "The counterparty's initial-state package")?;
+        let record = UpdateRecord::from_halves(&mine.record_half, &peer.record_half)?;
+        Ok(record)
+    }
+
+    /// Whether this party may broadcast its funding transaction.
+    ///
+    /// True only once the counterparty's package has been accepted: before that we hold no exit we could
+    /// complete and no record we could present, so a deposit broadcast now could be stranded by a counterparty
+    /// that simply stops answering. This is the gate `docs/src/14_establishing_channel.typ` §preSigning step 5
+    /// describes; funding itself arrives from outside the state machine, so this is the surface that expresses
+    /// it.
+    pub fn ready_to_fund(&self) -> bool {
+        self.metadata.channel_id().is_finalized() && self.peer_init_package.is_some()
+    }
+
+    fn require_package<'a>(
+        &self,
+        slot: &'a Option<ChannelInitPackage>,
+        what: &str,
+    ) -> Result<&'a ChannelInitPackage, EstablishError> {
+        slot.as_ref().ok_or_else(|| EstablishError::MissingInformation(what.to_string()))
     }
 
     pub fn multisig_address(&self) -> Option<String> {
@@ -205,6 +257,93 @@ where
     pub fn funding_tx_confirmed(&mut self, transaction: TransactionRecord) {
         debug!("Funding transaction broadcasted");
         self.funding_transaction_ids.insert(transaction.transaction_id.clone(), transaction);
+    }
+
+    //---------------------------------------  Funding declarations  ---------------------------------------------//
+
+    /// Whether `role` funds this channel, read off the balances it committed to during negotiation.
+    ///
+    /// `docs/src/14_establishing_channel.typ` §fundingDeclaration: a channel is funded by one output per
+    /// funding party, and "the initial balances absorbed into the channel id transcript are exactly those
+    /// contributions". A party that brings nothing to the channel contributes no output and no linking tag.
+    pub fn funds_the_channel(&self, role: ChannelRole) -> bool {
+        let balances = self.metadata.initial_balance();
+        let contribution = match role {
+            ChannelRole::Merchant => balances.merchant,
+            ChannelRole::Customer => balances.customer,
+        };
+        !contribution.is_zero()
+    }
+
+    /// Declare the funding output *this* party will contribute.
+    ///
+    /// Refused if this party funds nothing, and refused a second time: a declaration determines one of the
+    /// linking tags the channel id is about to be bound to, so silently replacing one would change the id under
+    /// a counterparty that has already derived it.
+    pub fn declare_funding_output(&mut self, output: FundingOutputRef) -> Result<(), EstablishError> {
+        let role = HasRole::role(self);
+        let funds = self.funds_the_channel(role);
+        Self::accept_declaration(&mut self.my_funding_output, output, role, funds)
+    }
+
+    /// Record the counterparty's funding-output declaration.
+    ///
+    /// Only `(R_j, i_j)` is taken from the peer; the output itself is derived locally from the shared view key
+    /// ([`funding_outputs`](Self::funding_outputs)). Whether the peer is entitled to declare *this particular*
+    /// output is the out-proof's job, which is not implemented yet (K-45); what is checked here is that the
+    /// peer is a funding party at all, and that it declares once.
+    pub fn receive_peer_funding_output(&mut self, output: FundingOutputRef) -> Result<(), EstablishError> {
+        let role = HasRole::role(self).other();
+        let funds = self.funds_the_channel(role);
+        Self::accept_declaration(&mut self.peer_funding_output, output, role, funds)
+    }
+
+    fn accept_declaration(
+        slot: &mut Option<FundingOutputRef>,
+        output: FundingOutputRef,
+        role: ChannelRole,
+        funds: bool,
+    ) -> Result<(), EstablishError> {
+        if !funds {
+            return Err(EstablishError::NotAFundingParty(role));
+        }
+        if slot.is_some() {
+            return Err(EstablishError::FundingOutputAlreadyDeclared(role));
+        }
+        *slot = Some(output);
+        debug!("The {role} declared its funding output");
+        Ok(())
+    }
+
+    /// This party's declaration, if it has made one.
+    pub fn my_funding_output(&self) -> Option<&FundingOutputRef> {
+        self.my_funding_output.as_ref()
+    }
+
+    /// The counterparty's declaration, if it has been received.
+    pub fn peer_funding_output(&self) -> Option<&FundingOutputRef> {
+        self.peer_funding_output.as_ref()
+    }
+
+    /// Whether every funding party has declared the output it will contribute.
+    pub fn every_funding_output_declared(&self) -> bool {
+        let me = HasRole::role(self);
+        let declared = |funds: bool, slot: &Option<FundingOutputRef>| !funds || slot.is_some();
+        declared(self.funds_the_channel(me), &self.my_funding_output)
+            && declared(self.funds_the_channel(me.other()), &self.peer_funding_output)
+    }
+
+    /// The declarations that make up the channel's funding set, in role order (ours first).
+    ///
+    /// Used only as the input to the local derivation; the canonical ordering the two parties agree on is by
+    /// one-time key, applied in [`funding_outputs`](Self::funding_outputs).
+    fn declarations(&self) -> Result<Vec<FundingOutputRef>, EstablishError> {
+        if !self.every_funding_output_declared() {
+            return Err(EstablishError::MissingInformation(
+                "A funding output declaration — every funding party must declare before the id can be bound".into(),
+            ));
+        }
+        Ok([self.my_funding_output, self.peer_funding_output].into_iter().flatten().collect())
     }
 
     //-----------------------------------  Initial commitment transaction  ---------------------------------------//
@@ -276,18 +415,24 @@ where
     //---------------------------------------  State transition ------------------------------------------------------//
 
     pub fn requirements_met(&self) -> bool {
-        let mut missing = Vec::with_capacity(6);
+        let mut missing = Vec::with_capacity(8);
         if self.multisig_wallet.is_none() {
             missing.push("Multisig wallet");
         }
+        if !self.every_funding_output_declared() {
+            missing.push("Every funding output declared");
+        }
         if !self.metadata.channel_id().is_finalized() {
-            missing.push("Final channel id (the funding output's linking tag has not been bound to it)");
+            missing.push("Final channel id (the funding outputs' linking tags have not been bound to it)");
         }
         if self.my_init_package.is_none() {
             missing.push("Our initial-state package");
         }
         if self.peer_init_package.is_none() {
             missing.push("The counterparty's initial-state package");
+        }
+        if self.initial_record().is_err() {
+            missing.push("Cross-signed state-0 record");
         }
         if self.funding_tx_pipe.is_none() {
             error!("Funding transaction pipe data is required to detect channel funding, but it is missing.");
@@ -320,6 +465,30 @@ where
         result
     }
 
+    /// This party's complete local material for state 0, ready to be seeded into the open channel's
+    /// [`UpdateHistory`].
+    ///
+    /// `my_preprocess` is empty after a reload, because [`EstablishingState::preprepare_data`] is
+    /// `#[serde(skip)]`. That is deliberately not a requirement: a dispute reads the record, our offset, the two
+    /// pre-signatures and the peer's binding proof, and none of the preprocessing.
+    fn initial_applied_update(&self) -> Result<AppliedUpdate, EstablishError> {
+        let mine = self.require_package(&self.my_init_package, "Our initial-state package")?;
+        let peer = self.require_package(&self.peer_init_package, "The counterparty's initial-state package")?;
+        let omega = self
+            .initial_offset
+            .as_ref()
+            .ok_or_else(|| EstablishError::MissingInformation("Our initial offset ω".into()))?;
+        Ok(AppliedUpdate {
+            record: self.initial_record()?,
+            my_offset: Curve25519Secret::from(**omega),
+            my_adapted_signature: mine.adapted_signature.clone(),
+            peer_adapted_signature: peer.adapted_signature.clone(),
+            peer_binding_proof: peer.binding_proof.clone(),
+            my_preprocess: self.preprepare_data.clone(),
+            peer_preprocess: self.multisig_wallet.as_ref().and_then(|w| w.peer_pre_process_data()).unwrap_or_default(),
+        })
+    }
+
     #[allow(clippy::result_large_err)]
     pub fn next(self) -> Result<EstablishedChannelState<KC>, (Self, LifeCycleError)> {
         debug!("Trying to move from Establishing to Established state");
@@ -327,14 +496,25 @@ where
             debug!("Cannot change from Establishing to Established because all requirements are not met");
             return Err((self, LifeCycleError::InvalidStateTransition));
         }
+        // Built before `self` is taken apart, so a failure can hand the state back intact. Everything it needs
+        // was just checked by `requirements_met`, so a failure here is a broken invariant rather than a party
+        // that moved too early.
+        let initial = match self.initial_applied_update() {
+            Ok(update) => update,
+            Err(e) => return Err((self, LifeCycleError::InternalError(e.to_string()))),
+        };
         debug!("Transitioning to Established wallet state");
         let dynamic = DynamicChannelMetadata::new(self.metadata.initial_balance(), INITIAL_UPDATE_COUNT);
+        // Retention depth is clamped to at least one, so state 0 is `latest()` — and `first()` — from the moment
+        // the channel opens.
+        let mut updates = UpdateHistory::default();
+        updates.push(initial);
         let open_channel = EstablishedChannelState {
             metadata: self.metadata,
             dynamic,
             multisig_wallet: self.multisig_wallet.unwrap(),
             funding_transactions: self.funding_transaction_ids,
-            updates: UpdateHistory::default(),
+            updates,
         };
         Ok(open_channel)
     }
@@ -343,28 +523,77 @@ where
 //----------------------------------  The v2 establishment protocol (Ed25519)  ---------------------------------------//
 
 impl EstablishingState<Ed25519> {
-    /// This party's share of the funding output's linking tag `L_F`, to be sent to the counterparty.
+    /// The channel's declared funding outputs, derived locally and in canonical order.
     ///
-    /// Neither party holds the shared wallet's spend key, so neither can compute `L_F` alone; the two partials
-    /// sum to it. See [`MultisigWallet::partial_linking_tag`].
-    pub fn partial_linking_tag(&self) -> Result<XmrPoint, EstablishError> {
-        let tag = self.require_wallet()?.partial_linking_tag().map_err(MultisigWalletError::from)?;
-        Ok(tag)
+    /// Each output's one-time key `K_j` and derivation scalar `d_j` come from the shared view key and the
+    /// declaration, never from the peer's arithmetic, so both parties derive the same set. It is ordered by
+    /// `K_j`'s encoding — a role-independent order, so the two parties' partial vectors line up positionally
+    /// without either having to say whose output is whose.
+    pub fn funding_outputs(&self) -> Result<Vec<DerivedFundingOutput>, EstablishError> {
+        let wallet = self.require_wallet()?;
+        let declarations = self.declarations()?;
+        let mut outputs = declarations
+            .iter()
+            .map(|declared| wallet.derive_funding_output(declared))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MultisigWalletError::from)?;
+        outputs.sort_unstable_by_key(|out| out.one_time_key.to_bytes());
+        Ok(outputs)
     }
 
-    /// Bind the channel id to the funding output's linking tag and return the resulting final id.
+    /// This party's share of each funding output's linking tag, to be sent to the counterparty as one message.
     ///
-    /// `peer_partial` is the counterparty's half of `L_F`. Both parties combine the same two partials, so both
-    /// arrive at the same final id. This is the point at which the provisional `XGT…` id quoted during
-    /// negotiation is replaced: it must happen before any initial-state material is exchanged, because every
-    /// signature in a [`ChannelInitPackage`] commits to the channel id.
+    /// The vector is in the same canonical order as [`funding_outputs`](Self::funding_outputs), which is how
+    /// the counterparty knows which partial belongs to which output without being told.
+    ///
+    /// Neither party holds the shared wallet's spend key, so neither can compute a tag alone; the two partials
+    /// sum to it. Each partial travels with a proof that it was derived from the same MuSig share this party
+    /// signs with — see [`crate::cryptography::linking_tag`] — because an unproven partial lets the party that
+    /// sends second steer the tag, and through it the final channel id, to a value of its choosing.
+    pub fn partial_linking_tags(&self) -> Result<Vec<PartialLinkingTag>, EstablishError> {
+        let outputs = self.funding_outputs()?;
+        let wallet = self.require_wallet()?;
+        let tags = outputs
+            .iter()
+            .map(|out| wallet.partial_linking_tag(out))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MultisigWalletError::from)?;
+        Ok(tags)
+    }
+
+    /// Bind the channel id to its funding outputs' linking tags and return the resulting final id.
+    ///
+    /// `peer_partials` is the counterparty's contribution to every tag, in the canonical output order. Both
+    /// parties combine the same partials, so both arrive at the same final id. This is the point at which the
+    /// provisional `XGT…` id quoted during negotiation is replaced by the final `XGC…` id: it must happen before
+    /// any initial-state material is exchanged, because every signature in a [`ChannelInitPackage`] commits to
+    /// the channel id.
+    ///
+    /// A vector of the wrong length is refused before anything is combined, and every contribution proof is
+    /// verified before `finalize` sees a single tag. That ordering is the whole point: `finalize` binds the id
+    /// for the channel's lifetime and refuses to re-bind, so a tag accepted here can never be corrected — while
+    /// a *refused* one leaves the id provisional and the exchange retryable.
     ///
     /// Refuses to re-bind an id that is already final — that would silently rename a channel the counterparty
     /// already refers to by its current id.
-    pub fn finalize_channel_id(&mut self, peer_partial: &XmrPoint) -> Result<ChannelId, EstablishError> {
-        let linking_tag = self.require_wallet()?.linking_tag(peer_partial).map_err(MultisigWalletError::from)?;
-        let id = self.metadata.channel_id_mut().finalize(linking_tag)?;
-        debug!("Channel id bound to the funding output: {id}");
+    pub fn finalize_channel_id(&mut self, peer_partials: &[PartialLinkingTag]) -> Result<ChannelId, EstablishError> {
+        let outputs = self.funding_outputs()?;
+        if outputs.len() != peer_partials.len() {
+            return Err(EstablishError::PartialLinkingTagCount {
+                expected: outputs.len(),
+                actual: peer_partials.len(),
+            });
+        }
+        let wallet = self.require_wallet()?;
+        // Collected through `Result`, so a single failing proof aborts before any tag is bound.
+        let tags = outputs
+            .iter()
+            .zip(peer_partials)
+            .map(|(out, partial)| wallet.linking_tag(out, partial))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MultisigWalletError::from)?;
+        let id = self.metadata.channel_id_mut().finalize(tags)?;
+        debug!("Channel id bound to {} funding output(s): {id}", outputs.len());
         Ok(id)
     }
 
@@ -372,8 +601,13 @@ impl EstablishingState<Ed25519> {
     ///
     /// The two parties hold different closing transactions, so the two adaptor signatures exchanged during
     /// establishment are never over the same bytes.
+    ///
+    /// Refuses a provisional channel id at the boundary rather than trusting the caller to have gone through
+    /// [`generate_init_package`](Self::generate_init_package): this is `pub`, and a [`CloseHash`] over an
+    /// `XGT…` id would commit a closing transaction to no funding output.
     pub fn initial_close_hash(&self, holder: ChannelRole) -> Result<CloseHash, EstablishError> {
         let id = self.channel_id();
+        id.require_finalized()?;
         let balances = self.metadata.initial_balance();
         let msg = commitment_tx_message(
             &id,
@@ -385,9 +619,51 @@ impl EstablishingState<Ed25519> {
         Ok(CloseHash::try_from(msg)?)
     }
 
+    /// The close hash the state-0 [`UpdateRecord`] commits to: the canonical hash of *both* exits, so both
+    /// parties' halves agree on it.
+    ///
+    /// [`initial_close_hash`](Self::initial_close_hash) stays per-holder — that is what the adaptor signatures
+    /// sign, and the two parties never sign the same closing-transaction bytes. A record carries one hash per
+    /// state, so it commits to the pair instead.
+    pub fn initial_record_close_hash(&self) -> Result<CloseHash, EstablishError> {
+        let id = self.channel_id();
+        id.require_finalized()?;
+        let balances = self.metadata.initial_balance();
+        let msg = commitment_pair_message(
+            &id,
+            INITIAL_UPDATE_COUNT,
+            balances.customer.to_piconero(),
+            balances.merchant.to_piconero(),
+        );
+        Ok(CloseHash::try_from(msg)?)
+    }
+
+    /// Sign this party's half of the state-0 [`UpdateRecord`].
+    ///
+    /// Signed with the **wallet spend key**, not [`channel_secret`](Self::channel_secret) and not the FROST
+    /// signing share: `DisputingChannelState` verifies presented records against
+    /// `multisig_wallet.my_public_key()` / `peer_public_key()`, and those are the keys the arbiter registers as
+    /// `(P_A, P_B)`. It follows that the half does not depend on the FROST preprocessing round trip and can be
+    /// signed as soon as the channel id is final.
+    fn sign_initial_record_half<R: RngCore + CryptoRng>(
+        &self,
+        rng: &mut R,
+    ) -> Result<HalfSignedUpdateRecord, EstablishError> {
+        let signing_key = self.require_wallet()?.my_spend_key().as_scalar();
+        let half = HalfSignedUpdateRecord::sign(
+            self.channel_id(),
+            INITIAL_UPDATE_COUNT,
+            self.initial_record_close_hash()?,
+            HasRole::role(self),
+            signing_key,
+            rng,
+        )?;
+        Ok(half)
+    }
+
     /// Generate this party's [`ChannelInitPackage`]: a fresh offset `ω`, the adaptor signature over the
     /// *counterparty's* closing transaction, `ω` sealed to `m = (channel_id, 0)` under the arbiter's master key,
-    /// and the binding proof tying the two together.
+    /// the binding proof tying the two together, and our half of the state-0 record.
     ///
     /// Requires the shared wallet, a final channel id, and a completed FROST partial signature
     /// ([`prepare_initial_transaction`](Self::prepare_initial_transaction) followed by
@@ -400,11 +676,12 @@ impl EstablishingState<Ed25519> {
         self.require_final_channel_id()?;
         let signing_key = self.wallet_signing_key()?;
         let peer_close_hash = self.initial_close_hash(HasRole::role(self).other())?;
+        let record_half = self.sign_initial_record_half(rng)?;
         let (package, omega) = ChannelInitPackage::create(
             &self.channel_id(),
             &peer_close_hash,
-            self.metadata.dispute_window(),
             &signing_key,
+            record_half,
             self.metadata.arbiter_configuration().master_public_key(),
             self.binding_proof_params,
             rng,
@@ -418,18 +695,23 @@ impl EstablishingState<Ed25519> {
     /// Verify the counterparty's [`ChannelInitPackage`] and, only if every check passes, accept the initial
     /// state.
     ///
-    /// The three checks are the ones the sequence diagram fixes: the adaptor signature verifies under the
+    /// The checks are the ones the sequence diagram fixes: the adaptor signature verifies under the
     /// counterparty's wallet key over *our* closing transaction, the binding proof holds for
-    /// `m = (channel_id, 0)` and targets exactly that signature's adaptor point `Q`, and the payload signature
-    /// binds the bundle to the channel parameters.
+    /// `m = (channel_id, 0)` and targets exactly that signature's adaptor point `Q`, and the record half is the
+    /// counterparty's signature over state 0 of this channel.
+    ///
+    /// All or nothing: a package that fails any check leaves `peer_init_package` untouched, so nothing
+    /// half-accepted can reach [`initial_record`](Self::initial_record).
     pub fn receive_peer_init_package(&mut self, package: ChannelInitPackage) -> Result<(), EstablishError> {
         self.require_final_channel_id()?;
         let peer_pubkey = self.require_wallet()?.peer_public_key().as_point();
         let own_close_hash = self.initial_close_hash(HasRole::role(self))?;
+        let record_close_hash = self.initial_record_close_hash()?;
         package.verify(
             &self.channel_id(),
             &own_close_hash,
-            self.metadata.dispute_window(),
+            &record_close_hash,
+            HasRole::role(self),
             &peer_pubkey,
             self.metadata.arbiter_configuration().master_public_key(),
         )?;
@@ -453,7 +735,7 @@ impl EstablishingState<Ed25519> {
             Ok(())
         } else {
             Err(EstablishError::MissingInformation(
-                "Final channel id — the funding output's linking tag has not been bound to it yet".into(),
+                "Final channel id — the funding outputs' linking tags have not been bound to it yet".into(),
             ))
         }
     }
@@ -577,14 +859,29 @@ impl MerchantEstablishing {
         self.inner.receive_peer_preprocess_data(data)
     }
 
-    /// The merchant's share of the funding output's linking tag `L_F`, to send to the customer.
-    pub fn partial_linking_tag(&self) -> Result<XmrPoint, EstablishError> {
-        self.inner.partial_linking_tag()
+    /// Declare the funding output the merchant will contribute, if it funds this channel.
+    pub fn declare_funding_output(&mut self, output: FundingOutputRef) -> Result<(), EstablishError> {
+        self.inner.declare_funding_output(output)
     }
 
-    /// Bind the channel id to `L_F`, combining the customer's partial linking tag with the merchant's own.
-    pub fn finalize_channel_id(&mut self, customer_partial: &XmrPoint) -> Result<ChannelId, EstablishError> {
-        self.inner.finalize_channel_id(customer_partial)
+    /// Record the customer's funding-output declaration.
+    pub fn receive_customer_funding_output(&mut self, output: FundingOutputRef) -> Result<(), EstablishError> {
+        self.inner.receive_peer_funding_output(output)
+    }
+
+    /// The merchant's share of every funding output's linking tag, with contribution proofs, to send to the
+    /// customer.
+    pub fn partial_linking_tags(&self) -> Result<Vec<PartialLinkingTag>, EstablishError> {
+        self.inner.partial_linking_tags()
+    }
+
+    /// Bind the channel id to its funding outputs' tags, combining the customer's verified partials with the
+    /// merchant's own.
+    pub fn finalize_channel_id(
+        &mut self,
+        customer_partials: &[PartialLinkingTag],
+    ) -> Result<ChannelId, EstablishError> {
+        self.inner.finalize_channel_id(customer_partials)
     }
 
     /// Generate the merchant's [`ChannelInitPackage`] for the initial channel state.
@@ -695,14 +992,29 @@ impl CustomerEstablishing {
         self.inner.receive_peer_preprocess_data(data)
     }
 
-    /// The customer's share of the funding output's linking tag `L_F`, to send to the merchant.
-    pub fn partial_linking_tag(&self) -> Result<XmrPoint, EstablishError> {
-        self.inner.partial_linking_tag()
+    /// Declare the funding output the customer will contribute.
+    pub fn declare_funding_output(&mut self, output: FundingOutputRef) -> Result<(), EstablishError> {
+        self.inner.declare_funding_output(output)
     }
 
-    /// Bind the channel id to `L_F`, combining the merchant's partial linking tag with the customer's own.
-    pub fn finalize_channel_id(&mut self, merchant_partial: &XmrPoint) -> Result<ChannelId, EstablishError> {
-        self.inner.finalize_channel_id(merchant_partial)
+    /// Record the merchant's funding-output declaration, for a channel the merchant also funds.
+    pub fn receive_merchant_funding_output(&mut self, output: FundingOutputRef) -> Result<(), EstablishError> {
+        self.inner.receive_peer_funding_output(output)
+    }
+
+    /// The customer's share of every funding output's linking tag, with contribution proofs, to send to the
+    /// merchant.
+    pub fn partial_linking_tags(&self) -> Result<Vec<PartialLinkingTag>, EstablishError> {
+        self.inner.partial_linking_tags()
+    }
+
+    /// Bind the channel id to its funding outputs' tags, combining the merchant's verified partials with the
+    /// customer's own.
+    pub fn finalize_channel_id(
+        &mut self,
+        merchant_partials: &[PartialLinkingTag],
+    ) -> Result<ChannelId, EstablishError> {
+        self.inner.finalize_channel_id(merchant_partials)
     }
 
     /// Generate the customer's [`ChannelInitPackage`] for the initial channel state.

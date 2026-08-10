@@ -5,6 +5,7 @@ use crate::arbiter::ArbiterConfiguration;
 use crate::balance::Balances;
 use crate::channel_id::{ChannelId, ChannelIdMetadata};
 use crate::cryptography::attestation::test_helpers::generate_master_keypair;
+use crate::cryptography::attestation::G2Point;
 use crate::cryptography::keys::Curve25519Secret;
 use crate::grease_protocol::propose_channel::{MerchantSeedBuilder, MissingSeedInfo};
 use crate::grease_protocol::MerchantSeedInfo;
@@ -17,6 +18,7 @@ use crate::state_machine::{
 };
 use crate::{XmrPoint, XmrScalar};
 use ciphersuite::group::Group;
+use ic_bls12_381::Scalar as BlsScalar;
 use monero::Network;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{OsRng, SeedableRng};
@@ -38,6 +40,17 @@ fn arbiter(seed: u64) -> ArbiterConfiguration {
 /// The arbiter every seed in these tests offers, and that the customer picks.
 fn default_arbiter() -> ArbiterConfiguration {
     arbiter(1)
+}
+
+/// The master keypair behind [`default_arbiter`], `(z, Z)`.
+///
+/// Test-only by construction — production `z` exists only as committee shares — but a [`MockArbiter`] standing
+/// in for the arbiter of a channel these fixtures established has to hold the very key that channel pinned, or
+/// no attestation it issues opens anything.
+///
+/// [`MockArbiter`]: crate::arbiter::mock::MockArbiter
+pub(crate) fn default_arbiter_master_keypair() -> (BlsScalar, G2Point) {
+    generate_master_keypair(&mut ChaCha20Rng::seed_from_u64(1))
 }
 
 fn test_balances() -> Balances {
@@ -104,7 +117,21 @@ fn swap_arbiter(proposal: &NewChannelProposal, arbiter: ArbiterConfiguration) ->
 ///
 /// Private keys are random. The initial channel balance is fixed at 1.25-0 for customer-merchant.
 pub fn propose_channel() -> (EstablishingState, EstablishingState) {
-    let (seed, merchant_secret) = build_merchant_seed();
+    propose_channel_with_balances(test_balances())
+}
+
+/// A proposal exchange in which *both* parties bring a balance, and therefore both fund the channel.
+///
+/// `docs/src/14_establishing_channel.typ` §fundingDeclaration: a channel is funded by one output per funding
+/// party, and the balances the parties committed to are exactly those contributions. This reaches the
+/// dual-funded case, which [`propose_channel`]'s customer-funded fixture does not.
+pub fn propose_dual_funded_channel() -> (EstablishingState, EstablishingState) {
+    let dual = Balances::new(MoneroAmount::from_xmr("0.75").unwrap(), MoneroAmount::from_xmr("1.25").unwrap());
+    propose_channel_with_balances(dual)
+}
+
+fn propose_channel_with_balances(balances: Balances) -> (EstablishingState, EstablishingState) {
+    let (seed, merchant_secret) = build_merchant_seed_with_balances(balances);
     let merchant_partial_spend_key = Curve25519Secret::random(&mut OsRng);
     let merchant: AwaitProposal = AwaitProposal::new(seed.clone(), merchant_secret, merchant_partial_spend_key);
     let customer = customer_creates_proposal(seed);
@@ -411,6 +438,50 @@ fn rejection_preserves_initial_balances() {
     let response = ProposalResponse::Rejected(RejectProposalReason::new("Declined"));
     let closed = customer.handle_response(response).unwrap_err();
     assert_eq!(closed.final_balances(), test_balances());
+}
+
+// ====================== Channel-id nonce freshness ======================
+
+/// A proposer whose channel secret is pinned, so that between two calls the nonces are the only channel-id
+/// transcript inputs that vary. (The partial spend key stays random: it does not enter the transcript, and
+/// the collision assertion below doubles as proof of that.)
+fn proposer_with_nonce(seed: MerchantSeedInfo, customer_nonce: u64) -> ChannelProposer {
+    let customer_secret = Zeroizing::new(XmrScalar::from(42u64));
+    let partial_spend_key = Curve25519Secret::random(&mut OsRng);
+    let customer_addr = CUSTOMER_ADDRESS.parse().unwrap();
+    ChannelProposer::new(seed, default_arbiter(), customer_secret, partial_spend_key, customer_addr, customer_nonce)
+        .expect("should create proposer")
+}
+
+/// The customer's nonce opportunity is real at the protocol layer, and it is the customer's unilateral
+/// protection: the merchant's seed — nonce included — is reused across proposals by design, so from one seed
+/// a fresh customer nonce is the only field guaranteed to separate two channels' provisional ids. A customer
+/// that repeats it collides with its own earlier channel, and that risk sits with the reuser.
+#[test]
+fn customer_nonce_separates_channels_opened_from_one_seed() {
+    let (seed, _) = build_merchant_seed();
+
+    let id_a = proposer_with_nonce(seed.clone(), 200).metadata.channel_id().name();
+    let id_b = proposer_with_nonce(seed.clone(), 201).metadata.channel_id().name();
+    assert_ne!(id_a, id_b, "a fresh customer nonce must yield a fresh channel id from a reused seed");
+
+    // The residual: replaying the same nonce against the same seed reproduces the id exactly.
+    let id_a_again = proposer_with_nonce(seed, 200).metadata.channel_id().name();
+    assert_eq!(id_a, id_a_again, "a reused customer nonce collides — the risk the reuser accepts");
+}
+
+/// The merchant's nonce opportunity is equally real: the seed's nonce flows through the proposer into the
+/// channel-id transcript, so a merchant that mints a fresh seed nonce gets a fresh id even from a customer
+/// that repeats every one of its own inputs.
+#[test]
+fn merchant_seed_nonce_reaches_the_channel_id() {
+    let (seed_a, _) = build_merchant_seed();
+    let mut seed_b = seed_a.clone();
+    seed_b.merchant_nonce = seed_a.merchant_nonce + 1;
+
+    let id_a = proposer_with_nonce(seed_a, 200).metadata.channel_id().name();
+    let id_b = proposer_with_nonce(seed_b, 200).metadata.channel_id().name();
+    assert_ne!(id_a, id_b, "a fresh merchant seed nonce must yield a fresh channel id");
 }
 
 /// Tampered seed with a modified closing address is also detected.

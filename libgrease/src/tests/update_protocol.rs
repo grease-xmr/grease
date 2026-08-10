@@ -14,7 +14,6 @@
 use crate::Ed25519;
 use ciphersuite::WrappedGroup;
 use rand_core::{CryptoRng, OsRng, RngCore};
-use sha2::{Digest, Sha512};
 use std::future::Future;
 use std::str::FromStr;
 use zeroize::Zeroize;
@@ -24,13 +23,14 @@ use crate::channel_id::ChannelId;
 use crate::cryptography::adapter_signature::AdaptedSignature;
 use crate::cryptography::attestation::G2Point;
 use crate::cryptography::binding_proof::{prove_encrypted_offset, BindingProofParams};
-use crate::grease_protocol::adapter_signature::AdapterSignatureHandler;
+use crate::grease_protocol::adapter_signature::{adapter_signature_message, AdapterSignatureHandler};
 use crate::grease_protocol::multisig_wallet::{MoneroPayment, MultisigTransaction, MultisigTxError};
 use crate::grease_protocol::update_channel::{
     UpdatePackage, UpdateProtocolCommon, UpdateProtocolError, UpdateProtocolProposee, UpdateProtocolProposer,
 };
 use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord, CLOSE_HASH_LEN};
 use crate::payment_channel::{ChannelRole, HasRole};
+use crate::wallet::multisig_wallet::commitment_tx_message;
 use crate::{XmrPoint, XmrScalar};
 
 use crate::io::Writable;
@@ -95,8 +95,8 @@ impl MoneroPayment for MockPayment {
 
 /// The material a party keeps for an update it has started but not yet finalized.
 struct PendingUpdate {
-    /// The committed `(update_count, balance)` to restore if the update is rejected or aborted.
-    previous: (u64, i64),
+    /// The committed `(update_count, balance, peer_balance)` to restore if the update is rejected or aborted.
+    previous: (u64, i64, i64),
     /// Our fresh offset for this state, kept once the package is built.
     offset: Option<XmrScalar>,
     /// Our own half of the record, kept so it can be paired with the peer's.
@@ -113,6 +113,9 @@ struct PartyState {
     master_pk: G2Point,
     update_count: u64,
     balance: i64,
+    /// The counterparty's balance. Both parties model the whole pair, because everything a state signs is
+    /// derived from `(customer, merchant)` and a party that knew only its own half could sign nothing.
+    peer_balance: i64,
     current_offset: XmrScalar,
     pending: Option<PendingUpdate>,
     record: Option<UpdateRecord>,
@@ -120,7 +123,7 @@ struct PartyState {
 }
 
 impl PartyState {
-    fn new(role: ChannelRole, secret: XmrScalar, master_pk: G2Point, balance: i64) -> Self {
+    fn new(role: ChannelRole, secret: XmrScalar, master_pk: G2Point, balance: i64, peer_balance: i64) -> Self {
         PartyState {
             role,
             secret,
@@ -128,6 +131,7 @@ impl PartyState {
             master_pk,
             update_count: 0,
             balance,
+            peer_balance,
             current_offset: XmrScalar::default(),
             pending: None,
             record: None,
@@ -147,6 +151,24 @@ impl PartyState {
         }
     }
 
+    /// The counterparty's balance after `delta` — the same move, in the other direction.
+    fn peer_balance_after(&self, delta: i64) -> i64 {
+        match self.role {
+            ChannelRole::Customer => self.peer_balance + delta,
+            ChannelRole::Merchant => self.peer_balance - delta,
+        }
+    }
+
+    /// The pair in the order the commitment messages absorb it: customer first, then merchant.
+    fn amounts(&self) -> (u64, u64) {
+        let mine = self.balance.max(0) as u64;
+        let theirs = self.peer_balance.max(0) as u64;
+        match self.role {
+            ChannelRole::Customer => (mine, theirs),
+            ChannelRole::Merchant => (theirs, mine),
+        }
+    }
+
     /// Start an update: apply the delta and step the count optimistically, remembering what to restore.
     ///
     /// The sequence diagram has both parties move their balances *before* any offset material is generated, and
@@ -161,8 +183,13 @@ impl PartyState {
                 "would result in negative balance: {new_balance}"
             )));
         }
-        self.pending =
-            Some(PendingUpdate { previous: (self.update_count, self.balance), offset: None, own_half: None, peer_half: None });
+        self.pending = Some(PendingUpdate {
+            previous: (self.update_count, self.balance, self.peer_balance),
+            offset: None,
+            own_half: None,
+            peer_half: None,
+        });
+        self.peer_balance = self.peer_balance_after(delta);
         self.balance = new_balance;
         self.update_count += 1;
         Ok(())
@@ -175,7 +202,7 @@ impl PartyState {
     /// Roll back to the state before [`begin`](PartyState::begin) — the reset every rejection path performs.
     fn rollback(&mut self) {
         if let Some(pending) = self.pending.take() {
-            (self.update_count, self.balance) = pending.previous;
+            (self.update_count, self.balance, self.peer_balance) = pending.previous;
         }
     }
 
@@ -272,8 +299,13 @@ macro_rules! impl_party_plumbing {
                 test_params()
             }
 
-            fn close_hash(&self, update_count: u64) -> Result<CloseHash, UpdateProtocolError> {
-                Ok(mock_close_hash(update_count))
+            /// The harness models one state at a time — the one under negotiation — so a request for any other
+            /// count is a bug in the test rather than a state it could answer for.
+            fn state_amounts(&self, update_count: u64) -> Result<(u64, u64), UpdateProtocolError> {
+                match update_count == self.update_count() {
+                    true => Ok(self.state.amounts()),
+                    false => Err(UpdateProtocolError::NotReady(update_count)),
+                }
             }
         }
 
@@ -287,14 +319,6 @@ macro_rules! impl_party_plumbing {
             }
         }
     };
-}
-
-/// A stand-in close hash: both parties derive the same 64 bytes for a state without building a transaction.
-fn mock_close_hash(update_count: u64) -> CloseHash {
-    let digest = Sha512::digest(format!("mock-close-hash:{CHANNEL}:{update_count}"));
-    let mut bytes = [0u8; CLOSE_HASH_LEN];
-    bytes.copy_from_slice(&digest);
-    CloseHash::new(bytes)
 }
 
 /// The two halves of the exchange that are identical on both sides, expressed once.
@@ -313,7 +337,7 @@ trait TestPartyOps: UpdateProtocolCommon + Sized {
         let count = self.update_count();
         let omega = self.fresh_offset(rng);
         let binding_proof = self.seal_offset(&omega, count)?;
-        let msg = self.commitment_message(count, self.role().other());
+        let msg = self.adaptor_message(count, self.role().other())?;
         let adapted_signature = AdaptedSignature::<Ed25519>::sign(self.signing_key(), &omega, msg, rng);
         let record_half = self.sign_record_half(count, rng)?;
         let pending = self.state_mut().pending.as_mut().expect("checked above");
@@ -355,8 +379,9 @@ struct TestUpdateProposer {
 }
 
 impl TestUpdateProposer {
-    fn new(role: ChannelRole, master_pk: G2Point, initial_balance: i64) -> Self {
-        TestUpdateProposer { state: PartyState::new(role, XmrScalar::random(&mut OsRng), master_pk, initial_balance) }
+    fn new(role: ChannelRole, master_pk: G2Point, initial_balance: i64, peer_balance: i64) -> Self {
+        let state = PartyState::new(role, XmrScalar::random(&mut OsRng), master_pk, initial_balance, peer_balance);
+        TestUpdateProposer { state }
     }
 }
 
@@ -400,8 +425,9 @@ struct TestUpdateProposee {
 }
 
 impl TestUpdateProposee {
-    fn new(role: ChannelRole, master_pk: G2Point, initial_balance: i64) -> Self {
-        TestUpdateProposee { state: PartyState::new(role, XmrScalar::random(&mut OsRng), master_pk, initial_balance) }
+    fn new(role: ChannelRole, master_pk: G2Point, initial_balance: i64, peer_balance: i64) -> Self {
+        let state = PartyState::new(role, XmrScalar::random(&mut OsRng), master_pk, initial_balance, peer_balance);
+        TestUpdateProposee { state }
     }
 }
 
@@ -448,8 +474,8 @@ fn master_public_key() -> G2Point {
 /// A customer proposer and merchant proposee that know each other's public keys.
 fn channel(customer_balance: i64, merchant_balance: i64) -> (TestUpdateProposer, TestUpdateProposee) {
     let master_pk = master_public_key();
-    let mut proposer = TestUpdateProposer::new(ChannelRole::Customer, master_pk, customer_balance);
-    let mut proposee = TestUpdateProposee::new(ChannelRole::Merchant, master_pk, merchant_balance);
+    let mut proposer = TestUpdateProposer::new(ChannelRole::Customer, master_pk, customer_balance, merchant_balance);
+    let mut proposee = TestUpdateProposee::new(ChannelRole::Merchant, master_pk, merchant_balance, customer_balance);
     proposer.state.peer_public = proposee.state.public_key();
     proposee.state.peer_public = proposer.state.public_key();
     (proposer, proposee)
@@ -554,6 +580,30 @@ fn offsets_are_independent_across_states() {
     assert_ne!(first, second, "each state gets a freshly drawn offset — offsets never chain");
 }
 
+/// The weld between the update path and the dispute path: one adaptor message, derived the same way on both
+/// sides.
+///
+/// Built here from the *free* functions rather than the trait, so it fails if the trait's derivation ever drifts
+/// from what a claimant rebuilds months later out of `(channel_id, update_count, balances)`. This is the check
+/// that stops the two encodings separating again.
+#[test]
+fn the_message_the_update_path_signs_is_the_one_a_dispute_rebuilds() {
+    let (mut proposer, mut proposee) = channel(1000, 0);
+    run_update(&mut proposer, &mut proposee, 100);
+
+    let (customer, merchant) = (900u64, 100u64);
+    let close_hash =
+        CloseHash::try_from(commitment_tx_message(&channel_id(), 1, ChannelRole::Customer, customer, merchant))
+            .expect("the commitment message is a 64-byte challenge");
+    let rebuilt = adapter_signature_message(&channel_id(), 1, &close_hash).expect("the fixture id is final");
+
+    // Both parties derive the customer's state-1 adaptor message, and both derive exactly the rebuilt bytes.
+    assert_eq!(proposer.adaptor_message(1, ChannelRole::Customer).unwrap(), rebuilt);
+    assert_eq!(proposee.adaptor_message(1, ChannelRole::Customer).unwrap(), rebuilt);
+    // And the merchant's half of the state is a different message, so a pre-signature cannot cross over.
+    assert_ne!(proposer.adaptor_message(1, ChannelRole::Merchant).unwrap(), rebuilt);
+}
+
 //--------------------------------------------------------------------------------------------------------------------
 //                                              Rejection and rollback
 //--------------------------------------------------------------------------------------------------------------------
@@ -642,9 +692,14 @@ fn a_sealed_offset_that_does_not_match_the_adaptor_point_is_rejected() {
     let mut package = proposee.create_response(&mut rng).expect("proposee builds a package");
     // Seal a different offset. The pre-signature still verifies — only the binding proof's target does not.
     let other = XmrScalar::random(&mut rng);
-    package.binding_proof =
-        prove_encrypted_offset(&other, &proposee.statement(1), &proposee.arbiter_master_public_key(), proposee.second_base(), test_params())
-            .expect("honest prover succeeds");
+    package.binding_proof = prove_encrypted_offset(
+        &other,
+        &proposee.statement(1).unwrap(),
+        &proposee.arbiter_master_public_key(),
+        proposee.second_base(),
+        test_params(),
+    )
+    .expect("honest prover succeeds");
 
     proposer.initiate_update(100).unwrap();
     let result = proposer.process_response(&package);
@@ -664,7 +719,7 @@ fn an_offset_sealed_to_another_state_is_rejected() {
     let mut tampered = package;
     tampered.binding_proof = prove_encrypted_offset(
         &omega,
-        &proposee.statement(2),
+        &proposee.statement(2).unwrap(),
         &proposee.arbiter_master_public_key(),
         proposee.second_base(),
         test_params(),
@@ -686,7 +741,7 @@ fn a_weaker_cut_and_choose_profile_is_rejected() {
     let omega = proposee.state.pending.as_ref().and_then(|p| p.offset).expect("offset was kept");
     package.binding_proof = prove_encrypted_offset(
         &omega,
-        &proposee.statement(1),
+        &proposee.statement(1).unwrap(),
         &proposee.arbiter_master_public_key(),
         proposee.second_base(),
         BindingProofParams::new(4, 2).unwrap(),
@@ -707,7 +762,7 @@ fn a_pre_signature_over_the_wrong_commitment_transaction_is_rejected() {
     let mut package = proposee.create_response(&mut rng).expect("proposee builds a package");
     let omega = proposee.state.pending.as_ref().and_then(|p| p.offset).expect("offset was kept");
     // Sign the proposee's own commitment transaction instead of the proposer's.
-    let wrong = proposee.commitment_message(1, ChannelRole::Merchant);
+    let wrong = proposee.adaptor_message(1, ChannelRole::Merchant).expect("the fixture id is final");
     package.adapted_signature = AdaptedSignature::<Ed25519>::sign(proposee.signing_key(), &omega, wrong, &mut rng);
 
     proposer.initiate_update(100).unwrap();
@@ -723,8 +778,9 @@ fn a_record_half_signed_by_a_stranger_is_rejected() {
     proposee.receive_update_request(100).unwrap();
     let mut package = proposee.create_response(&mut rng).expect("proposee builds a package");
     let mallory = XmrScalar::random(&mut rng);
+    let close_hash = proposee.record_close_hash(1).expect("the fixture id is final");
     package.record_half =
-        HalfSignedUpdateRecord::sign(channel_id(), 1, mock_close_hash(1), ChannelRole::Merchant, &mallory, &mut rng);
+        HalfSignedUpdateRecord::sign(channel_id(), 1, close_hash, ChannelRole::Merchant, &mallory, &mut rng).unwrap();
 
     proposer.initiate_update(100).unwrap();
     let result = proposer.process_response(&package);
@@ -745,7 +801,8 @@ fn a_record_half_committing_to_another_closing_transaction_is_rejected() {
         ChannelRole::Merchant,
         proposee.signing_key(),
         &mut rng,
-    );
+    )
+    .unwrap();
 
     proposer.initiate_update(100).unwrap();
     let result = proposer.process_response(&package);
@@ -759,14 +816,10 @@ fn a_record_half_signed_in_the_wrong_role_is_rejected() {
 
     proposee.receive_update_request(100).unwrap();
     let mut package = proposee.create_response(&mut rng).expect("proposee builds a package");
-    package.record_half = HalfSignedUpdateRecord::sign(
-        channel_id(),
-        1,
-        mock_close_hash(1),
-        ChannelRole::Customer,
-        proposee.signing_key(),
-        &mut rng,
-    );
+    let close_hash = proposee.record_close_hash(1).expect("the fixture id is final");
+    package.record_half =
+        HalfSignedUpdateRecord::sign(channel_id(), 1, close_hash, ChannelRole::Customer, proposee.signing_key(), &mut rng)
+            .unwrap();
 
     proposer.initiate_update(100).unwrap();
     let result = proposer.process_response(&package);

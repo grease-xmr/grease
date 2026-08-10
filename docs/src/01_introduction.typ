@@ -40,10 +40,15 @@ proof-of-concept payment channel for Monero.
 
 === Enter Grease
 
-The Grease protocol is a new bi-directional payment channel design with unlimited lifetime for Monero. FCMP++ (Full-Chain Membership
-Proofs++) replaces Monero's fixed-size ring signatures with a succinct proof that a spent output belongs to the whole set of outputs on the
-chain; because the anonymity set is chosen only when a transaction is finally broadcast, a channel's pre-signed closing transaction never
-becomes stale — which is what gives a Grease channel its unlimited lifetime.
+The Grease protocol is a new bi-directional payment channel design with unlimited lifetime for Monero. It is built on FCMP++ (Full-Chain
+Membership Proofs++), which replaces Monero's fixed-size ring signatures with a succinct proof that a spent output belongs to the whole set of
+outputs on the chain. Because that membership proof is assembled when a transaction is finally broadcast rather than when it is signed, two
+properties follow that shape the entire design:
+
+- A channel's pre-signed closing transaction never becomes stale, which is what gives a Grease channel its unlimited lifetime.
+- A transaction can be signed against a funding output that has been _determined_ but not yet mined, so a channel's initial state is fully
+  signed before any money moves. Either party may fund the channel, or both may, with nobody having to deposit first and trust the other to
+  reciprocate.
 
 Using the Grease protocol, two peers may trustlessly #footnote[No trust is needed between the channel parties. Dispute resolution relies on
   an arbiter, whose trust assumptions reduce to those of its consensus platform; the arbiter holds no funds and no
@@ -106,7 +111,8 @@ Grease embraces this use case and optimizes the design and UX based on the follo
   supply this if the customer has none. The customer must watch the arbiter and present a more recent cross-signed record than the one
   the merchant tried to close on in the case of a dispute.
 - In the vast majority of cases, the customer opens a channel with _m_ XMR and the merchant starts with a zero XMR balance (since the
-  merchant is providing assets or services in exchange for Monero).
+  merchant is providing assets or services in exchange for Monero). The design does not require this: either party may fund, and a merchant
+  that wants a balance to refund or spend from contributes a funding output of its own alongside the customer's (@fundingDeclaration).
 - Usually, both parties mutually close the channel. Either party _may_ close the channel unilaterally through the arbiter, and are able to
   claim their funds once the adjudication window has elapsed. In this case, the party doing so is usually the merchant since they have the
   greater incentive to do so in the case of an abandoned channel.

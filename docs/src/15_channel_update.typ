@@ -8,9 +8,10 @@ Once a channel is open the parties may transact and update the XMR balance betwe
 near-instantaneously.
 
 #note[
-  Under FCMP++, the membership (decoy) set for a spend is chosen only when a transaction is finally broadcast@jeffro25,
-  rather than when it is signed. This has two consequences for channel updates:
-  - An update never needs to query the Monero blockchain to select decoys, a significant performance improvement.
+  A spend's membership proof is assembled when its transaction is finally broadcast, not when it is signed@jeffro25. This has two
+  consequences for channel updates:
+  - An update never touches the Monero blockchain. There is no anonymity set to choose, so an update is a purely off-chain exchange between
+    the two parties.
   - A channel can stay open indefinitely: its pre-signed closing transaction can never become stale.
 ]
 

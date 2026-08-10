@@ -21,7 +21,7 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use thiserror::Error;
 
-use crate::channel_id::{ChannelId, ChannelIdParseError};
+use crate::channel_id::{ChannelId, ChannelIdParseError, ProvisionalChannelIdError};
 use crate::cryptography::adapter_signature::SchnorrSignature;
 use crate::payment_channel::ChannelRole;
 use crate::{XmrPoint, XmrScalar};
@@ -29,19 +29,23 @@ use crate::{XmrPoint, XmrScalar};
 /// Domain-separation tag for the update-record signing message. Versioned: a layout change gets a new tag.
 pub const UPDATE_RECORD_DST: &[u8] = b"Grease UpdateRecord v1";
 
-/// The length of a [`CloseHash`]: the closing-transaction message is a Blake2b-512 transcript challenge
-/// (see [`crate::wallet::multisig_wallet::commitment_tx_message`]).
+/// The length of a [`CloseHash`]: both closing-transaction messages are Blake2b-512 transcript challenges (see
+/// [`commitment_tx_message`](crate::wallet::multisig_wallet::commitment_tx_message) and
+/// [`commitment_pair_message`](crate::wallet::multisig_wallet::commitment_pair_message)).
 pub const CLOSE_HASH_LEN: usize = 64;
 
 //--------------------------------------------------------------------------------------------------------------------
 //                                                    CloseHash
 //--------------------------------------------------------------------------------------------------------------------
 
-/// The canonical signable hash of a state's closing transaction.
+/// The canonical signable hash of a state's closing transactions.
 ///
-/// Sourced from the wallet layer's [`commitment_tx_message`][crate::wallet::multisig_wallet::commitment_tx_message]
-/// so the record commits to exactly the message the adapted closing signature signs — both parties can compute it
-/// independently before the transaction is built.
+/// It wraps either of the wallet layer's two hashes, which are the same width and are never interchangeable: the
+/// *pair* hash ([`commitment_pair_message`](crate::wallet::multisig_wallet::commitment_pair_message)), which is
+/// what an [`UpdateRecord`] commits to, and the *per-holder* hash
+/// ([`commitment_tx_message`](crate::wallet::multisig_wallet::commitment_tx_message)), which is what that
+/// holder's adaptor signature signs. Both are derived from the channel id, the state index and the two balances,
+/// so both parties can compute either independently before the transaction is built.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CloseHash([u8; CLOSE_HASH_LEN]);
 
@@ -133,6 +137,8 @@ pub fn update_record_message(channel_id: &ChannelId, update_count: u64, close_ha
 pub enum UpdateRecordError {
     #[error("malformed channel id: {0}")]
     InvalidChannelId(#[from] ChannelIdParseError),
+    #[error(transparent)]
+    ProvisionalChannelId(#[from] ProvisionalChannelIdError),
     #[error("close hash must be {CLOSE_HASH_LEN} bytes, got {0}")]
     InvalidCloseHashLength(usize),
     #[error("expected a record half signed by the {expected}, got one signed by the {actual}")]
@@ -160,6 +166,10 @@ pub struct HalfSignedUpdateRecord {
 
 impl HalfSignedUpdateRecord {
     /// Construct and sign our half of the record for state `update_count`.
+    ///
+    /// A provisional (`XGT…`) channel id is refused: a record over it would commit to no funding output, and this
+    /// is the boundary at which our signature over the id comes into existence. A `Result` rather than an
+    /// assertion, because the wire layer may build the half from fields quoted in a peer's message.
     pub fn sign<R: RngCore + CryptoRng>(
         channel_id: ChannelId,
         update_count: u64,
@@ -167,10 +177,11 @@ impl HalfSignedUpdateRecord {
         signer_role: ChannelRole,
         secret: &XmrScalar,
         rng: &mut R,
-    ) -> Self {
+    ) -> Result<Self, UpdateRecordError> {
+        channel_id.require_finalized()?;
         let msg = update_record_message(&channel_id, update_count, &close_hash);
         let signature = SchnorrSignature::<Ed25519>::sign(secret, msg, rng);
-        HalfSignedUpdateRecord { channel_id, update_count, close_hash, signer_role, signature }
+        Ok(HalfSignedUpdateRecord { channel_id, update_count, close_hash, signer_role, signature })
     }
 
     /// Verify this half: well-formedness of the channel id plus the signer's Schnorr signature.
@@ -351,7 +362,8 @@ mod tests {
             ChannelRole::Customer,
             &customer.secret,
             &mut OsRng,
-        );
+        )
+        .unwrap();
         let record =
             UpdateRecord::countersign(&half, &customer.pubkey, ChannelRole::Merchant, &merchant.secret, &mut OsRng).unwrap();
         (record, customer, merchant)
@@ -363,12 +375,23 @@ mod tests {
         record.verify(&customer.pubkey, &merchant.pubkey).unwrap();
     }
 
+    /// F2 of the K-20 review: signing is the boundary at which our signature over the id comes into existence,
+    /// so a provisional (`XGT…`) id must be refused there, not merely kept away by the state machine.
+    #[test]
+    fn signing_with_a_provisional_channel_id_is_refused() {
+        let provisional =
+            ChannelId::from_str("XGT4a7024e7fd6f5c6a2d0131d12fd91ecd17f5da61c2970d603a05053b41a383").unwrap();
+        let customer = party(ChannelRole::Customer);
+        let err = HalfSignedUpdateRecord::sign(provisional, 3, close_hash(7), customer.role, &customer.secret, &mut OsRng);
+        assert!(matches!(err, Err(UpdateRecordError::ProvisionalChannelId(_))));
+    }
+
     #[test]
     fn from_halves_round_trip() {
         let customer = party(ChannelRole::Customer);
         let merchant = party(ChannelRole::Merchant);
-        let ha = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), customer.role, &customer.secret, &mut OsRng);
-        let hb = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), merchant.role, &merchant.secret, &mut OsRng);
+        let ha = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), customer.role, &customer.secret, &mut OsRng).unwrap();
+        let hb = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), merchant.role, &merchant.secret, &mut OsRng).unwrap();
         // Argument order must not matter
         let r1 = UpdateRecord::from_halves(&ha, &hb).unwrap();
         let r2 = UpdateRecord::from_halves(&hb, &ha).unwrap();
@@ -380,11 +403,11 @@ mod tests {
     fn from_halves_rejects_mismatched_fields_and_roles() {
         let customer = party(ChannelRole::Customer);
         let merchant = party(ChannelRole::Merchant);
-        let ha = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), customer.role, &customer.secret, &mut OsRng);
-        let hb = HalfSignedUpdateRecord::sign(channel_id(), 10, close_hash(1), merchant.role, &merchant.secret, &mut OsRng);
+        let ha = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), customer.role, &customer.secret, &mut OsRng).unwrap();
+        let hb = HalfSignedUpdateRecord::sign(channel_id(), 10, close_hash(1), merchant.role, &merchant.secret, &mut OsRng).unwrap();
         assert!(matches!(UpdateRecord::from_halves(&ha, &hb), Err(UpdateRecordError::MismatchedHalves)));
         // Two halves signed by the same role
-        let ha2 = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), customer.role, &customer.secret, &mut OsRng);
+        let ha2 = HalfSignedUpdateRecord::sign(channel_id(), 9, close_hash(1), customer.role, &customer.secret, &mut OsRng).unwrap();
         assert!(matches!(UpdateRecord::from_halves(&ha, &ha2), Err(UpdateRecordError::RoleMismatch { .. })));
     }
 
@@ -393,11 +416,11 @@ mod tests {
         let customer = party(ChannelRole::Customer);
         let merchant = party(ChannelRole::Merchant);
         // A merchant-signed half presented to the merchant for countersigning
-        let half = HalfSignedUpdateRecord::sign(channel_id(), 1, close_hash(7), merchant.role, &merchant.secret, &mut OsRng);
+        let half = HalfSignedUpdateRecord::sign(channel_id(), 1, close_hash(7), merchant.role, &merchant.secret, &mut OsRng).unwrap();
         let err = UpdateRecord::countersign(&half, &merchant.pubkey, ChannelRole::Merchant, &merchant.secret, &mut OsRng);
         assert!(matches!(err, Err(UpdateRecordError::RoleMismatch { .. })));
         // And a half that does not verify under the claimed pubkey
-        let half = HalfSignedUpdateRecord::sign(channel_id(), 1, close_hash(7), customer.role, &customer.secret, &mut OsRng);
+        let half = HalfSignedUpdateRecord::sign(channel_id(), 1, close_hash(7), customer.role, &customer.secret, &mut OsRng).unwrap();
         let err = UpdateRecord::countersign(&half, &merchant.pubkey, ChannelRole::Merchant, &merchant.secret, &mut OsRng);
         assert!(matches!(err, Err(UpdateRecordError::InvalidSignature(ChannelRole::Customer))));
     }
@@ -471,7 +494,7 @@ mod tests {
         assert_eq!(record, restored);
         restored.verify(&customer.pubkey, &merchant.pubkey).unwrap();
         // The half-signed wire message round-trips too
-        let half = HalfSignedUpdateRecord::sign(channel_id(), 42, close_hash(7), customer.role, &customer.secret, &mut OsRng);
+        let half = HalfSignedUpdateRecord::sign(channel_id(), 42, close_hash(7), customer.role, &customer.secret, &mut OsRng).unwrap();
         let json = serde_json::to_string(&half).unwrap();
         let restored: HalfSignedUpdateRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(half, restored);

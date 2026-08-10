@@ -38,17 +38,18 @@ use crate::cryptography::pvss::SecondBase;
 use crate::grease_protocol::force_close_channel::{
     ForceCloseProtocolClaimant, ForceCloseProtocolCommon, ForceCloseProtocolError, PendingCloseStatus,
 };
+use crate::grease_protocol::adapter_signature::adapter_signature_message;
 use crate::grease_protocol::multisig_wallet::LinkedMultisigWallets;
-use crate::grease_protocol::update_channel::commitment_message;
-use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord, CLOSE_HASH_LEN};
+use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord};
 use crate::monero::data_objects::ClosingAddresses;
 use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::ChannelRole;
 use crate::state_machine::{
     AppliedUpdate, DisputeReason, DisputingChannelState, EstablishedChannelState, DEFAULT_PROOF_HISTORY_DEPTH,
 };
-use crate::wallet::multisig_wallet::MultisigWallet;
-use crate::XmrScalar;
+use crate::wallet::multisig_wallet::{commitment_pair_message, commitment_tx_message, FundingOutputRef, MultisigWallet};
+use crate::{XmrPoint, XmrScalar};
+use ciphersuite::group::Group;
 
 const ALICE_ADDRESS: &str =
     "43i4pVer2tNFELvfFEEXxmbxpwEAAFkmgN2wdBiaRNcvYcgrzJzVyJmHtnh2PWR42JPeDVjE8SnyK3kPBEjSixMsRz8TncK";
@@ -88,7 +89,7 @@ impl Seam {
         let mut rng = ChaCha20Rng::seed_from_u64(0x5ea3_1eaf);
         let (arbiter, clock) = MockArbiter::with_manual_clock(&mut rng);
         let (customer_wallet, merchant_wallet) = linked_wallets(&mut rng);
-        let metadata = ChannelIdMetadata::new(
+        let mut metadata = ChannelIdMetadata::new(
             merchant_wallet.my_public_key().as_point(),
             customer_wallet.my_public_key().as_point(),
             balances(),
@@ -97,13 +98,22 @@ impl Seam {
             100,
             200,
         );
+        // Bind the id to a funding output, as establishment does: everything the seam signs or seals —
+        // records, statements, commitment messages — is refused over a provisional id, and so is registration.
+        let declared = FundingOutputRef::new(XmrPoint::generator() * XmrScalar::from(11u64), 0);
+        let output = customer_wallet.derive_funding_output(&declared).expect("the customer derives the output");
+        let merchant_partial = merchant_wallet.partial_linking_tag(&output).expect("merchant partial linking tag");
+        let tag = customer_wallet.linking_tag(&output, &merchant_partial).expect("linked wallets combine to L_j");
+        metadata.finalize(vec![tag]).expect("a provisional id can be finalized");
         let seam = Seam { arbiter, clock, customer_wallet, merchant_wallet, metadata };
         // The arbiter verifies presented records against the channel's two signing keys, customer first.
-        seam.arbiter.register_channel(
-            seam.metadata.name(),
-            seam.wallet(ChannelRole::Customer).my_public_key().as_point(),
-            seam.wallet(ChannelRole::Merchant).my_public_key().as_point(),
-        );
+        seam.arbiter
+            .register_channel(
+                seam.metadata.name(),
+                seam.wallet(ChannelRole::Customer).my_public_key().as_point(),
+                seam.wallet(ChannelRole::Merchant).my_public_key().as_point(),
+            )
+            .unwrap();
         seam
     }
 
@@ -130,9 +140,30 @@ impl Seam {
         XmrScalar::random(&mut ChaCha20Rng::seed_from_u64(0xb1_dc0f ^ (update_count << 4) ^ tag))
     }
 
-    /// The cross-signed record both parties hold for a state, signed with the real channel keys.
+    /// The channel balances after `update_count` payments, in piconero: `(customer, merchant)`.
+    ///
+    /// Derived from the same delta [`open_channel`](Seam::open_channel) applies, so the fixture's records and
+    /// pre-signatures cannot disagree with the balances the state machine ends up holding.
+    fn amounts(&self, update_count: u64) -> (u64, u64) {
+        let balances = (0..update_count)
+            .fold(balances(), |acc, _| acc.apply_delta(payment()).expect("the channel stays solvent"));
+        (balances.customer.to_piconero(), balances.merchant.to_piconero())
+    }
+
+    /// The message a state's adaptor signature covers: the commitment transaction *held by* `holder`.
+    fn adaptor_message(&self, update_count: u64, holder: ChannelRole) -> Vec<u8> {
+        let (customer, merchant) = self.amounts(update_count);
+        let msg = commitment_tx_message(&self.metadata.name(), update_count, holder, customer, merchant);
+        let close_hash = CloseHash::try_from(msg).expect("the commitment message is a 64-byte challenge");
+        adapter_signature_message(&self.metadata.name(), update_count, &close_hash).expect("the seam id is final")
+    }
+
+    /// The cross-signed record both parties hold for a state, signed with the real channel keys and committing
+    /// to the *pair* of commitment transactions for that state's balances.
     fn record(&self, update_count: u64) -> UpdateRecord {
-        let close_hash = CloseHash::new([update_count as u8; CLOSE_HASH_LEN]);
+        let (customer, merchant) = self.amounts(update_count);
+        let pair = commitment_pair_message(&self.metadata.name(), update_count, customer, merchant);
+        let close_hash = CloseHash::try_from(pair).expect("the pair message is a 64-byte challenge");
         let mut rng = ChaCha20Rng::seed_from_u64(0xc0_1dbeef ^ update_count);
         let halves = [ChannelRole::Customer, ChannelRole::Merchant].map(|role| {
             HalfSignedUpdateRecord::sign(
@@ -143,6 +174,7 @@ impl Seam {
                 self.secret(role),
                 &mut rng,
             )
+            .expect("the seam id is final")
         });
         UpdateRecord::from_halves(&halves[0], &halves[1]).expect("halves agree by construction")
     }
@@ -150,11 +182,10 @@ impl Seam {
     /// The pre-signature `signer` sends for a state: over the *counterparty's* commitment transaction, adapted
     /// by the signer's own offset.
     fn presignature(&self, update_count: u64, signer: ChannelRole) -> AdaptedSignature<Ed25519> {
-        let msg = commitment_message(&self.metadata.name(), update_count, signer.other());
         AdaptedSignature::<Ed25519>::sign(
             self.secret(signer),
             &self.offset(update_count, signer),
-            msg,
+            self.adaptor_message(update_count, signer.other()),
             &mut ChaCha20Rng::seed_from_u64(update_count),
         )
     }
@@ -164,7 +195,7 @@ impl Seam {
         let peer = role.other();
         let peer_binding_proof = prove_encrypted_offset(
             &self.offset(update_count, peer),
-            &statement_for(&self.metadata.name(), update_count),
+            &statement_for(&self.metadata.name(), update_count).expect("the seam id is final"),
             self.arbiter.configuration().master_public_key(),
             SecondBase::grease_default(),
             test_params(),
@@ -194,10 +225,9 @@ impl Seam {
             funding_transactions: HashMap::new(),
             updates: Default::default(),
         };
-        let delta = MoneroDelta::from(MoneroAmount::from_xmr("0.01").expect("a valid amount"));
         (1..=count).for_each(|update_count| {
             let applied = self.applied_update(update_count, role);
-            assert_eq!(state.store_update(delta, applied), update_count);
+            assert_eq!(state.store_update(payment(), applied), update_count);
         });
         state
     }
@@ -234,6 +264,12 @@ fn balances() -> Balances {
     Balances::new(MoneroAmount::from_xmr("1.25").expect("valid"), MoneroAmount::from_xmr("0.75").expect("valid"))
 }
 
+/// The one payment every update in this fixture makes. The single source for both the deltas `open_channel`
+/// applies and the balances the records and pre-signatures are keyed to.
+fn payment() -> MoneroDelta {
+    MoneroDelta::from(MoneroAmount::from_xmr("0.01").expect("a valid amount"))
+}
+
 fn closing_addresses() -> ClosingAddresses {
     ClosingAddresses::new(ALICE_ADDRESS, BOB_ADDRESS).expect("valid closing addresses")
 }
@@ -256,13 +292,13 @@ fn a_dispute_closes_on_the_proof_the_open_channel_retained() {
     // Recovery runs on the proof reached through the state machine, not on one handed to the test.
     let sigma = block_on(disputing.collect_attestation(&seam.arbiter, &transport())).expect("the window elapsed");
     let proof = disputing.peer_binding_proof().expect("retained by the open channel").clone();
-    let statement = disputing.statement(8);
+    let statement = disputing.statement(8).expect("the seam id is final");
     let omega = disputing.recover_offset(&proof, &statement, &sigma).expect("the attestation opens state 8");
     assert_eq!(omega, seam.offset(8, ChannelRole::Customer), "recovery must produce the counterparty's offset");
 
     // And that offset completes the counterparty half of the closing signature over *our* commitment tx.
     let signature = disputing.complete_closing_signature(&omega).expect("the offset adapts the pre-signature");
-    let msg = commitment_message(&seam.metadata.name(), 8, ChannelRole::Merchant);
+    let msg = seam.adaptor_message(8, ChannelRole::Merchant);
     assert!(signature.verify(&disputing.peer_public_key(), &msg));
     assert_eq!(disputing.status(), PendingCloseStatus::Claimable);
 }
@@ -277,8 +313,26 @@ fn the_one_call_close_takes_the_same_path_from_the_same_stored_state() {
     seam.clock.advance(DAY);
     let signature =
         block_on(disputing.complete_force_close(&seam.arbiter, &transport())).expect("an uncontested close");
-    let msg = commitment_message(&seam.metadata.name(), 8, ChannelRole::Customer);
+    let msg = seam.adaptor_message(8, ChannelRole::Customer);
     assert!(signature.verify(&disputing.peer_public_key(), &msg));
+}
+
+#[test]
+fn a_dispute_whose_balances_left_the_record_behind_refuses_to_complete() {
+    // `from_open_channel` takes the balances and the record as independent arguments, so nothing structural stops
+    // a caller pairing mismatched ones. The record's own close hash is the pair message over the state's two
+    // amounts, so recomputing it is what proves the balances are the ones both parties signed — and a state that
+    // has drifted is refused outright rather than producing a signature that verifies against nothing.
+    let seam = Seam::new();
+    let open = seam.open_channel(ChannelRole::Customer, 8);
+    let mut disputing = seam.dispute(&open);
+    disputing.dynamic.current_balances =
+        disputing.dynamic.current_balances.apply_delta(payment()).expect("the channel stays solvent");
+
+    let err = disputing
+        .complete_closing_signature(&seam.offset(8, ChannelRole::Merchant))
+        .expect_err("drifted balances cannot rebuild the message the pre-signature covers");
+    assert!(matches!(err, ForceCloseProtocolError::CloseHashMismatch { update_count: 8 }), "{err}");
 }
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -332,11 +386,11 @@ fn no_attestation_that_will_ever_exist_opens_an_older_retained_proof() {
 
     let older = open.update_history().first().expect("a first update").peer_binding_proof.clone();
     // Its own statement is not attested, and relabelling it with the attested one does not help either.
-    assert!(disputing.recover_offset(&older, &disputing.statement(1), &sigma).is_err());
-    assert!(disputing.recover_offset(&older, &disputing.statement(8), &sigma).is_err());
+    assert!(disputing.recover_offset(&older, &disputing.statement(1).unwrap(), &sigma).is_err());
+    assert!(disputing.recover_offset(&older, &disputing.statement(8).unwrap(), &sigma).is_err());
     // The target check catches it before decryption is even attempted: an older proof seals a different Q.
     assert!(matches!(
-        disputing.recover_offset(&older, &disputing.statement(1), &sigma),
+        disputing.recover_offset(&older, &disputing.statement(1).unwrap(), &sigma),
         Err(ForceCloseProtocolError::OffsetTargetMismatch)
     ));
 }

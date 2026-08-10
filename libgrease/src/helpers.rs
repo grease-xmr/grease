@@ -178,6 +178,59 @@ where
     deserialize_ge(de).map(Some)
 }
 
+/// Serialize a sequence of group elements as a sequence of hex strings.
+///
+/// The sequence variant of [`serialize_ge`], for fields holding several group elements — the channel id's
+/// per-funding-output linking tags among them.
+pub fn serialize_ge_seq<G: GroupEncoding, S: serde::Serializer>(elements: &[G], s: S) -> Result<S::Ok, S::Error> {
+    let hex = elements.iter().map(|e| hex::encode(e.to_bytes().as_ref())).collect::<Vec<String>>();
+    hex.serialize(s)
+}
+
+/// Deserialize a sequence of group elements from a sequence of hex strings.
+pub fn deserialize_ge_seq<'de, G, D>(de: D) -> Result<Vec<G>, D::Error>
+where
+    G: GroupEncoding,
+    D: Deserializer<'de>,
+{
+    let hex = Vec::<String>::deserialize(de)?;
+    hex.iter().map(|s| group_element_from_hex_str::<G>(s).map_err(serde::de::Error::custom)).collect()
+}
+
+/// Serialize an `Option<Vec<G>>` as a sequence of hex strings.
+///
+/// Must be used with `#[serde(skip_serializing_if = "Option::is_none")]` — panics if the value is `None`.
+pub fn option_serialize_ge_seq<G: GroupEncoding, S: serde::Serializer>(
+    opt: &Option<Vec<G>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match opt {
+        Some(elements) => serialize_ge_seq(elements, s),
+        None => panic!(r#"Put skip_serializing_if = "Option::is_none" in front of the attribute to serialize"#),
+    }
+}
+
+/// Deserialize an `Option<Vec<G>>` from a sequence of hex strings.
+pub fn option_deserialize_ge_seq<'de, G, D>(de: D) -> Result<Option<Vec<G>>, D::Error>
+where
+    G: GroupEncoding,
+    D: Deserializer<'de>,
+{
+    deserialize_ge_seq(de).map(Some)
+}
+
+/// Decode one group element from a hex string, with the same length and encoding checks [`deserialize_ge`] makes.
+fn group_element_from_hex_str<G: GroupEncoding>(hex_str: &str) -> Result<G, String> {
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex string: {e}"))?;
+    let mut repr = G::Repr::default();
+    let expected = repr.as_ref().len();
+    if bytes.len() != expected {
+        return Err(format!("Invalid group element length: expected {expected} bytes, got {}", bytes.len()));
+    }
+    repr.as_mut().copy_from_slice(&bytes);
+    Option::from(G::from_bytes(&repr)).ok_or_else(|| "Invalid group element encoding".to_string())
+}
+
 /// Serialize a `HashMap<TransactionId, TransactionRecord>` as a sequence of `(key, value)` pairs.
 ///
 /// JSON requires map keys to be strings, but `TransactionId` serializes as an object.

@@ -56,10 +56,13 @@ use crate::cryptography::binding_proof::{
     prove_encrypted_offset, verify_encrypted_offset, BindingProof, BindingProofError, BindingProofParams,
 };
 use crate::cryptography::pvss::SecondBase;
-use crate::grease_protocol::adapter_signature::{AdapterSignatureError, AdapterSignatureHandler};
+use crate::grease_protocol::adapter_signature::{
+    adapter_signature_message, AdapterSignatureError, AdapterSignatureHandler,
+};
 use crate::grease_protocol::multisig_wallet::MultisigTransaction;
 use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord, UpdateRecordError};
 use crate::payment_channel::{ChannelRole, HasRole};
+use crate::wallet::multisig_wallet::{commitment_pair_message, commitment_tx_message};
 use crate::{XmrPoint, XmrScalar};
 use crate::Ed25519;
 use rand_core::{CryptoRng, RngCore};
@@ -109,20 +112,6 @@ impl UpdatePackage {
     }
 }
 
-/// The message the adaptor signature for `update_count` covers: the commitment transaction *held by* `holder`.
-///
-/// A free function because the dispute path needs the identical bytes — the claimant completes a pre-signature
-/// built here, months after the update that produced it — and two independent copies of this format string would
-/// be a silent way to make a dispute close unverifiable.
-///
-/// Provisional: the transcript-based commitment-transaction encoding is still a stub
-/// ([`CommitmentTransaction`](crate::state_machine::CommitmentTransaction)), so this is a domain-separated
-/// placeholder over `(channel, state, holder)`. It is separated by holder so the two signatures exchanged in one
-/// update are never over the same bytes.
-pub fn commitment_message(channel_id: &ChannelId, update_count: u64, holder: ChannelRole) -> Vec<u8> {
-    format!("grease-commitment-tx-v2:{}:{update_count:016}:{holder}", channel_id.as_str()).into_bytes()
-}
-
 /// Common functionality shared by both update proposer and proposee.
 ///
 /// The cryptographic steps — sealing an offset, checking a peer's sealed offset, checking a peer's record half —
@@ -156,24 +145,45 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
         SecondBase::grease_default()
     }
 
-    /// The canonical hash of the pair of commitment transactions for `update_count` — what the
-    /// [`UpdateRecord`] commits to.
-    fn close_hash(&self, update_count: u64) -> Result<CloseHash, UpdateProtocolError>;
+    /// The channel balances at `update_count`, in piconero: `(customer, merchant)`.
+    ///
+    /// Everything a state signs — both close hashes and, through them, both adaptor messages — is derived from
+    /// the channel id, the count and these two amounts, so an implementation supplies them once and the derived
+    /// hashes can never drift apart.
+    fn state_amounts(&self, update_count: u64) -> Result<(u64, u64), UpdateProtocolError>;
+
+    /// The canonical hash of the commitment transaction *held by* `holder` at `update_count` — what that state's
+    /// adaptor signature signs.
+    fn holder_close_hash(&self, update_count: u64, holder: ChannelRole) -> Result<CloseHash, UpdateProtocolError> {
+        let (customer, merchant) = self.state_amounts(update_count)?;
+        let msg = commitment_tx_message(&self.channel_id(), update_count, holder, customer, merchant);
+        Ok(CloseHash::try_from(msg)?)
+    }
+
+    /// The canonical hash of the *pair* of commitment transactions for `update_count` — the one hash the state's
+    /// [`UpdateRecord`] commits to, so both parties' halves agree on it.
+    fn record_close_hash(&self, update_count: u64) -> Result<CloseHash, UpdateProtocolError> {
+        let (customer, merchant) = self.state_amounts(update_count)?;
+        let msg = commitment_pair_message(&self.channel_id(), update_count, customer, merchant);
+        Ok(CloseHash::try_from(msg)?)
+    }
 
     /// The message the adaptor signature for `update_count` covers: the commitment transaction *held by*
     /// `holder`.
     ///
-    /// Provisional: the transcript-based commitment-transaction encoding is still a stub
-    /// ([`CommitmentTransaction`](crate::state_machine::CommitmentTransaction)), so the default is a
-    /// domain-separated placeholder over `(channel, state, holder)`. It is separated by holder so the two
-    /// signatures exchanged in one update are never over the same bytes.
-    fn commitment_message(&self, update_count: u64, holder: ChannelRole) -> Vec<u8> {
-        commitment_message(&self.channel_id(), update_count, holder)
+    /// The same bytes the dispute path rebuilds months later, from the record it retained and the balances that
+    /// record's own close hash validates — there is exactly one adaptor message in the protocol.
+    fn adaptor_message(&self, update_count: u64, holder: ChannelRole) -> Result<Vec<u8>, UpdateProtocolError> {
+        let close_hash = self.holder_close_hash(update_count, holder)?;
+        Ok(adapter_signature_message(&self.channel_id(), update_count, &close_hash)?)
     }
 
     /// The dispute statement `m = (channel_id, update_count)` an offset for this state is sealed to.
-    fn statement(&self, update_count: u64) -> Statement {
-        statement_for(&self.channel_id(), update_count)
+    ///
+    /// Fails on a provisional (`XGT…`) channel id: [`statement_for`] refuses to form a statement over an id
+    /// that commits to no funding output.
+    fn statement(&self, update_count: u64) -> Result<Statement, UpdateProtocolError> {
+        Ok(statement_for(&self.channel_id(), update_count)?)
     }
 
     /// Draw a fresh, independent offset `ω` for a new state. Never derived from the previous offset.
@@ -188,7 +198,7 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
     fn seal_offset(&self, omega: &XmrScalar, update_count: u64) -> Result<BindingProof, UpdateProtocolError> {
         let proof = prove_encrypted_offset(
             omega,
-            &self.statement(update_count),
+            &self.statement(update_count)?,
             &self.arbiter_master_public_key(),
             self.second_base(),
             self.binding_proof_params(),
@@ -218,7 +228,7 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
         }
         verify_encrypted_offset(
             proof,
-            &self.statement(update_count),
+            &self.statement(update_count)?,
             &self.arbiter_master_public_key(),
             q,
             proof.q_b(),
@@ -233,7 +243,7 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
         update_count: u64,
         rng: &mut R,
     ) -> Result<HalfSignedUpdateRecord, UpdateProtocolError> {
-        let close_hash = self.close_hash(update_count)?;
+        let close_hash = self.record_close_hash(update_count)?;
         Ok(HalfSignedUpdateRecord::sign(
             self.channel_id(),
             update_count,
@@ -241,7 +251,7 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
             self.role(),
             self.signing_key(),
             rng,
-        ))
+        )?)
     }
 
     /// Verify a peer's record half: signed by the opposite role, over the fields we expect, under their key.
@@ -259,7 +269,7 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
                 "record half does not describe the state under negotiation".into(),
             ));
         }
-        if half.close_hash() != &self.close_hash(update_count)? {
+        if half.close_hash() != &self.record_close_hash(update_count)? {
             return Err(UpdateProtocolError::InvalidDataFromPeer(
                 "record half commits to a different closing transaction".into(),
             ));
@@ -303,7 +313,7 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
             });
         }
         self.verify_sealed_offset(&package.binding_proof, expected_count, &package.adaptor_point())?;
-        let msg = self.commitment_message(expected_count, self.role());
+        let msg = self.adaptor_message(expected_count, self.role())?;
         self.verify_peer_adapted_signature(&package.adapted_signature, &msg)?;
         self.verify_record_half(&package.record_half, expected_count)
     }
@@ -404,4 +414,7 @@ pub enum UpdateProtocolError {
 
     #[error("Update record error: {0}")]
     Record(#[from] UpdateRecordError),
+
+    #[error(transparent)]
+    ProvisionalChannelId(#[from] crate::channel_id::ProvisionalChannelIdError),
 }
