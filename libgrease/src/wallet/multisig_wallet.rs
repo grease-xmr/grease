@@ -9,18 +9,18 @@ use crate::wallet::common::{create_change, create_signable_tx, MINIMUM_FEE};
 use crate::wallet::errors::WalletError;
 use crate::{XmrPoint, XmrScalar};
 use blake2::Digest;
-use dalek_ff_group::dalek::Scalar as DScalar;
+use curve25519_dalek::Scalar as DScalar;
 use log::*;
-use modular_frost::curve::Ed25519;
-use modular_frost::sign::{Preprocess, PreprocessMachine, SignMachine, SignatureMachine, SignatureShare, Writable};
+use crate::Ed25519;
+use modular_frost::sign::{PreprocessMachine, SignMachine, SignatureMachine, Writable};
 use modular_frost::{Participant, ThresholdKeys};
 use monero::{Address as UAddress, AddressType as UAddressType, Network};
-use monero_rpc::{Rpc, RpcError, ScannableBlock};
-use monero_serai::block::Block;
-use monero_serai::generators::hash_to_point;
-use monero_serai::ringct::clsag::ClsagAddendum;
-use monero_serai::transaction::Transaction;
-use monero_simple_request_rpc::SimpleRequestRpc;
+use crate::wallet::common::block_count;
+use crate::wallet::MoneroRpc;
+use monero_interface::prelude::*;
+use monero_oxide::block::Block;
+use monero_oxide::ed25519::{Point as MoneroPoint, Scalar as MoneroScalar};
+use monero_oxide::transaction::Transaction;
 use monero_wallet::address::{AddressType, MoneroAddress, Network as MoneroNetwork};
 use monero_wallet::send::{SignableTransaction, TransactionSignMachine, TransactionSignatureMachine};
 use monero_wallet::{Scanner, ViewPair, WalletOutput};
@@ -29,13 +29,20 @@ use rand_core::{CryptoRng, OsRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::mem;
 use std::path::Path;
 use std::sync::Arc;
+use zeroize::Zeroizing;
 use tokio::sync::RwLock;
 
-pub type MoneroPreprocess = Preprocess<Ed25519, ClsagAddendum>;
 pub type AdaptSig = AdaptedSignature<Ed25519>;
+
+// monero-wallet 0.2 replaced the transparent `Vec<Preprocess<..>>` / `HashMap<.., Vec<SignatureShare<..>>>`
+// with opaque newtypes, and does not re-export them from `send::multisig`. They are named here through the
+// machine traits that produce and consume them, which is the only route the crate offers.
+/// A whole-transaction FROST preprocess: one CLSAG preprocess per input.
+pub type MoneroPreprocess = <TransactionSignMachine as SignMachine<Transaction>>::Preprocess;
+/// A whole-transaction FROST signature share: one CLSAG share per input.
+pub type MoneroSignatureShare = <TransactionSignMachine as SignMachine<Transaction>>::SignatureShare;
 
 #[derive(Serialize)]
 pub struct MultisigWallet {
@@ -47,7 +54,7 @@ pub struct MultisigWallet {
     role: ChannelRole,
     rpc_url: String,
     #[serde(skip)]
-    rpc: Arc<RwLock<Option<Arc<SimpleRequestRpc>>>>,
+    rpc: Arc<RwLock<Option<Arc<MoneroRpc>>>>,
     my_spend_key: Curve25519Secret,
     my_public_key: Curve25519PublicKey,
     sorted_pubkeys: [Curve25519PublicKey; 2],
@@ -69,11 +76,14 @@ pub struct MultisigWallet {
     // The signing state machine can't be cloned or serialized. After cloning or deserialization, you have to make another async call to
     // `prepare` to initialize it. We only store the preprocess data so that we avoid an async call when we want to sign the tx
     #[serde(skip)]
-    preprocess_data: Option<Vec<MoneroPreprocess>>,
+    preprocess_data: Option<MoneroPreprocess>,
     #[serde(skip)]
     sign_machine: Option<TransactionSignMachine>,
+    // Our own signing share, kept as the scalar it encodes. `TransactionSignatureShare` is opaque in
+    // monero-wallet 0.2 and constructible only through a signature machine, and everything grease does with
+    // this value — adapting a signature, handing it to the state machine — is scalar-level anyway.
     #[serde(skip)]
-    shared_spend_key: Option<SignatureShare<Ed25519>>,
+    shared_spend_key: Option<XmrScalar>,
     #[serde(skip)]
     final_signer: Option<TransactionSignatureMachine>,
 }
@@ -168,7 +178,7 @@ impl MultisigWallet {
         let musig_keys = musig_2_of_2(&spend_key, &pubkeys)
             .map_err(|_| WalletError::KeyError("MuSig key generation failed".into()))?;
         let (jprv_vk, j_pub_vk) = musig_dh_viewkey(&spend_key, peer_pubkey);
-        let joint_private_view_key = Curve25519Secret::from(jprv_vk.0);
+        let joint_private_view_key = Curve25519Secret::from(*jprv_vk);
         let joint_public_view_key = Curve25519PublicKey::from(j_pub_vk);
         let joint_public_spend_key = Curve25519PublicKey::from(musig_keys.group_key());
         Ok(MultisigWallet {
@@ -194,7 +204,7 @@ impl MultisigWallet {
     }
 
     /// Lazily connect to the Monero RPC if not already connected and return a thread-safe reference to it.
-    pub async fn rpc_connection(&self) -> Result<Arc<SimpleRequestRpc>, WalletError> {
+    pub async fn rpc_connection(&self) -> Result<Arc<MoneroRpc>, WalletError> {
         {
             let lock = self.rpc.read().await;
             if let Some(rpc) = lock.as_ref() {
@@ -206,7 +216,7 @@ impl MultisigWallet {
         if let Some(rpc) = lock.as_ref() {
             Ok(Arc::clone(rpc))
         } else {
-            let rpc = SimpleRequestRpc::new(self.rpc_url.clone()).await?;
+            let rpc = crate::wallet::connect_to_rpc(self.rpc_url.clone()).await?;
             let rpc = Arc::new(rpc);
             *lock = Some(Arc::clone(&rpc));
             Ok(rpc)
@@ -246,8 +256,8 @@ impl MultisigWallet {
         MoneroAddress::new(
             network,
             AddressType::Legacy,
-            self.joint_public_spend_key.as_point().0,
-            self.joint_public_view_key.as_point().0,
+            MoneroPoint::from(self.joint_public_spend_key.as_point().0),
+            MoneroPoint::from(self.joint_public_view_key.as_point().0),
         )
     }
 
@@ -258,7 +268,9 @@ impl MultisigWallet {
     /// The generator this wallet's linking tag is taken against: `H_p(P)` for the joint public spend key `P`,
     /// the generator Monero uses for the key image of an output paying to `P`.
     fn linking_tag_generator(&self) -> XmrPoint {
-        XmrPoint(hash_to_point(self.joint_public_spend_key.to_compressed().to_bytes()))
+        // `monero_serai::generators::hash_to_point` became `ed25519::Point::biased_hash`: the same Elligator-2
+        // map, now in constant time.
+        XmrPoint(MoneroPoint::biased_hash(self.joint_public_spend_key.to_compressed().to_bytes()).into())
     }
 
     /// This party's share of the funding output's linking tag, `L_F = x · H_p(P)`.
@@ -283,28 +295,31 @@ impl MultisigWallet {
         Ok(self.partial_linking_tag()? + peer_partial)
     }
 
+    /// The number of blocks on the chain, which is one past the tip's number.
+    ///
+    /// This is the count, not the tip's number: [`scan`](Self::scan) uses it as an exclusive upper bound and
+    /// [`reset_birthday`](Self::reset_birthday) stores it as "the next block to scan".
     pub async fn get_height(&self) -> Result<u64, WalletError> {
         let rpc = self.rpc_connection().await?;
-        let height = rpc.get_height().await.map(|height| height as u64)?;
-        Ok(height)
+        block_count(rpc.as_ref()).await
     }
 
     pub async fn get_block_by_number(&self, block_num: u64) -> Result<Block, WalletError> {
         let rpc = self.rpc_connection().await?;
-        let block = rpc.get_block_by_number(block_num as usize).await?;
+        let block = rpc.block_by_number(block_num as usize).await?;
         Ok(block)
     }
 
     async fn get_scannable_block(&self, block: Block) -> Result<ScannableBlock, WalletError> {
         let rpc = self.rpc_connection().await?;
-        let block = rpc.get_scannable_block(block).await?;
+        let block = rpc.expand_to_scannable_block(block).await?;
         Ok(block)
     }
 
     pub async fn scan(&mut self, start: Option<u64>) -> Result<usize, WalletError> {
-        let k = self.joint_private_view_key.to_dalek_scalar();
-        let pair = ViewPair::new(self.joint_public_spend_key.as_point().0, k)
-            .map_err(|e| RpcError::InternalError(e.to_string()))?;
+        let spend = MoneroPoint::from(self.joint_public_spend_key.as_point().0);
+        let view = Zeroizing::new(MoneroScalar::from(*self.joint_private_view_key.to_dalek_scalar()));
+        let pair = ViewPair::new(spend, view).map_err(|e| WalletError::KeyError(e.to_string()))?;
         let mut scanner = Scanner::new(pair);
         let height = self.get_height().await?;
         let mut scanned = 0usize;
@@ -313,7 +328,7 @@ impl MultisigWallet {
         for block_num in start..height {
             let block = self.get_block_by_number(block_num).await?;
             let scannable = self.get_scannable_block(block).await?;
-            let outputs = scanner.scan(scannable).map_err(|e| RpcError::InternalError(e.to_string()))?;
+            let outputs = scanner.scan(scannable).map_err(|e| WalletError::InternalError(e.to_string()))?;
             scanned += 1;
             let outputs = outputs.ignore_additional_timelock();
             if !outputs.is_empty() {
@@ -328,7 +343,8 @@ impl MultisigWallet {
 
     pub fn import_output(&mut self, serialized: &[u8]) -> Result<(), WalletError> {
         let mut reader = serialized;
-        let output = WalletOutput::read(&mut reader).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
+        let output = crate::wallet::helpers::read_output(&mut reader)
+            .map_err(|e| WalletError::DeserializeError(e.to_string()))?;
         self.known_outputs.push(output);
         Ok(())
     }
@@ -392,26 +408,23 @@ impl MultisigWallet {
         rng: &mut R,
     ) -> Result<(), WalletError> {
         let signable = self.pre_process(payments, rng).await?;
-        let machine = signable.multisig(&self.musig_keys)?;
+        let machine = signable.multisig(self.musig_keys.clone())?;
         let (machine, preprocess) = machine.preprocess(rng);
-        if preprocess.len() != 1 {
-            return Err(WalletError::KeyError(format!(
-                "Expected exactly one preprocess. Got {}",
-                preprocess.len()
-            )));
-        }
         self.preprocess_data = Some(preprocess);
         self.sign_machine = Some(machine);
         Ok(())
     }
 
+    /// Our preprocess, on the wire.
+    ///
+    /// `TransactionPreprocess` writes its per-input preprocesses back to back, so for the single-input
+    /// transaction grease signs this is byte-identical to writing that one preprocess — which is what the
+    /// peer's `read_preprocess` expects to read.
     pub fn my_pre_process_data(&self) -> Option<Vec<u8>> {
-        self.preprocess_data.as_ref().and_then(|v| {
-            v.first().map(|pp| {
-                let mut buf = Vec::with_capacity(160);
-                pp.write(&mut buf).unwrap();
-                buf
-            })
+        self.preprocess_data.as_ref().map(|preprocess| {
+            let mut buf = Vec::with_capacity(160);
+            preprocess.write(&mut buf).expect("writing to a Vec cannot fail");
+            buf
         })
     }
 
@@ -433,20 +446,18 @@ impl MultisigWallet {
             .read_preprocess(&mut data.as_slice())
             .map_err(|e| WalletError::SigningError(format!("Invalid preprocess data: {e}")))?;
         let commitments = self.assign_commitments(preprocess);
-        let (tx_machine, mut shares) = machine.sign(commitments, &[])?;
-        if shares.len() != 1 {
-            error!(
-                "There should only ever be one signature share, in a 2-of-2 wallet but got {}",
-                shares.len()
-            );
-        }
-        self.shared_spend_key = Some(shares.remove(0));
+        let (tx_machine, share) = machine.sign(commitments, &[])?;
+        self.shared_spend_key = Some(signature_share_to_scalar(&share));
         self.final_signer = Some(tx_machine);
         Ok(())
     }
 
-    pub fn my_signing_share(&self) -> Option<SignatureShare<Ed25519>> {
-        self.shared_spend_key.clone()
+    /// Our own signing share for the prepared transaction, as the scalar it encodes.
+    ///
+    /// The channel funds a single output, so a transaction signature share is one CLSAG share, which is one
+    /// scalar. That scalar is what the adaptor-signature layer signs with.
+    pub fn my_signing_share(&self) -> Option<XmrScalar> {
+        self.shared_spend_key
     }
 
     pub fn set_peer_process_data(&mut self, data: Vec<u8>) {
@@ -457,7 +468,6 @@ impl MultisigWallet {
         let secret = self
             .my_signing_share()
             .ok_or_else(|| WalletError::SigningError("No signature share available to adapt".into()))?;
-        let secret = signature_share_to_scalar(secret);
         let mut rng = OsRng;
         let adapted = AdaptSig::sign(&secret, witness.as_scalar(), msg, &mut rng);
         Ok(adapted)
@@ -476,7 +486,7 @@ impl MultisigWallet {
         adapted: &AdaptSig,
         offset: &XmrScalar,
         msg: &[u8],
-    ) -> Result<SignatureShare<Ed25519>, WalletError> {
+    ) -> Result<MoneroSignatureShare, WalletError> {
         let p = self.peer_public_key().as_point();
         let true_sig = adapted.adapt(offset, &p, msg).map_err(|_| {
             WalletError::SigningError("Incorrect offset supplied. Adapter signature verification failed".into())
@@ -486,28 +496,26 @@ impl MultisigWallet {
         Ok(share)
     }
 
-    pub fn bytes_to_signature_share(&self, bytes: &[u8]) -> Result<SignatureShare<Ed25519>, WalletError> {
+    /// Parse a peer's signature share from the wire.
+    ///
+    /// `read_share` is the only way to build a `TransactionSignatureShare`: the type is opaque in
+    /// monero-wallet 0.2 precisely so a share can only come from the machine that will consume it.
+    pub fn bytes_to_signature_share(&self, bytes: &[u8]) -> Result<MoneroSignatureShare, WalletError> {
         let mut reader = bytes;
         let machine = self.final_signer.as_ref().ok_or_else(|| {
             WalletError::SigningError("Call partial_sign before trying to read a signature share".into())
         })?;
-        let mut share = machine
+        machine
             .read_share(&mut reader)
-            .map_err(|e| WalletError::SigningError(format!("Invalid signature share: {e}")))?;
-        if share.len() != 1 {
-            return Err(WalletError::SigningError(
-                "There should only be 1 share in a 2-of-2 wallet".into(),
-            ));
-        }
-        Ok(share.remove(0))
+            .map_err(|e| WalletError::SigningError(format!("Invalid signature share: {e}")))
     }
 
-    pub fn sign(&mut self, peer_share: SignatureShare<Ed25519>) -> Result<Transaction, WalletError> {
+    pub fn sign(&mut self, peer_share: MoneroSignatureShare) -> Result<Transaction, WalletError> {
         if self.final_signer.is_none() || self.shared_spend_key.is_none() {
             return Err(WalletError::KeyError("Final signer or shares not initialized".into()));
         }
         let machine = self.final_signer.take().unwrap();
-        let shares = self.assign_shares(vec![peer_share]);
+        let shares = self.assign_shares(peer_share);
         let tx = machine.complete(shares)?;
         debug!("Final signing completed");
         Ok(tx)
@@ -519,9 +527,7 @@ impl MultisigWallet {
     /// adapter signature generation and verification without RPC calls.
     #[cfg(any(test, feature = "mocks"))]
     pub fn inject_test_signing_share(&mut self, scalar: &crate::XmrScalar) {
-        // Safety: SignatureShare<Ed25519> is a newtype around Ed25519::F (Scalar)
-        let share: SignatureShare<Ed25519> = unsafe { std::mem::transmute(scalar.0) };
-        self.shared_spend_key = Some(share);
+        self.shared_spend_key = Some(*scalar);
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<usize, std::io::Error> {
@@ -531,25 +537,18 @@ impl MultisigWallet {
         Ok(result.len())
     }
 
+    /// Load the outputs [`save`](Self::save) wrote, in either the current or the pre-monero-oxide layout.
+    ///
+    /// The file is a run of records with no delimiter, so it is read whole and peeled one record at a time.
     pub fn load<P: AsRef<Path>>(&mut self, path: P) -> Result<usize, std::io::Error> {
-        let mut file = std::fs::File::open(path)?;
-        let mut n = 0;
-        while let Ok(output) = WalletOutput::read(&mut file) {
-            self.known_outputs.push(output);
-            n += 1;
-        }
+        let outputs = crate::wallet::helpers::read_outputs(&std::fs::read(path)?)?;
+        let n = outputs.len();
+        self.known_outputs.extend(outputs);
         Ok(n)
     }
 
     pub fn read_outputs(outputs: &[Vec<u8>]) -> Result<Vec<WalletOutput>, std::io::Error> {
-        let wallet_outputs = outputs
-            .iter()
-            .map(|output| {
-                let mut reader = output.as_slice();
-                WalletOutput::read(&mut reader)
-            })
-            .collect::<Result<Vec<WalletOutput>, _>>()?;
-        Ok(wallet_outputs)
+        outputs.iter().map(|output| crate::wallet::helpers::read_output(&mut output.as_slice())).collect()
     }
 
     fn participants(&self) -> (Participant, Participant) {
@@ -561,7 +560,7 @@ impl MultisigWallet {
         }
     }
 
-    fn assign_commitments(&self, peer_data: Vec<MoneroPreprocess>) -> HashMap<Participant, Vec<MoneroPreprocess>> {
+    fn assign_commitments(&self, peer_data: MoneroPreprocess) -> HashMap<Participant, MoneroPreprocess> {
         let mut commitments = HashMap::new();
         let (me, them) = self.participants();
         trace!("Assigning commitments for participants: me={:?} and they={:?}", me, them);
@@ -571,8 +570,8 @@ impl MultisigWallet {
 
     fn assign_shares(
         &self,
-        peer_shares: Vec<SignatureShare<Ed25519>>,
-    ) -> HashMap<Participant, Vec<SignatureShare<Ed25519>>> {
+        peer_shares: MoneroSignatureShare,
+    ) -> HashMap<Participant, MoneroSignatureShare> {
         let mut shares = HashMap::new();
         let (me, them) = self.participants();
         trace!("Assigning shares for participants: me={:?} and they={:?}", me, them);
@@ -590,6 +589,16 @@ impl MultisigWallet {
         let spend_total = MINIMUM_FEE + payments.iter().map(|(_, amount)| *amount).sum::<u64>();
         // If this returns, there is guaranteed to be at least one input
         let inputs = self.find_spendable_outputs(spend_total)?;
+        // A channel is funded by exactly one output, and the rest of the signing path depends on it: a
+        // transaction preprocess and a signature share are per-input, and grease sends and adapts a single one
+        // of each. monero-wallet 0.2 made both types opaque, so this is the last point at which the assumption
+        // can be checked.
+        if inputs.len() != 1 {
+            return Err(WalletError::KeyError(format!(
+                "A multisig channel transaction must spend exactly one output. Got {}",
+                inputs.len()
+            )));
+        }
         create_signable_tx(rpc.as_ref(), rng, inputs, payments, change, vec![]).await
     }
 }
@@ -687,26 +696,32 @@ pub fn translate_payments(
     ])
 }
 
-// Compile-time guard: SignatureShare<Ed25519> must be layout-compatible with DScalar
-const _: () = assert!(std::mem::size_of::<SignatureShare<Ed25519>>() == std::mem::size_of::<DScalar>());
-
-pub fn signature_share_to_secret(signature: SignatureShare<Ed25519>) -> Curve25519Secret {
-    // Safety: SignatureShare<Ed25519> is a newtype around Ed25519::F (Scalar), which is DScalar
-    let scalar: DScalar = unsafe { mem::transmute(signature) };
-    Curve25519Secret::from(scalar)
+pub fn signature_share_to_secret(signature: &MoneroSignatureShare) -> Curve25519Secret {
+    Curve25519Secret::from(signature_share_to_dalek_scalar(signature))
 }
 
-pub fn signature_share_to_scalar(signature: SignatureShare<Ed25519>) -> XmrScalar {
-    // Safety: SignatureShare<Ed25519> is a newtype around Ed25519::F (Scalar), which is DScalar
-    let scalar: DScalar = unsafe { mem::transmute(signature) };
-    XmrScalar(scalar)
+pub fn signature_share_to_scalar(signature: &MoneroSignatureShare) -> XmrScalar {
+    signature_share_to_dalek_scalar(signature)
 }
 
-pub fn signature_share_to_bytes(secret: &SignatureShare<Ed25519>) -> Vec<u8> {
+pub fn signature_share_to_bytes(secret: &MoneroSignatureShare) -> Vec<u8> {
     let mut buf = Vec::with_capacity(64);
     secret.write(&mut buf).expect("Failed to write signature share to buffer");
     trace!("signature_share_to_bytes buf={}", buf.len());
     buf
+}
+
+/// Decode a signature share through its canonical 32-byte serialization.
+///
+/// A share is written as the little-endian canonical encoding of the underlying scalar, so the bytes always
+/// re-parse. For the single-input transaction grease signs, a `TransactionSignatureShare` is exactly one such
+/// scalar. A failure means the upstream wire format changed underneath us; panicking is strictly better than
+/// feeding a wrong scalar into a signature.
+fn signature_share_to_dalek_scalar(signature: &MoneroSignatureShare) -> DScalar {
+    let bytes = signature_share_to_bytes(signature);
+    let bytes: [u8; 32] = bytes.try_into().expect("a single-input signature share must serialize to 32 bytes");
+    Option::<DScalar>::from(DScalar::from_canonical_bytes(bytes))
+        .expect("a signature share must serialize to a canonical scalar")
 }
 
 pub fn convert_address(address: UAddress) -> MoneroAddress {
@@ -722,5 +737,133 @@ pub fn convert_address(address: UAddress) -> MoneroAddress {
     };
     let spend = address.public_spend.point.decompress().expect("Addresses weren't compatible?");
     let view = address.public_view.point.decompress().expect("Addresses weren't compatible?");
-    MoneroAddress::new(network, kind, spend, view)
+    MoneroAddress::new(network, kind, MoneroPoint::from(spend), MoneroPoint::from(view))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cryptography::keys::{Curve25519Secret, PublicKey};
+    use crate::wallet::utils::random_key;
+    use ciphersuite::group::Group;
+    use std::str::FromStr;
+
+    fn test_wallet() -> MultisigWallet {
+        let my_secret = Curve25519Secret::random(&mut OsRng);
+        let my_public = Curve25519PublicKey::from_secret(&my_secret);
+        let peer_public = Curve25519PublicKey::from_secret(&Curve25519Secret::random(&mut OsRng));
+        MultisigWallet::new(Network::Mainnet, "http://localhost:18081", my_secret, &my_public, &peer_public, None, ChannelRole::Merchant)
+            .expect("wallet")
+    }
+
+    /// The signing share is the key the adaptor layer signs with, so an injected share must reach
+    /// `adapt_signature` unchanged.
+    ///
+    /// This replaces K-23's layout guard over `inject_test_signing_share`'s `mem::transmute`. monero-wallet 0.2
+    /// made `TransactionSignatureShare` opaque and constructible only through a signature machine, so the share
+    /// is now held as the scalar it encodes and the transmute is gone — leaving the value, not the layout, as
+    /// the thing worth asserting.
+    #[test]
+    fn injected_share_is_the_key_the_adaptor_signs_with() {
+        let mut wallet = test_wallet();
+        (0..16).for_each(|_| {
+            let scalar = DScalar::from_bytes_mod_order(random_key());
+            wallet.inject_test_signing_share(&scalar);
+            assert_eq!(wallet.my_signing_share().expect("injected share"), scalar);
+
+            let witness = Curve25519Secret::random(&mut OsRng);
+            let adapted = wallet.adapt_signature(&witness, b"msg").expect("adapt");
+            assert!(adapted.verify(&(XmrPoint::generator() * scalar), b"msg"));
+        });
+    }
+
+    /// The encoding contract between the adaptor layer and `read_share`.
+    ///
+    /// `extract_true_signature` completes a pre-signature and hands the resulting `s` straight to
+    /// `bytes_to_signature_share`, which parses it as a share. That only holds while `s`'s 32 bytes are the
+    /// canonical little-endian encoding of the scalar a share is read from — the same property K-23 pinned from
+    /// the share's side, asserted here from the side that is still reachable without a signing machine.
+    #[test]
+    fn an_adapted_signature_s_is_a_canonically_encoded_scalar() {
+        (0..16).for_each(|_| {
+            let secret = DScalar::from_bytes_mod_order(random_key());
+            let witness = DScalar::from_bytes_mod_order(random_key());
+            let adapted = AdaptSig::sign(&secret, &witness, b"msg", &mut OsRng);
+            let signature = adapted.adapt(&witness, &(XmrPoint::generator() * secret), b"msg").expect("adapt");
+
+            let bytes = *signature.s().as_bytes();
+            assert_eq!(Option::<DScalar>::from(DScalar::from_canonical_bytes(bytes)), Some(*signature.s()));
+        });
+    }
+
+    /// A channel id spelled out as a literal — the frozen one from `channel_id.rs`'s own known-answer vector — so
+    /// these vectors depend on no derivation but the one under test.
+    const CHANNEL_ID: &str = "XGC0845ec076e64984475627c8c1a154defceaeea2ce3cd39c55b02823b4f70a4";
+    /// The frozen `commitment_tx_message` output, split only to fit the line width.
+    const COMMITMENT_TX_V2: &str = concat!(
+        "a87752639885160a555a6eb8ce2b5142f56a571f4e379267062fa5690ed188da",
+        "37e55a17d9456b3a0b922dc8623deb283035301c434ad328472279da5e0c4712",
+    );
+    const SECRET_A: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00";
+    const SECRET_B: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f00";
+
+    /// Freezes the closing-transaction message under the live `"Grease CommitmentTx v2"` domain tag. Crosses
+    /// `flexible-transcript`'s `DigestTranscript` (member tagging and little-endian length prefixes) and
+    /// `blake2 0.10`'s `Blake2b512`, both of which the serai migration replaces.
+    #[test]
+    fn commitment_tx_message_is_frozen() {
+        let id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
+        let message = commitment_tx_message(&id, 7, ChannelRole::Customer, 1_250_000_000_000, 750_000_000_000);
+        assert_eq!(hex::encode(&message), COMMITMENT_TX_V2);
+    }
+
+    /// `holder` is what separates the two parties' closing transactions for one state, so the merchant-held
+    /// message must differ from the customer-held one above under otherwise identical inputs.
+    #[test]
+    fn commitment_tx_message_separates_the_holders() {
+        let id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
+        let customer = commitment_tx_message(&id, 7, ChannelRole::Customer, 1_250_000_000_000, 750_000_000_000);
+        let merchant = commitment_tx_message(&id, 7, ChannelRole::Merchant, 1_250_000_000_000, 750_000_000_000);
+        assert_ne!(customer, merchant);
+    }
+
+    /// Freezes the signing-determinism entry point end to end: fixed spend key and peer key -> joint private view
+    /// key -> `Blake2b512` seed -> `ChaCha20Rng`. Crosses `blake2 0.10` and `rand_chacha`; the joint view key it
+    /// starts from is itself pinned in `payment_channel::multisig_keyring`.
+    #[test]
+    fn deterministic_rng_stream_is_frozen() {
+        let secret = Curve25519Secret::from_hex(SECRET_A).expect("canonical scalar");
+        let my_public = Curve25519PublicKey::from_secret(&secret);
+        let peer_public =
+            Curve25519PublicKey::from_secret(&Curve25519Secret::from_hex(SECRET_B).expect("canonical scalar"));
+        let wallet = MultisigWallet::new(
+            Network::Mainnet,
+            "http://localhost:18081",
+            secret,
+            &my_public,
+            &peer_public,
+            None,
+            ChannelRole::Merchant,
+        )
+        .expect("wallet");
+
+        // The wallet's own view of the joint keys, pinned here as well as in the keyring module: this is the
+        // path production actually takes. The spend key moved with the `musig` crate swap — see
+        // `payment_channel::multisig_keyring::musig_group_key_is_frozen` — while the view key, and so the
+        // ChaCha20 stream derived from it, did not.
+        assert_eq!(
+            wallet.joint_public_spend_key().as_hex(),
+            "d84486c8b988b72aacee390bb88bde734332d4c06a383f27874428f833ad7319"
+        );
+        assert_eq!(
+            wallet.joint_public_view_key().as_hex(),
+            "98d67ed9ddeaedcd87506a35a28ecc62e0f8cca85ae1aa4467d25942ec49bec8"
+        );
+
+        let mut rng = wallet.deterministic_rng();
+        let mut out = [0u8; 32];
+        rng.fill_bytes(&mut out);
+        assert_eq!(hex::encode(out), "aef20e8b94d84274f37b898951d8047f760a783077a02a9eee682f692d153a03");
+    }
+
 }

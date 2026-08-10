@@ -6,8 +6,9 @@ use crate::grease_protocol::utils::{read_group_element, write_group_element, Rea
 use crate::payment_channel::multisig_keyring::sort_pubkeys;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::wallet::errors::WalletError;
-use ciphersuite::Ed25519;
-use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
+use crate::Ed25519;
+use crate::cryptography::SecureDigest;
+use flexible_transcript::{DigestTranscript, Transcript};
 use log::*;
 use crate::io::Writable;
 use monero::Address;
@@ -234,4 +235,30 @@ mod tests {
         assert_eq!(shared_key.public_key(), key2.public_key());
         assert_eq!(commitment, key2.commit());
     }
+
+    const FIXED_PUBLIC_KEY: &str = "616e237719716e25ead63d831f9117f79b5aa05af8be30ff0eddb3dc43e8bdcf";
+
+    /// Freezes the wallet handshake's public-key commitment — the one the establishing FSM actually sends, in
+    /// `commit_to_public_key`. Crosses `flexible-transcript`'s `DigestTranscript` (domain tag `"pubkey-t-m"`,
+    /// the `role` and `my_pubkey` messages, the `"merchant-public-key-commitment"` challenge) and `blake2 0.10`.
+    /// A drift here means a peer built on the old pin can no longer open a wallet against one built on the new.
+    #[test]
+    fn shared_public_key_commitment_is_frozen() {
+        let key = Curve25519PublicKey::from_hex(FIXED_PUBLIC_KEY).expect("valid point");
+        let commitment: PublicKeyCommitment = SharedPublicKey::new(ChannelRole::Merchant, key).commit();
+        assert_eq!(
+            hex::encode(commitment.as_bytes()),
+            "d214bc4da458706535af1a186c2d5be7a2ec7ceeda151e0c4dafd410c36f949d"
+        );
+    }
+
+    /// The role is absorbed before the key, so the two parties' commitments to the same point differ.
+    #[test]
+    fn shared_public_key_commitment_separates_roles() {
+        let key = Curve25519PublicKey::from_hex(FIXED_PUBLIC_KEY).expect("valid point");
+        let merchant: PublicKeyCommitment = SharedPublicKey::new(ChannelRole::Merchant, key).commit();
+        let customer: PublicKeyCommitment = SharedPublicKey::new(ChannelRole::Customer, key).commit();
+        assert_ne!(merchant.as_bytes(), customer.as_bytes());
+    }
+
 }

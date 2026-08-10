@@ -7,7 +7,8 @@ use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{
     ClosedChannelState, ClosingChannelState, DisputingChannelState, EstablishedChannelState, EstablishingState,
 };
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::Ciphersuite;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use thiserror::Error;
@@ -229,8 +230,7 @@ pub mod test {
     use crate::state_machine::open_channel::{AppliedUpdate, EstablishedChannelState};
     use crate::wallet::multisig_wallet::MultisigWallet;
     use crate::XmrScalar;
-    use ciphersuite::group::ff::Field;
-    use ciphersuite::Ed25519;
+    use crate::Ed25519;
 
     pub fn create_wallet(role: ChannelRole) -> MultisigWallet {
         let mut rng = rand_core::OsRng;

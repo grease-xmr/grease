@@ -16,7 +16,6 @@ use crate::state_machine::{
     ProposalResponse, ProposeProtocolError, RejectProposalReason, TimeoutReason,
 };
 use crate::{XmrPoint, XmrScalar};
-use ciphersuite::group::ff::Field;
 use ciphersuite::group::Group;
 use monero::Network;
 use rand_chacha::ChaCha20Rng;
@@ -139,7 +138,7 @@ fn agreed_arbiter_reaches_both_parties() {
 #[test]
 fn seed_builder_reports_missing_fields() {
     let complete = || {
-        MerchantSeedBuilder::<ciphersuite::Ed25519>::new(Network::Mainnet)
+        MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
             .with_arbiter(default_arbiter())
             .with_initial_balances(test_balances())
             .with_merchant_public_key(XmrPoint::generator())
@@ -148,35 +147,35 @@ fn seed_builder_reports_missing_fields() {
     };
     assert!(complete().build().is_ok());
 
-    let no_arbiter = MerchantSeedBuilder::<ciphersuite::Ed25519>::new(Network::Mainnet)
+    let no_arbiter = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_initial_balances(test_balances())
         .with_merchant_public_key(XmrPoint::generator())
         .with_channel_nonce(100)
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_arbiter.build(), Err(MissingSeedInfo::AcceptedArbiters)));
 
-    let no_balances = MerchantSeedBuilder::<ciphersuite::Ed25519>::new(Network::Mainnet)
+    let no_balances = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_arbiter(default_arbiter())
         .with_merchant_public_key(XmrPoint::generator())
         .with_channel_nonce(100)
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_balances.build(), Err(MissingSeedInfo::InitialBalances)));
 
-    let no_key = MerchantSeedBuilder::<ciphersuite::Ed25519>::new(Network::Mainnet)
+    let no_key = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_arbiter(default_arbiter())
         .with_initial_balances(test_balances())
         .with_channel_nonce(100)
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_key.build(), Err(MissingSeedInfo::MerchantPublicKey)));
 
-    let no_nonce = MerchantSeedBuilder::<ciphersuite::Ed25519>::new(Network::Mainnet)
+    let no_nonce = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_arbiter(default_arbiter())
         .with_initial_balances(test_balances())
         .with_merchant_public_key(XmrPoint::generator())
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_nonce.build(), Err(MissingSeedInfo::ChannelNonce)));
 
-    let no_address = MerchantSeedBuilder::<ciphersuite::Ed25519>::new(Network::Mainnet)
+    let no_address = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_arbiter(default_arbiter())
         .with_initial_balances(test_balances())
         .with_merchant_public_key(XmrPoint::generator())

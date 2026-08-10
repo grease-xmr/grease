@@ -2,7 +2,8 @@ use crate::balance::Balances;
 use crate::channel_metadata::StaticChannelMetadata;
 use crate::state_machine::proposing_channel::RejectProposalReason;
 use crate::state_machine::timeouts::TimeoutReason;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::Ciphersuite;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

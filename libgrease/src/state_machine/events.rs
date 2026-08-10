@@ -6,7 +6,8 @@ use crate::state_machine::open_channel::AppliedUpdate;
 use crate::state_machine::proposing_channel::{NewChannelProposal, RejectProposalReason};
 use crate::state_machine::timeouts::TimeoutReason;
 use crate::wallet::multisig_wallet::MultisigWallet;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::Ciphersuite;
 use std::fmt::{Display, Formatter};
 
 pub enum LifeCycleEvent<KC: Ciphersuite = Ed25519> {

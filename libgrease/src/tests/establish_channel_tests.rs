@@ -23,8 +23,8 @@ use crate::payment_channel::ChannelRole;
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::{CustomerEstablishing, MerchantEstablishing};
 use crate::{XmrPoint, XmrScalar};
-use ciphersuite::group::ff::Field;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 use rand_core::OsRng;
 
 use super::propose_channel_tests::propose_channel;
@@ -75,11 +75,11 @@ pub(crate) fn establish_wallet(merchant: &mut MerchantEstablishing, customer: &m
 pub(crate) fn inject_signing_shares(merchant: &mut MerchantEstablishing, customer: &mut CustomerEstablishing) {
     let merchant_share = {
         let wallet = merchant.state().multisig_wallet.as_ref().expect("wallet");
-        XmrScalar(*wallet.my_spend_key().to_dalek_scalar())
+        *wallet.my_spend_key().to_dalek_scalar()
     };
     let customer_share = {
         let wallet = customer.state().multisig_wallet.as_ref().expect("wallet");
-        XmrScalar(*wallet.my_spend_key().to_dalek_scalar())
+        *wallet.my_spend_key().to_dalek_scalar()
     };
 
     if let Some(wallet) = merchant.state_mut().multisig_wallet.as_mut() {
@@ -584,7 +584,7 @@ fn revealing_the_offset_completes_the_closing_signature() {
     let omega = customer.state().initial_offset.as_ref().expect("customer keeps its offset");
     let customer_wallet_key = {
         let wallet = customer.state().multisig_wallet.as_ref().expect("wallet");
-        Ed25519::generator() * XmrScalar(*wallet.my_spend_key().to_dalek_scalar())
+        Ed25519::generator() * *wallet.my_spend_key().to_dalek_scalar()
     };
     let package = merchant.state().peer_init_package().expect("merchant holds the customer's package");
     let msg = adapter_signature_message(

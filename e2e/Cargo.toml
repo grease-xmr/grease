@@ -15,21 +15,13 @@ monero = { workspace = true }
 rand_core = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
 
-
-[dependencies.monero-simple-request-rpc]
-version = "0.1"
-git = "https://github.com/serai-dex/serai.git"
-rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-
-[dependencies.monero-rpc]
-version = "0.1"
-git = "https://github.com/serai-dex/serai.git"
-rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-
-[dependencies.monero-address]
-version = "0.1"
-git = "https://github.com/serai-dex/serai.git"
-rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+# monero-oxide dependencies, revision-pinned at the workspace root so e2e cannot drift off libgrease's pin again.
+# `monero-rpc` is gone upstream: its interface half is `monero-interface`, its daemon client `monero-daemon-rpc`.
+# e2e does not currently compile against the new libgrease API — these entries make it resolve, not build.
+monero-address = { workspace = true }
+monero-daemon-rpc = { workspace = true }
+monero-interface = { workspace = true }
+monero-simple-request-rpc = { workspace = true }
 
 [dev-dependencies]
 dotenvy = "0.15.0"

@@ -5,13 +5,15 @@ use crate::wallet::errors::WalletError;
 use crate::wallet::watch_only::WatchOnlyWallet;
 use blake2::Digest;
 use log::*;
-use monero_rpc::{Rpc, RpcError};
-use monero_serai::block::Block;
-use monero_simple_request_rpc::SimpleRequestRpc;
+use crate::wallet::MoneroRpc;
+use monero_interface::prelude::*;
+use monero_oxide::block::Block;
+use monero_oxide::ed25519::Scalar as MoneroScalar;
 use monero_wallet::address::MoneroAddress;
 use monero_wallet::WalletOutput;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone)]
 pub struct MoneroWallet {
@@ -21,7 +23,7 @@ pub struct MoneroWallet {
 
 impl MoneroWallet {
     pub fn new(
-        rpc: SimpleRequestRpc,
+        rpc: MoneroRpc,
         private_spend_key: Curve25519Secret,
         private_view_key: Curve25519Secret,
         birthday: Option<u64>,
@@ -47,15 +49,15 @@ impl MoneroWallet {
         self.inner.address()
     }
 
-    pub async fn get_height(&self) -> Result<u64, RpcError> {
+    pub async fn get_height(&self) -> Result<u64, WalletError> {
         self.inner.get_height().await
     }
 
-    pub async fn get_block_by_number(&self, block_num: u64) -> Result<Block, RpcError> {
+    pub async fn get_block_by_number(&self, block_num: u64) -> Result<Block, WalletError> {
         self.inner.get_block_by_number(block_num).await
     }
 
-    pub async fn scan(&mut self, start: Option<u64>, end: Option<u64>) -> Result<usize, RpcError> {
+    pub async fn scan(&mut self, start: Option<u64>, end: Option<u64>) -> Result<usize, WalletError> {
         self.inner.scan(start, end).await
     }
 
@@ -67,7 +69,7 @@ impl MoneroWallet {
         self.inner.remove_outputs(outputs);
     }
 
-    pub fn rpc(&self) -> &SimpleRequestRpc {
+    pub fn rpc(&self) -> &MoneroRpc {
         self.inner.rpc()
     }
 
@@ -82,7 +84,8 @@ impl MoneroWallet {
         }
         let outputs = self.inner.find_spendable_outputs(amount)?;
         let signable = create_signable_tx(self.rpc(), &mut rng, outputs.clone(), payments, change, vec![]).await?;
-        let tx = signable.sign(&mut rng, &self.private_spend_key.to_dalek_scalar())?;
+        let spend_key = Zeroizing::new(MoneroScalar::from(*self.private_spend_key.to_dalek_scalar()));
+        let tx = signable.sign(&mut rng, &spend_key)?;
         let hash = tx.hash();
         debug!("Signable transaction successfully created. {amount} to {to}");
         self.rpc().publish_transaction(&tx).await?;

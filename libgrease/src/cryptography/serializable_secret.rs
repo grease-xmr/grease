@@ -106,7 +106,6 @@ mod tests {
     use super::*;
     use crate::cryptography::encryption_context::{with_encryption_context, AesGcmEncryption};
     use crate::XmrScalar;
-    use ciphersuite::group::ff::Field;
     use rand_core::OsRng;
     use std::sync::Arc;
 

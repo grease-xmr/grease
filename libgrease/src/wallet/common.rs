@@ -1,12 +1,14 @@
 use crate::cryptography::keys::{Curve25519PublicKey, Curve25519Secret};
 use crate::wallet::errors::WalletError;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use crate::cryptography::ciphersuite_ext::hash_to_F;
 use curve25519_dalek::Scalar;
 use log::*;
-use monero_rpc::{FeeRate, Rpc, RpcError};
-use monero_serai::ringct::RctType;
-use monero_serai::transaction::Transaction;
-use monero_simple_request_rpc::SimpleRequestRpc;
+use crate::wallet::MoneroRpc;
+use monero_interface::prelude::*;
+use monero_oxide::ed25519::{Point as MoneroPoint, Scalar as MoneroScalar};
+use monero_oxide::ringct::RctType;
+use monero_oxide::transaction::Transaction;
 use monero_wallet::address::{MoneroAddress, SubaddressIndex};
 use monero_wallet::send::{Change, SendError, SignableTransaction};
 use monero_wallet::{OutputWithDecoys, Scanner, ViewPair, WalletOutput};
@@ -22,28 +24,27 @@ pub const MINIMUM_FEE: u64 = 1_500_000;
 ///
 /// Returns a tuple containing a vector of found outputs and the next block number to scan.
 pub async fn scan_wallet(
-    rpc: &SimpleRequestRpc,
+    rpc: &MoneroRpc,
     start: u64,
     end: Option<u64>,
     public_spend_key: &Curve25519PublicKey,
     private_view_key: &Curve25519Secret,
-) -> Result<(Vec<WalletOutput>, u64), RpcError> {
-    let k = private_view_key.to_dalek_scalar();
-    let p = public_spend_key.as_point();
-    let pair = ViewPair::new(p.0, k).map_err(|e| RpcError::InternalError(e.to_string()))?;
+) -> Result<(Vec<WalletOutput>, u64), WalletError> {
+    let pair = view_pair(public_spend_key, private_view_key)?;
     let mut scanner = Scanner::new(pair);
+    // `height` is an exclusive upper bound, so it is the block *count*, one past the tip.
     let height = match end {
         Some(h) => h,
-        None => rpc.get_height().await.map(|height| height as u64)?,
+        None => block_count(rpc).await?,
     };
     let mut scanned = 0u64;
     let mut found = 0usize;
     let mut result = Vec::new();
     debug!("Scanning wallet from {start} to {height}");
     for block_num in start..height {
-        let block = rpc.get_block_by_number(block_num as usize).await?;
-        let scannable = rpc.get_scannable_block(block).await?;
-        let outputs = scanner.scan(scannable).map_err(|e| RpcError::InternalError(e.to_string()))?;
+        let block = rpc.block_by_number(block_num as usize).await?;
+        let scannable = rpc.expand_to_scannable_block(block).await?;
+        let outputs = scanner.scan(scannable).map_err(|e| WalletError::InternalError(e.to_string()))?;
         scanned += 1;
         let outputs = outputs.ignore_additional_timelock();
         if !outputs.is_empty() {
@@ -56,7 +57,33 @@ pub async fn scan_wallet(
     Ok((result, start + scanned))
 }
 
-pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Result<(), WalletError> {
+/// The number of blocks on the chain, which is one past the number of the tip block.
+///
+/// monero-oxide replaced `get_height` with `latest_block_number`, which reports the *number* of the tip block
+/// rather than the count. Everything in grease that treats a height as an exclusive upper bound — the scan
+/// loops, and the birthday, which is where the next scan starts — wants the count, so the `+ 1` is part of the
+/// translation, not an off-by-one.
+pub async fn block_count(rpc: &MoneroRpc) -> Result<u64, WalletError> {
+    let tip = rpc.latest_block_number().await? as u64;
+    Ok(tip + 1)
+}
+
+/// The `ViewPair` for a spend key and a view key, in monero-oxide's own wrapper types.
+fn view_pair(
+    public_spend_key: &Curve25519PublicKey,
+    private_view_key: &Curve25519Secret,
+) -> Result<ViewPair, WalletError> {
+    let spend = MoneroPoint::from(public_spend_key.as_point().0);
+    let view = Zeroizing::new(MoneroScalar::from(*private_view_key.to_dalek_scalar()));
+    ViewPair::new(spend, view).map_err(|e| WalletError::KeyError(e.to_string()))
+}
+
+/// Publish a transaction, distinguishing the daemon's rejection reasons.
+///
+/// `PublishTransaction::publish_transaction` collapses every rejection into one `TransactionRejected(String)`,
+/// so this keeps grease's own call, which reads the individual flags and also asks the daemon to run its sanity
+/// checks.
+pub async fn publish_transaction(rpc: &MoneroRpc, tx: &Transaction) -> Result<(), WalletError> {
     #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct SendRawResponse {
@@ -73,12 +100,15 @@ pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Re
         reason: String,
     }
 
-    let res: SendRawResponse = rpc
+    let res = rpc
         .rpc_call(
             "send_raw_transaction",
-            Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": true })),
+            Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": true }).to_string()),
+            0,
         )
         .await?;
+    let res: SendRawResponse =
+        serde_json::from_str(&res).map_err(|e| WalletError::DeserializeError(e.to_string()))?;
 
     if res.double_spend {
         return Err(WalletError::DoubleSpend);
@@ -113,7 +143,7 @@ pub async fn publish_transaction(rpc: &SimpleRequestRpc, tx: &Transaction) -> Re
 
 // Credit to Serai Project for this function
 pub async fn create_signable_tx<R: Send + Sync + RngCore + CryptoRng>(
-    rpc: &SimpleRequestRpc,
+    rpc: &MoneroRpc,
     rng: &mut R,
     inputs: Vec<WalletOutput>,
     payments: Vec<(MoneroAddress, u64)>,
@@ -127,13 +157,15 @@ pub async fn create_signable_tx<R: Send + Sync + RngCore + CryptoRng>(
     if inputs.is_empty() {
         return Err(WalletError::SendError(SendError::NoInputs));
     }
-    let fee_rate = FeeRate::new(MINIMUM_FEE, 1000)?;
-    // Get reference block
-    let refblock_height = rpc.get_height().await? - 1;
-    let block = rpc.get_block_by_number(refblock_height).await?;
+    let fee_rate = FeeRate::new(MINIMUM_FEE, 1000)
+        .ok_or_else(|| WalletError::InternalError("The hardcoded minimum fee rate is invalid".into()))?;
+    // The reference block is the tip, which is exactly what `latest_block_number` reports — the old
+    // `get_height() - 1` was converting a count into that number.
+    let refblock_height = rpc.latest_block_number().await?;
+    let block = rpc.block_by_number(refblock_height).await?;
 
     // Determine the RCT proofs to make based off the hard fork
-    let (rct_type, ring_len) = match block.header.hardfork_version {
+    let (rct_type, ring_len): (RctType, u8) = match block.header.hardfork_version {
         14 => (RctType::ClsagBulletproof, 10),
         15 | 16 => (RctType::ClsagBulletproofPlus, 16),
         _ => return Err(WalletError::SendError(SendError::UnsupportedRctType)),
@@ -156,13 +188,15 @@ pub fn view_key(spend_key: &Curve25519PublicKey, index: u64) -> Zeroizing<Scalar
     let mut data = [0u8; 32 + 8];
     data[..32].copy_from_slice(spend_key.to_compressed().as_bytes());
     data[32..].copy_from_slice(&index.to_le_bytes());
-    let k = Ed25519::hash_to_F(b"Grease Wallet", &data);
-    Zeroizing::new(k.0)
+    let k = hash_to_F::<Ed25519>(b"Grease Wallet", &data);
+    Zeroizing::new(k)
 }
 
 pub fn create_change(public_spend_key: &Curve25519PublicKey) -> Result<Change, WalletError> {
     let vk = view_key(public_spend_key, 0);
-    let pair = ViewPair::new(public_spend_key.as_point().0, vk).map_err(|e| WalletError::KeyError(e.to_string()))?;
+    let spend = MoneroPoint::from(public_spend_key.as_point().0);
+    let pair = ViewPair::new(spend, Zeroizing::new(MoneroScalar::from(*vk)))
+        .map_err(|e| WalletError::KeyError(e.to_string()))?;
     let index = SubaddressIndex::new(0, 1).expect("not to fail with valid hardcoded params");
     Ok(Change::new(pair, Some(index)))
 }

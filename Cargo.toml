@@ -13,7 +13,7 @@ libgrease = { version = "0.1.0", path = "./libgrease" }
 
 anyhow = { version = "1.0.96" }
 async-trait = { version = "0.1" }
-blake2 = {  version = "0.10.6"}
+blake2 = {  version = "0.11.0-rc.5"}
 clap = { version = "4.5.31" }
 chrono = { version = "0.4.41", features = ["serde"] }
 hex = { version = "0.4.3" }
@@ -30,30 +30,68 @@ serde_json = { version = "1.0.140" }
 yaml_serde = { version = "0.10.3" }
 thiserror = { version = "2.0.17" }
 tokio = { version = "1.38", default-features = false }
-zeroize = {  version = "1.8.1" }
+zeroize = {  version = "1.8.2" }
 
-# Serai dependencies
-dalek-ff-group = {  version = "0.4", git = "https://github.com/serai-dex/serai.git", rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5" }
-flexible-transcript = { version = "0.3", git = "https://github.com/serai-dex/serai.git", rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5" }
-
-[workspace.dependencies.dleq]
-version = "0.4.1"
-git = "https://github.com/serai-dex/serai.git"
-rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-features = ["std", "experimental"]
+# Serai dependencies, pinned to the `next` branch. `ciphersuite` and `std-shims` need exact versions because the serai
+# tree carries two packages under each name — the real crate and a `patches/` compat shim (0.4.99 / 0.1.99) — and an
+# inexact requirement resolves to more than one candidate. grease wants the real crates.
+dalek-ff-group = { version = "0.5", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5" }
+flexible-transcript = { version = "0.3", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5", features = ["recommended"] }
+musig = { version = "0.6", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5" }
 
 [workspace.dependencies.ciphersuite]
-version = "0.4.1"
+version = "=0.4.2"
 git = "https://github.com/serai-dex/serai.git"
-rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-features = ["dalek", "ed25519", "secp256k1"]
+rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5"
 
 [workspace.dependencies.modular-frost]
-version = "0.8"
+version = "0.11"
 git = "https://github.com/serai-dex/serai.git"
-rev = "dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-features = ["ed25519", "ristretto", "secp256k1"]
+rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5"
+features = ["ed25519"]
 
 [workspace.dependencies.criterion]
 version = "0.7.0"
 
+# monero-oxide, pinned by revision: the split of `monero-serai` into `monero-oxide`, and of `monero-rpc` into
+# `monero-interface` + `monero-daemon-rpc`, is not on crates.io as a coherent set. Declared once here so no member
+# crate can drift onto a different revision.
+[workspace.dependencies.monero-oxide]
+version = "0.1"
+git = "https://github.com/monero-oxide/monero-oxide"
+rev = "731657ae3385be667abb556266369a497bc86f13"
+
+[workspace.dependencies.monero-wallet]
+version = "0.2"
+git = "https://github.com/monero-oxide/monero-oxide"
+rev = "731657ae3385be667abb556266369a497bc86f13"
+
+[workspace.dependencies.monero-address]
+version = "0.1"
+git = "https://github.com/monero-oxide/monero-oxide"
+rev = "731657ae3385be667abb556266369a497bc86f13"
+
+[workspace.dependencies.monero-interface]
+version = "0.2"
+git = "https://github.com/monero-oxide/monero-oxide"
+rev = "731657ae3385be667abb556266369a497bc86f13"
+
+[workspace.dependencies.monero-daemon-rpc]
+version = "0.2"
+git = "https://github.com/monero-oxide/monero-oxide"
+rev = "731657ae3385be667abb556266369a497bc86f13"
+
+[workspace.dependencies.monero-simple-request-rpc]
+version = "0.1"
+git = "https://github.com/monero-oxide/monero-oxide"
+rev = "731657ae3385be667abb556266369a497bc86f13"
+
+# monero-oxide depends on serai's crypto crates by crates.io version. Without this closure cargo resolves two disjoint
+# families and the `Ed25519` / `ThresholdKeys` / `Preprocess` types from the two do not unify. These four entries are
+# the minimal sufficient set: `ciphersuite`, `multiexp`, `dkg` and `schnorr-signatures` are reached by path from inside
+# the same git source once `modular-frost` is patched.
+[patch.crates-io]
+std-shims = { version = "=0.1.5", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5" }
+flexible-transcript = { version = "0.3", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5" }
+dalek-ff-group = { version = "0.5", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5" }
+modular-frost = { version = "0.11", git = "https://github.com/serai-dex/serai.git", rev = "c31a2d4710684af4abdcc146a41f41fa35e229a5" }

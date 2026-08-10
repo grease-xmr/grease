@@ -20,5 +20,4 @@ pub(crate) mod tests;
 
 // Re-exports
 pub use ciphersuite::group::ff::Field;
-pub use ciphersuite::Ed25519;
-pub use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};
+pub use dalek_ff_group::{Ed25519, EdwardsPoint as XmrPoint, Scalar as XmrScalar};

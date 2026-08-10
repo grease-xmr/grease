@@ -8,8 +8,8 @@
 //!
 //! Update counts in these tests deliberately skip values (17 → 41): counts are monotonic but not incremented by one.
 
-use ciphersuite::group::ff::Field;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 use rand_core::OsRng;
 use std::str::FromStr;
 use std::sync::Arc;

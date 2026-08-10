@@ -382,16 +382,15 @@ mod tests {
 
     #[test]
     fn test_group_element_hex_roundtrip() {
-        use ciphersuite::group::ff::Field;
+        use crate::{Ed25519, XmrPoint, XmrScalar};
         use ciphersuite::group::Group;
-        use ciphersuite::{Ciphersuite, Ed25519};
         use rand_core::OsRng;
 
         let mut rng = OsRng;
 
         // Generate a random group element
-        let scalar = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let element = <Ed25519 as Ciphersuite>::G::generator() * scalar;
+        let scalar = XmrScalar::random(&mut rng);
+        let element = XmrPoint::generator() * scalar;
 
         // Convert to hex and back
         let hex_str = group_element_to_hex::<Ed25519>(&element);
@@ -402,10 +401,10 @@ mod tests {
 
     #[test]
     fn test_group_element_hex_generator() {
+        use crate::{Ed25519, XmrPoint};
         use ciphersuite::group::Group;
-        use ciphersuite::{Ciphersuite, Ed25519};
 
-        let generator = <Ed25519 as Ciphersuite>::G::generator();
+        let generator = XmrPoint::generator();
         let hex_str = group_element_to_hex::<Ed25519>(&generator);
         let recovered = group_element_from_hex::<Ed25519>(&hex_str).unwrap();
 
@@ -414,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_group_element_hex_invalid_length() {
-        use ciphersuite::Ed25519;
+        use crate::Ed25519;
 
         // Too short
         let result = group_element_from_hex::<Ed25519>("abcd");
@@ -424,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_group_element_hex_invalid_hex() {
-        use ciphersuite::Ed25519;
+        use crate::Ed25519;
 
         // Invalid hex characters
         let result = group_element_from_hex::<Ed25519>("xyz123");

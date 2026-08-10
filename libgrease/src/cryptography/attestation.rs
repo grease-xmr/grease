@@ -37,7 +37,10 @@ use hex::{FromHex, FromHexError, ToHex};
 use ic_bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
 use ic_bls12_381::{multi_miller_loop, G1Affine, G1Projective, G2Affine, G2Prepared, Gt, Scalar as BlsScalar};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha512};
+// `ic_bls12_381`'s `ExpandMsgXmd<H>` states its bound in digest-0.10 traits, which `sha2 0.11`'s `Sha256` does
+// not satisfy. The two generations produce identical bytes, and `tests/vetkd_compat_vectors.rs` freezes them.
+use sha2_010::Sha256;
 use thiserror::Error;
 
 /// Length of a compressed G1 point in bytes.

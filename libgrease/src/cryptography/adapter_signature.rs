@@ -2,6 +2,7 @@ use crate::error::ReadError;
 use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
+use crate::cryptography::ciphersuite_ext::hash_to_F;
 use crate::io::Writable;
 use paste::paste;
 use rand_core::{CryptoRng, RngCore};
@@ -26,7 +27,7 @@ macro_rules! schnorr_def {
                     msg.as_ref(),
                 ]
                 .concat();
-                C::hash_to_F(b"AdaptedSignature-challenge", &bytes)
+                hash_to_F::<C>(b"AdaptedSignature-challenge", &bytes)
             }
         }
 
@@ -326,8 +327,8 @@ schnorr_impl!(SchnorrSignature (2) scalars=[s] points=[R]);
 mod tests {
     use crate::cryptography::adapter_signature::AdaptedSignature;
     use crate::XmrScalar;
-    use ciphersuite::group::ff::Field;
-    use ciphersuite::{Ciphersuite, Ed25519};
+    use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 
     #[test]
     fn adapter_signature_ed25519() {

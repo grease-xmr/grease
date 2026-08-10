@@ -1,13 +1,14 @@
-use ciphersuite::group::ff::{Field, PrimeField};
+use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::GroupEncoding;
-use dalek_ff_group::{dalek::Scalar as DScalar, EdwardsPoint, Scalar, ED25519_BASEPOINT_TABLE};
+use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+use dalek_ff_group::{EdwardsPoint, Scalar};
 use monero_wallet::ringct::RctType;
 use rand_core::{OsRng, RngCore};
 use zeroize::Zeroizing;
 
 pub fn keypair() -> (Zeroizing<Scalar>, EdwardsPoint) {
-    let secret = Zeroizing::new(Scalar::random(OsRng));
-    let public = EdwardsPoint(ED25519_BASEPOINT_TABLE * &secret.0);
+    let secret = Zeroizing::new(Scalar::random(&mut OsRng));
+    let public = EdwardsPoint(ED25519_BASEPOINT_TABLE * &*secret);
     (secret, public)
 }
 
@@ -18,7 +19,7 @@ pub fn random_key() -> [u8; 32] {
 }
 
 pub fn scalar_as_hex(scalar: &Scalar) -> String {
-    hex::encode(scalar.0.to_bytes())
+    hex::encode(scalar.to_bytes())
 }
 
 pub fn point_as_hex(point: &EdwardsPoint) -> String {
@@ -38,12 +39,9 @@ pub fn hex_to_point(hex: &str) -> Result<EdwardsPoint, String> {
 pub fn hex_to_scalar(hex: &str) -> Result<Scalar, String> {
     let mut bytes = [0u8; 32];
     hex::decode_to_slice(hex, &mut bytes).map_err(|e| e.to_string())?;
-    let decoded: Option<DScalar> = DScalar::from_canonical_bytes(bytes).into();
+    let decoded: Option<Scalar> = Scalar::from_canonical_bytes(bytes).into();
     match decoded {
-        Some(v) => {
-            let scalar = Scalar(v);
-            Ok(scalar)
-        }
+        Some(scalar) => Ok(scalar),
         None => Err("string does not represent a canonical scalar".to_string()),
     }
 }
@@ -61,7 +59,7 @@ pub fn keys_from(s: &str) -> (Zeroizing<Scalar>, EdwardsPoint) {
     let mut repr = [0u8; 32];
     repr.copy_from_slice(&bytes[0..32]);
     let secret = Scalar::from_repr(repr).unwrap();
-    let public = EdwardsPoint(ED25519_BASEPOINT_TABLE * &secret.0);
+    let public = EdwardsPoint(ED25519_BASEPOINT_TABLE * &secret);
     (Zeroizing::new(secret), public)
 }
 

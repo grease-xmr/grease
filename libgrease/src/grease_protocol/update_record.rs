@@ -14,7 +14,7 @@
 //! *strictly greater*. Update counts need only increase — gaps are deliberately legal (the privacy hardening in
 //! §arbiterPrivacy relies on parties being able to skip counts).
 
-use ciphersuite::Ed25519;
+use crate::Ed25519;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Debug, Display};
@@ -314,8 +314,7 @@ impl UpdateRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ciphersuite::group::ff::Field;
-    use ciphersuite::Ciphersuite;
+    use ciphersuite::WrappedGroup;
     use rand_core::OsRng;
 
     fn channel_id() -> ChannelId {

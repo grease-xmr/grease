@@ -51,7 +51,7 @@ use std::cmp::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use ciphersuite::Ed25519;
+use crate::Ed25519;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

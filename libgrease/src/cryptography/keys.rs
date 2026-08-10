@@ -3,7 +3,6 @@ use crate::cryptography::encryption_context::{get_encryption_context, has_encryp
 use crate::cryptography::secret_bytes::SecretBytes;
 use crate::cryptography::Commit;
 use blake2::Blake2b512;
-use ciphersuite::group::ff::Field;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::Scalar;
@@ -55,7 +54,7 @@ impl Curve25519Secret {
     }
 
     pub fn as_dalek_scalar(&self) -> &Scalar {
-        &self.0 .0
+        &self.0
     }
 
     pub fn as_zscalar(&self) -> &Zeroizing<XmrScalar> {
@@ -67,7 +66,7 @@ impl Curve25519Secret {
     }
 
     pub fn to_dalek_scalar(&self) -> Zeroizing<Scalar> {
-        Zeroizing::new(self.0 .0)
+        Zeroizing::new(*self.0)
     }
 
     pub fn random<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
@@ -131,15 +130,11 @@ impl Serialize for Curve25519Secret {
     }
 }
 
+// `dalek_ff_group::Scalar` is a re-export of `curve25519_dalek::Scalar`, not a newtype over it, so
+// `From<XmrScalar>` and `From<Scalar>` would be the same impl.
 impl From<XmrScalar> for Curve25519Secret {
     fn from(value: XmrScalar) -> Self {
         Self(Zeroizing::new(value))
-    }
-}
-
-impl From<Scalar> for Curve25519Secret {
-    fn from(value: Scalar) -> Self {
-        Self(Zeroizing::new(XmrScalar(value)))
     }
 }
 
@@ -420,4 +415,34 @@ mod test {
             with_encryption_context(ctx1, || serde_json::from_str(&serialized1).unwrap());
         assert_eq!(secret.as_hex(), deserialized.as_hex());
     }
+
+    const FIXED_PUBLIC_KEY: &str = "616e237719716e25ead63d831f9117f79b5aa05af8be30ff0eddb3dc43e8bdcf";
+
+    /// The full 64-byte `RecommendedTranscript` challenge, split only to fit the line width.
+    const COMMITMENT_CHALLENGE: &str = concat!(
+        "456666cc3eeaeb4f282da56c3f0fe1a980a3b30b5a4accff7d1f2729cfc2f3f1",
+        "112c58b2f655cb8a429a30be5f096f8572eca448e8eca8d69e4fe66388e2a201",
+    );
+
+    /// Freezes the `RecommendedTranscript` behind `Commit<Blake2b512> for Curve25519PublicKey`: the domain tag
+    /// `"Curve25519PublicKeyCommitment"`, the single `"Ed25519.EdwardsPoint"` message and the `"commitment"`
+    /// challenge, over a fixed public key. `RecommendedTranscript` is `flexible-transcript`'s alias for
+    /// `DigestTranscript<Blake2b512>`, so this vector spans both that crate and `blake2 0.10` — the pair the
+    /// serai migration replaces.
+    ///
+    /// The transcript is reconstructed here rather than read out of `commit()` because `commit()` cannot
+    /// currently be called: it copies the 64-byte challenge into a 32-byte array and panics unconditionally
+    /// (`copy_from_slice` length mismatch). No live path reaches it — the wallet handshake commits through
+    /// `SharedPublicKey` instead — so the defect is recorded here rather than fixed under a guard ticket.
+    #[test]
+    fn public_key_commitment_transcript_is_frozen() {
+        let key = Curve25519PublicKey::from_hex(FIXED_PUBLIC_KEY).expect("valid point");
+        let mut t = RecommendedTranscript::new(b"Curve25519PublicKeyCommitment");
+        t.append_message(b"Ed25519.EdwardsPoint", key.to_compressed().to_bytes());
+        let challenge = t.challenge(b"commitment");
+        assert_eq!(hex::encode(challenge.as_slice()), COMMITMENT_CHALLENGE);
+        // The first 32 bytes are what `commit()` is meant to return, and will once the truncation is repaired.
+        assert_eq!(&COMMITMENT_CHALLENGE[..64], "456666cc3eeaeb4f282da56c3f0fe1a980a3b30b5a4accff7d1f2729cfc2f3f1");
+    }
+
 }

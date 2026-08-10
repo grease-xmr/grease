@@ -4,11 +4,11 @@ use crate::helpers::group_element_to_hex;
 use crate::monero::data_objects::ClosingAddresses;
 use blake2::Blake2b512;
 use ciphersuite::group::GroupEncoding;
-use ciphersuite::{Ciphersuite, Ed25519};
-use digest::consts::U32;
-use digest::typenum::{IsGreaterOrEqual, True};
+use crate::Ed25519;
+use ciphersuite::Ciphersuite;
+use crate::cryptography::SecureDigest;
 use digest::OutputSizeUser;
-use flexible_transcript::{DigestTranscript, SecureDigest, Transcript};
+use flexible_transcript::{DigestTranscript, Transcript};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::fmt::{Debug, Display};
@@ -83,7 +83,6 @@ impl ChannelId {
     where
         C: Ciphersuite,
         D: Send + Clone + SecureDigest,
-        <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
     {
         Self(id.as_hex())
     }
@@ -236,7 +235,6 @@ pub struct ChannelIdMetadata<C: Ciphersuite = Ed25519, D = Blake2b512> {
 impl<C: Ciphersuite, D> ChannelIdMetadata<C, D>
 where
     D: Send + Clone + SecureDigest,
-    <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
 {
     /// Create a new channel ID from the given parameters.
     ///
@@ -247,25 +245,51 @@ where
     ///
     /// # Compile-time safety
     ///
-    /// Using a digest with fewer than 32 bytes of output will fail to compile:
+    /// A digest of 32 bytes or wider satisfies [`SecureDigest`](crate::cryptography::SecureDigest):
     ///
-    /// ```compile_fail
-    /// use libgrease::channel_id::ChannelId;
-    /// #use libgrease::cryptography::keys::{Curve25519PublicKey, PublicKey};
-    /// #use libgrease::balance::Balances;
-    /// #use libgrease::monero::data_objects::ClosingAddresses;
-    /// #use blake2::Blake2b;
-    /// #use digest::consts::U16;
+    /// ```
+    /// use blake2::Blake2b;
+    /// use digest::consts::U32;
+    /// use libgrease::arbiter::ArbiterConfiguration;
+    /// use libgrease::balance::Balances;
+    /// use libgrease::channel_id::ChannelIdMetadata;
+    /// use libgrease::monero::data_objects::ClosingAddresses;
+    /// use libgrease::{Ed25519, XmrPoint};
     ///
-    /// // This fails to compile because Blake2b<U16> only produces 16 bytes
-    /// fn wont_compile(
-    ///     merchant_key: C::G,
-    ///     customer_key: C::G,
+    /// fn compiles(
+    ///     merchant_key: XmrPoint,
+    ///     customer_key: XmrPoint,
     ///     balance: Balances,
     ///     closing: ClosingAddresses,
+    ///     arbiter: ArbiterConfiguration,
     /// ) {
-    ///     let _ = ChannelId::<Blake2b<U16>>::new(
-    ///         merchant_key, customer_key, balance, closing, 0, 0
+    ///     let _ = ChannelIdMetadata::<Ed25519, Blake2b<U32>>::new(
+    ///         merchant_key, customer_key, balance, closing, arbiter, 0, 0,
+    ///     );
+    /// }
+    /// ```
+    ///
+    /// One narrower than that does not, and the identical call fails to compile:
+    ///
+    /// ```compile_fail
+    /// use blake2::Blake2b;
+    /// use digest::consts::U16;
+    /// use libgrease::arbiter::ArbiterConfiguration;
+    /// use libgrease::balance::Balances;
+    /// use libgrease::channel_id::ChannelIdMetadata;
+    /// use libgrease::monero::data_objects::ClosingAddresses;
+    /// use libgrease::{Ed25519, XmrPoint};
+    ///
+    /// // `Blake2b<U16>` produces 16 bytes, so it does not satisfy `SecureDigest`.
+    /// fn wont_compile(
+    ///     merchant_key: XmrPoint,
+    ///     customer_key: XmrPoint,
+    ///     balance: Balances,
+    ///     closing: ClosingAddresses,
+    ///     arbiter: ArbiterConfiguration,
+    /// ) {
+    ///     let _ = ChannelIdMetadata::<Ed25519, Blake2b<U16>>::new(
+    ///         merchant_key, customer_key, balance, closing, arbiter, 0, 0,
     ///     );
     /// }
     /// ```
@@ -417,7 +441,6 @@ impl<C: Ciphersuite, D> Debug for ChannelIdMetadata<C, D> {
 impl<C: Ciphersuite, D> Display for ChannelIdMetadata<C, D>
 where
     D: Send + Clone + SecureDigest,
-    <D as OutputSizeUser>::OutputSize: IsGreaterOrEqual<U32, Output = True>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_hex())
@@ -440,11 +463,10 @@ mod test {
     use crate::balance::Balances;
     use crate::cryptography::attestation::test_helpers::generate_master_keypair;
     use crate::monero::data_objects::ClosingAddresses;
-    use crate::XmrPoint;
+    use crate::{XmrPoint, XmrScalar};
     use blake2::Blake2b;
-    use ciphersuite::group::ff::Field;
     use ciphersuite::group::Group;
-    use ciphersuite::Ed25519;
+    use crate::Ed25519;
     use digest::consts::U32;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
@@ -464,7 +486,7 @@ mod test {
     }
 
     fn other_key() -> XmrPoint {
-        XmrPoint::generator() * <Ed25519 as Ciphersuite>::F::random(&mut rand_core::OsRng)
+        XmrPoint::generator() * XmrScalar::random(&mut rand_core::OsRng)
     }
 
     /// The arbiter the two parties agreed on. Deterministic, so the known-answer vector below stays stable.
@@ -475,7 +497,7 @@ mod test {
 
     /// A stand-in for the funding output's linking tag `L_F`.
     fn linking_tag() -> XmrPoint {
-        XmrPoint::generator() * <Ed25519 as Ciphersuite>::F::from(3u64)
+        XmrPoint::generator() * XmrScalar::from(3u64)
     }
 
     fn balances() -> Balances {

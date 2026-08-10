@@ -61,7 +61,7 @@ use crate::grease_protocol::multisig_wallet::MultisigTransaction;
 use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, UpdateRecord, UpdateRecordError};
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::{XmrPoint, XmrScalar};
-use ciphersuite::Ed25519;
+use crate::Ed25519;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -178,7 +178,6 @@ pub trait UpdateProtocolCommon: HasRole + AdapterSignatureHandler + MultisigTran
 
     /// Draw a fresh, independent offset `ω` for a new state. Never derived from the previous offset.
     fn fresh_offset<R: RngCore + CryptoRng>(&self, rng: &mut R) -> XmrScalar {
-        use ciphersuite::group::ff::Field;
         XmrScalar::random(rng)
     }
 

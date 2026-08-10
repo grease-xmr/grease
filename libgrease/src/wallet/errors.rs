@@ -1,12 +1,19 @@
 use modular_frost::FrostError;
-use monero_rpc::RpcError;
+use monero_interface::{FeeError, InterfaceError, PublishTransactionError, TransactionsError};
 use monero_wallet::send::SendError;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
 pub enum WalletError {
+    // monero-oxide split the old single `RpcError` into one error type per capability.
     #[error("RPC Error: {0}")]
-    RpcError(#[from] RpcError),
+    InterfaceError(#[from] InterfaceError),
+    #[error("RPC Error fetching transactions: {0}")]
+    TransactionsError(#[from] TransactionsError),
+    #[error("RPC Error fetching a fee rate: {0}")]
+    FeeError(#[from] FeeError),
+    #[error("RPC Error publishing a transaction: {0}")]
+    PublishTransactionError(#[from] PublishTransactionError),
     #[error("Key Error: {0}")]
     KeyError(String),
     #[error("Not enough funds in wallet, or blockchain needs to be scanned")]

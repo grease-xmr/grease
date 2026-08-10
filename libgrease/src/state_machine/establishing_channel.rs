@@ -34,11 +34,12 @@ use crate::payment_channel::multisig_negotiation::MultisigWalletKeyNegotiation;
 use crate::payment_channel::{ChannelRole, HasRole};
 use crate::state_machine::error::LifeCycleError;
 use crate::state_machine::lifecycle::ChannelState;
-use crate::state_machine::open_channel::EstablishedChannelState;
+use crate::state_machine::open_channel::{EstablishedChannelState, UpdateHistory};
 use crate::state_machine::proposing_channel::{AwaitingConfirmation, AwaitingProposalResponse};
-use crate::wallet::multisig_wallet::{commitment_tx_message, signature_share_to_scalar};
+use crate::wallet::multisig_wallet::commitment_tx_message;
 use crate::{XmrPoint, XmrScalar};
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::Ciphersuite;
 use log::*;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -333,7 +334,7 @@ where
             dynamic,
             multisig_wallet: self.multisig_wallet.unwrap(),
             funding_transactions: self.funding_transaction_ids,
-            current_update: None,
+            updates: UpdateHistory::default(),
         };
         Ok(open_channel)
     }
@@ -440,12 +441,11 @@ impl EstablishingState<Ed25519> {
     /// The wallet signing share this party adapts. Available once the FROST preprocessing round trip has
     /// completed.
     fn wallet_signing_key(&self) -> Result<XmrScalar, EstablishError> {
-        let share = self.require_wallet()?.my_signing_share().ok_or_else(|| {
+        self.require_wallet()?.my_signing_share().ok_or_else(|| {
             EstablishError::MissingInformation(
                 "Wallet signing share — the initial commitment transaction has not been partially signed".into(),
             )
-        })?;
-        Ok(signature_share_to_scalar(share))
+        })
     }
 
     fn require_final_channel_id(&self) -> Result<(), EstablishError> {

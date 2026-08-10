@@ -8,8 +8,8 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
 dependencies = [
- "crypto-common",
- "generic-array 0.14.7",
+ "crypto-common 0.1.7",
+ "generic-array",
 ]
 
 [[package]]
@@ -20,7 +20,7 @@ checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
 dependencies = [
  "cfg-if",
  "cipher",
- "cpufeatures",
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -145,8 +145,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
 dependencies = [
  "base64ct",
- "blake2",
- "cpufeatures",
+ "blake2 0.10.6",
+ "cpufeatures 0.2.17",
  "password-hash",
 ]
 
@@ -194,7 +194,7 @@ dependencies = [
  "ark-serialize",
  "ark-std",
  "arrayvec 0.7.6",
- "digest",
+ "digest 0.10.7",
  "educe",
  "itertools",
  "num-bigint",
@@ -250,7 +250,7 @@ dependencies = [
  "ark-serialize-derive",
  "ark-std",
  "arrayvec 0.7.6",
- "digest",
+ "digest 0.10.7",
  "num-bigint",
 ]
 
@@ -503,7 +503,16 @@ version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
 dependencies = [
- "digest",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "blake2"
+version = "0.11.0-rc.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "061f1a09225e328e1ffbb378d2d49923c0ca5fee19fb5ac1cc9c1e9d52b93690"
+dependencies = [
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -512,39 +521,17 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
 ]
 
 [[package]]
-name = "block-padding"
-version = "0.3.3"
+name = "block-buffer"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
- "generic-array 0.14.7",
-]
-
-[[package]]
-name = "borsh"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
-dependencies = [
- "borsh-derive",
- "cfg_aliases",
-]
-
-[[package]]
-name = "borsh-derive"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0686c856aa6aac0c4498f936d7d6a02df690f614c03e4d906d1018062b5c5e2c"
-dependencies = [
- "once_cell",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn",
+ "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -667,7 +654,7 @@ checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
 dependencies = [
  "cfg-if",
  "cipher",
- "cpufeatures",
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -703,31 +690,34 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
- "crypto-common",
+ "crypto-common 0.1.7",
  "inout",
  "zeroize",
 ]
 
 [[package]]
 name = "ciphersuite"
-version = "0.4.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.4.2"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "dalek-ff-group",
- "digest",
- "elliptic-curve",
+ "digest 0.11.3",
  "ff",
- "flexible-transcript",
  "group",
- "k256",
- "minimal-ed448",
- "p256",
- "rand_core 0.6.4",
- "sha2",
- "sha3",
  "std-shims",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "ciphersuite-kp256"
+version = "0.4.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
+dependencies = [
+ "ciphersuite",
+ "k256",
+ "p256",
+ "rand_core 0.6.4",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -774,6 +764,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -806,6 +802,12 @@ name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
+
+[[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "const-str"
@@ -849,10 +851,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpubits"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
 ]
@@ -918,9 +935,21 @@ version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
  "rand_core 0.6.4",
  "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto-bigint"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a52aa3fcda4e6302a9f48734f234d35d4721b96f8fe07d073f07ce9df4f0271"
+dependencies = [
+ "cpubits",
+ "ctutils",
+ "num-traits",
  "zeroize",
 ]
 
@@ -930,9 +959,18 @@ version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
- "generic-array 0.14.7",
+ "generic-array",
  "rand_core 0.6.4",
  "typenum",
+]
+
+[[package]]
+name = "crypto-common"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+dependencies = [
+ "hybrid-array",
 ]
 
 [[package]]
@@ -963,6 +1001,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
 dependencies = [
  "cipher",
+]
+
+[[package]]
+name = "ctutils"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+dependencies = [
+ "cmov",
+ "subtle",
 ]
 
 [[package]]
@@ -1033,9 +1081,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "curve25519-dalek-derive",
- "digest",
+ "digest 0.10.7",
+ "ff",
  "fiat-crypto",
  "group",
  "rand_core 0.6.4",
@@ -1058,16 +1107,15 @@ dependencies = [
 
 [[package]]
 name = "dalek-ff-group"
-version = "0.4.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.5.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "crypto-bigint",
+ "blake2 0.11.0-rc.6",
+ "ciphersuite",
  "curve25519-dalek",
- "digest",
- "ff",
- "group",
+ "prime-field",
  "rand_core 0.6.4",
- "rustversion",
+ "sha2 0.11.0",
  "subtle",
  "zeroize",
 ]
@@ -1138,7 +1186,7 @@ version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
- "const-oid",
+ "const-oid 0.9.6",
  "zeroize",
 ]
 
@@ -1196,9 +1244,22 @@ version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
- "block-buffer",
- "crypto-common",
+ "block-buffer 0.10.4",
+ "crypto-common 0.1.7",
  "subtle",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+dependencies = [
+ "block-buffer 0.12.1",
+ "const-oid 0.10.2",
+ "crypto-common 0.2.2",
+ "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -1207,11 +1268,11 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3054f4e81d395e50822796c5e99ca522e6ba7be98947d6d4b0e5e61640bdb894"
 dependencies = [
- "digest",
+ "digest 0.10.7",
  "hex",
  "md-5",
  "rand 0.8.5",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1248,35 +1309,35 @@ dependencies = [
 
 [[package]]
 name = "dkg"
-version = "0.5.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.6.1"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "borsh",
- "chacha20",
  "ciphersuite",
- "dleq",
- "flexible-transcript",
- "multiexp",
- "rand_core 0.6.4",
- "schnorr-signatures",
  "std-shims",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
 [[package]]
-name = "dleq"
-version = "0.4.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+name = "dkg-dealer"
+version = "0.6.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "digest",
- "ff",
- "flexible-transcript",
- "group",
- "multiexp",
+ "ciphersuite",
+ "dkg",
  "rand_core 0.6.4",
- "rustversion",
- "thiserror 1.0.69",
+ "std-shims",
+ "zeroize",
+]
+
+[[package]]
+name = "dkg-recovery"
+version = "0.6.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
+dependencies = [
+ "ciphersuite",
+ "dkg",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -1314,7 +1375,8 @@ dependencies = [
  "log",
  "monero",
  "monero-address",
- "monero-rpc",
+ "monero-daemon-rpc",
+ "monero-interface",
  "monero-simple-request-rpc",
  "rand_core 0.6.4",
  "tokio",
@@ -1351,7 +1413,7 @@ dependencies = [
  "curve25519-dalek",
  "ed25519",
  "serde",
- "sha2",
+ "sha2 0.10.9",
  "subtle",
  "zeroize",
 ]
@@ -1381,10 +1443,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
  "base16ct",
- "crypto-bigint",
- "digest",
+ "crypto-bigint 0.5.5",
+ "digest 0.10.7",
  "ff",
- "generic-array 0.14.7",
+ "generic-array",
  "group",
  "pkcs8",
  "rand_core 0.6.4",
@@ -1489,6 +1551,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ff-group-tests"
+version = "0.13.2"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
+dependencies = [
+ "ff",
+ "group",
+ "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1514,14 +1587,12 @@ dependencies = [
 
 [[package]]
 name = "flexible-transcript"
-version = "0.3.2"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.3.4"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "blake2",
- "digest",
+ "blake2 0.11.0-rc.6",
+ "digest 0.11.3",
  "merlin",
- "rustversion",
- "subtle",
  "zeroize",
 ]
 
@@ -1536,6 +1607,12 @@ name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
@@ -1700,16 +1777,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "generic-array"
-version = "1.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eaf57c49a95fd1fe24b90b3033bee6dc7e8f1288d51494cb44e627c295e38542"
-dependencies = [
- "rustversion",
- "typenum",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1822,9 +1889,8 @@ name = "grease-p2p"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "blake2",
+ "blake2 0.10.6",
  "ciphersuite",
- "dalek-ff-group",
  "env_logger",
  "futures",
  "hex",
@@ -1881,21 +1947,12 @@ checksum = "1b43ede17f21864e81be2fa654110bf1e793774238d86ef8555c37e6519c0403"
 
 [[package]]
 name = "hashbrown"
-version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
- "foldhash",
+ "foldhash 0.1.5",
 ]
 
 [[package]]
@@ -1903,6 +1960,15 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+
+[[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -2014,7 +2080,7 @@ version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
- "digest",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -2061,6 +2127,15 @@ name = "humantime"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
+dependencies = [
+ "typenum",
+]
 
 [[package]]
 name = "hyper"
@@ -2254,7 +2329,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_cbor",
- "sha2",
+ "sha2 0.10.9",
  "sha3",
  "strum 0.27.2",
  "strum_macros 0.27.2",
@@ -2274,7 +2349,7 @@ version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1e828f9e804ccefe4b9b15b2195f474c60fd4f95ccd14fcb554eb6d7dfafde3"
 dependencies = [
- "digest",
+ "digest 0.10.7",
  "ff",
  "group",
  "pairing",
@@ -2292,7 +2367,7 @@ dependencies = [
  "crc32fast",
  "data-encoding",
  "serde",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
 
@@ -2508,8 +2583,7 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
- "block-padding",
- "generic-array 0.14.7",
+ "generic-array",
 ]
 
 [[package]]
@@ -2623,7 +2697,17 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecc2af9a1119c51f12a14607e783cb977bde58bc069ff0c3da1095e635d70654"
 dependencies = [
- "cpufeatures",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "keccak"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffd9697dc4a9a62e2da93389f34400b77a28f0287711263cabb203b3ccb9c0e4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
 ]
 
 [[package]]
@@ -2677,27 +2761,28 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "async-trait",
- "blake2",
+ "blake2 0.11.0-rc.6",
  "chrono",
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group",
- "digest",
- "dleq",
+ "digest 0.11.3",
  "env_logger",
  "flexible-transcript",
  "futures",
  "hex",
  "ic-vetkeys",
  "ic_bls12_381",
- "k256",
  "log",
  "modular-frost",
  "monero",
- "monero-rpc",
- "monero-serai",
+ "monero-address",
+ "monero-daemon-rpc",
+ "monero-interface",
+ "monero-oxide",
  "monero-simple-request-rpc",
  "monero-wallet",
+ "musig",
  "num-bigint",
  "num-traits",
  "paste",
@@ -2706,8 +2791,8 @@ dependencies = [
  "ron",
  "serde",
  "serde_json",
- "sha2",
- "sha3",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
  "static_assertions",
  "subtle",
  "thiserror 2.0.18",
@@ -2849,7 +2934,7 @@ dependencies = [
  "multihash",
  "quick-protobuf",
  "rand 0.8.5",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tracing",
  "zeroize",
@@ -3119,7 +3204,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
- "digest",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -3135,23 +3220,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58c38e2799fc0978b65dfff8023ec7843e2330bb462f19198840b34b6582397d"
 dependencies = [
  "byteorder",
- "keccak",
+ "keccak 0.1.5",
  "rand_core 0.6.4",
  "zeroize",
 ]
 
 [[package]]
 name = "minimal-ed448"
-version = "0.4.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.4.2"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "crypto-bigint",
- "ff",
- "generic-array 1.3.5",
- "group",
- "rand_core 0.6.4",
- "rustversion",
- "subtle",
+ "ciphersuite",
+ "crypto-bigint 0.7.5",
+ "prime-field",
+ "shake",
  "zeroize",
 ]
 
@@ -3174,20 +3256,27 @@ dependencies = [
 
 [[package]]
 name = "modular-frost"
-version = "0.8.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.11.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
  "ciphersuite",
+ "ciphersuite-kp256",
  "dalek-ff-group",
- "digest",
  "dkg",
+ "dkg-dealer",
+ "dkg-recovery",
+ "elliptic-curve",
  "flexible-transcript",
+ "hex",
+ "minimal-ed448",
  "multiexp",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "schnorr-signatures",
+ "sha2 0.10.9",
+ "std-shims",
  "subtle",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -3229,25 +3318,33 @@ dependencies = [
 [[package]]
 name = "monero-address"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
- "curve25519-dalek",
+ "monero-base58",
+ "monero-ed25519",
  "monero-io",
  "monero-primitives",
- "std-shims",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zeroize",
+]
+
+[[package]]
+name = "monero-base58"
+version = "0.1.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
+dependencies = [
+ "monero-primitives",
+ "std-shims",
 ]
 
 [[package]]
 name = "monero-borromean"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "curve25519-dalek",
- "monero-generators",
+ "monero-ed25519",
  "monero-io",
- "monero-primitives",
  "std-shims",
  "zeroize",
 ]
@@ -3255,116 +3352,130 @@ dependencies = [
 [[package]]
 name = "monero-bulletproofs"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "curve25519-dalek",
- "monero-generators",
+ "monero-bulletproofs-generators",
+ "monero-ed25519",
  "monero-io",
  "monero-primitives",
  "rand_core 0.6.4",
  "std-shims",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zeroize",
+]
+
+[[package]]
+name = "monero-bulletproofs-generators"
+version = "0.1.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
+dependencies = [
+ "curve25519-dalek",
+ "monero-ed25519",
+ "monero-io",
+ "monero-primitives",
+ "std-shims",
 ]
 
 [[package]]
 name = "monero-clsag"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "curve25519-dalek",
  "dalek-ff-group",
  "flexible-transcript",
  "group",
  "modular-frost",
- "monero-generators",
+ "monero-ed25519",
  "monero-io",
- "monero-primitives",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "std-shims",
  "subtle",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
 [[package]]
-name = "monero-generators"
-version = "0.4.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+name = "monero-daemon-rpc"
+version = "0.2.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
+ "hex",
+ "monero-address",
+ "monero-epee",
+ "monero-interface",
+ "monero-oxide",
+ "serde",
+ "serde_json",
+ "std-shims",
+]
+
+[[package]]
+name = "monero-ed25519"
+version = "0.1.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
+dependencies = [
+ "crypto-bigint 0.5.5",
  "curve25519-dalek",
- "dalek-ff-group",
- "group",
  "monero-io",
+ "rand_core 0.6.4",
  "sha3",
  "std-shims",
  "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "monero-epee"
+version = "0.2.1"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
+
+[[package]]
+name = "monero-interface"
+version = "0.2.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
+dependencies = [
+ "hex",
+ "monero-oxide",
+ "std-shims",
+ "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
 name = "monero-io"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
- "curve25519-dalek",
  "std-shims",
 ]
 
 [[package]]
 name = "monero-mlsag"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "curve25519-dalek",
- "monero-generators",
+ "monero-ed25519",
  "monero-io",
- "monero-primitives",
  "std-shims",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
 [[package]]
-name = "monero-primitives"
+name = "monero-oxide"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "curve25519-dalek",
- "monero-generators",
- "monero-io",
- "sha3",
- "std-shims",
- "zeroize",
-]
-
-[[package]]
-name = "monero-rpc"
-version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-dependencies = [
- "curve25519-dalek",
- "hex",
- "monero-address",
- "monero-serai",
- "serde",
- "serde_json",
- "std-shims",
- "thiserror 1.0.69",
- "zeroize",
-]
-
-[[package]]
-name = "monero-serai"
-version = "0.1.4-alpha"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
-dependencies = [
- "curve25519-dalek",
- "hex-literal 0.4.1",
+ "hex-literal 1.1.0",
  "monero-borromean",
  "monero-bulletproofs",
  "monero-clsag",
- "monero-generators",
+ "monero-ed25519",
  "monero-io",
  "monero-mlsag",
  "monero-primitives",
@@ -3373,38 +3484,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "monero-primitives"
+version = "0.1.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
+dependencies = [
+ "sha3",
+]
+
+[[package]]
 name = "monero-simple-request-rpc"
 version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "digest_auth",
  "hex",
- "monero-rpc",
+ "hyper-util",
+ "monero-daemon-rpc",
  "simple-request",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
 name = "monero-wallet"
-version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.2.0"
+source = "git+https://github.com/monero-oxide/monero-oxide?rev=731657ae3385be667abb556266369a497bc86f13#731657ae3385be667abb556266369a497bc86f13"
 dependencies = [
  "curve25519-dalek",
- "dalek-ff-group",
  "flexible-transcript",
- "group",
  "hex",
  "modular-frost",
  "monero-address",
  "monero-clsag",
- "monero-rpc",
- "monero-serai",
+ "monero-interface",
+ "monero-oxide",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "rand_distr",
  "std-shims",
- "thiserror 1.0.69",
+ "subtle",
+ "thiserror 2.0.18",
  "zeroize",
 ]
 
@@ -3451,14 +3571,13 @@ dependencies = [
 
 [[package]]
 name = "multiexp"
-version = "0.4.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.4.2"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
  "ff",
  "group",
  "rand_core 0.6.4",
- "rustversion",
- "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -3484,6 +3603,20 @@ dependencies = [
  "pin-project",
  "smallvec",
  "unsigned-varint 0.7.2",
+]
+
+[[package]]
+name = "musig"
+version = "0.6.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
+dependencies = [
+ "ciphersuite",
+ "dkg",
+ "multiexp",
+ "rand_core 0.6.4",
+ "std-shims",
+ "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
@@ -3851,7 +3984,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
 dependencies = [
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
 ]
@@ -3863,7 +3996,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
 ]
@@ -3933,21 +4066,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "prime-field"
+version = "0.1.0"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
+dependencies = [
+ "crypto-bigint 0.7.5",
+ "ctutils",
+ "ff",
+ "ff-group-tests",
+ "paste",
+ "rand_core 0.6.4",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "primeorder"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
 dependencies = [
  "elliptic-curve",
-]
-
-[[package]]
-name = "proc-macro-crate"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "219cb19e96be00ab2e37d6e299658a0cfa83e52429179969b0f0121b4ac46983"
-dependencies = [
- "toml_edit",
 ]
 
 [[package]]
@@ -4430,8 +4569,8 @@ dependencies = [
 
 [[package]]
 name = "schnorr-signatures"
-version = "0.5.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.5.2"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
  "ciphersuite",
  "flexible-transcript",
@@ -4467,7 +4606,7 @@ checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
 dependencies = [
  "base16ct",
  "der",
- "generic-array 0.14.7",
+ "generic-array",
  "pkcs8",
  "subtle",
  "zeroize",
@@ -4581,8 +4720,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
- "cpufeatures",
- "digest",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -4591,8 +4741,19 @@ version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75872d278a8f37ef87fa0ddbda7802605cb18344497949862c0d4dcb291eba60"
 dependencies = [
- "digest",
- "keccak",
+ "digest 0.10.7",
+ "keccak 0.1.5",
+]
+
+[[package]]
+name = "shake"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09057cb2149ad4cbd2da1e26b351f9a4c354219421229c69c3063e6f61947c4a"
+dependencies = [
+ "digest 0.11.3",
+ "keccak 0.2.1",
+ "sponge-cursor",
 ]
 
 [[package]]
@@ -4628,15 +4789,18 @@ dependencies = [
 
 [[package]]
 name = "simple-request"
-version = "0.1.0"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f936df983b7acc20419ca10eac9dbae1e76f59b12aa6c1db7bdcce571d5a471"
 dependencies = [
+ "futures-util",
  "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",
  "tokio",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -4684,13 +4848,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "850948bee068e713b8ab860fe1adc4d109676ab4c3b621fd8147f06b261f2f85"
 dependencies = [
  "aes-gcm",
- "blake2",
+ "blake2 0.10.6",
  "chacha20poly1305",
  "curve25519-dalek",
  "rand_core 0.6.4",
  "ring",
  "rustc_version",
- "sha2",
+ "sha2 0.10.9",
  "subtle",
 ]
 
@@ -4716,9 +4880,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "8abadc99fd9c7bbb7d0ca2b31d72a067d0c0dcd7aad25ab8cac71ba91417694b"
 
 [[package]]
 name = "spki"
@@ -4728,6 +4892,15 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sponge-cursor"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+dependencies = [
+ "zeroize",
 ]
 
 [[package]]
@@ -4757,10 +4930,11 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "std-shims"
-version = "0.1.1"
-source = "git+https://github.com/serai-dex/serai.git?rev=dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5#dc1b8dfccd68b7c2eb4359a1e37b55ce5e4453b5"
+version = "0.1.5"
+source = "git+https://github.com/serai-dex/serai.git?rev=c31a2d4710684af4abdcc146a41f41fa35e229a5#c31a2d4710684af4abdcc146a41f41fa35e229a5"
 dependencies = [
- "hashbrown 0.14.5",
+ "hashbrown 0.17.1",
+ "rustversion",
  "spin",
 ]
 
@@ -5115,36 +5289,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_datetime"
-version = "0.7.5+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
-name = "toml_edit"
-version = "0.23.10+spec-1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
-dependencies = [
- "indexmap",
- "toml_datetime",
- "toml_parser",
- "winnow",
-]
-
-[[package]]
-name = "toml_parser"
-version = "1.0.6+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3198b4b0a8e11f09dd03e133c0280504d0801269e9afa46362ffde1cbeebf44"
-dependencies = [
- "winnow",
-]
-
-[[package]]
 name = "tower-service"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5215,9 +5359,9 @@ dependencies = [
 
 [[package]]
 name = "typenum"
-version = "1.19.0"
+version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "unicase"
@@ -5255,7 +5399,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
- "crypto-common",
+ "crypto-common 0.1.7",
  "subtle",
 ]
 
@@ -5768,15 +5912,6 @@ name = "windows_x86_64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
-
-[[package]]
-name = "winnow"
-version = "0.7.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winreg"

@@ -24,7 +24,8 @@ use crate::state_machine::MultisigSetupError;
 use crate::{XmrPoint, XmrScalar};
 use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::GroupEncoding;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -200,4 +201,86 @@ fn fresh_offset<R: RngCore + CryptoRng>(rng: &mut R) -> XmrScalar {
     std::iter::repeat_with(|| XmrScalar::random(&mut *rng))
         .find(|omega| !bool::from(omega.is_zero()))
         .expect("a uniform scalar is nonzero with overwhelming probability")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cryptography::attestation::test_helpers::master_public_key;
+    use crate::cryptography::binding_proof::{prove_encrypted_offset, BindingProofParams};
+    use crate::cryptography::pvss::SecondBase;
+    use crate::XmrScalar;
+    use blake2::Digest;
+    use ic_bls12_381::{G2Affine, Scalar as BlsScalar};
+    use std::str::FromStr;
+
+    /// The frozen channel id from `channel_id.rs`'s own known-answer vector.
+    const CHANNEL_ID: &str = "XGC0845ec076e64984475627c8c1a154defceaeea2ce3cd39c55b02823b4f70a4";
+
+    /// `Blake2b512(binding_proof.to_bytes())`, split only to fit the line width. The proof is a compound input to
+    /// the transcript, so it is pinned separately: a failure here says the proof encoding moved, and a failure in
+    /// the payload vector alone says the transcript did.
+    const PROOF_DIGEST: &str = concat!(
+        "6235d944f0ed5a961d1a774f320a3b4d78fbfb39d6cba7a2f946f5d09e813f26",
+        "968c029bb53947aa43359e7160083f563301b399bcc710b7f398cfc99bb46931",
+    );
+
+    /// The frozen `payload_signature_message` output, split only to fit the line width.
+    const PAYLOAD_SIG_V2: &str = concat!(
+        "b17096996dd5d854bb514b76dc2d04939c29096ffe88c7eaa59c65d875cc23c5",
+        "f74e32d1bcaf2144312395b4908dd489807088801c53ebfb3aa09946b6c491f9",
+    );
+
+    /// Every input spelled out: `ω = 42`, the master secret `z` a fixed constant, `U = G_2`, `c` a fixed scalar,
+    /// an `(8, 4)` proof profile. `prove_encrypted_offset` takes no RNG — every choice in it is PRF-derived — so
+    /// the proof is a deterministic function of these five values.
+    fn fixed_inputs() -> (ChannelId, EncryptedOffset, BindingProof) {
+        let channel_id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
+        let encrypted_offset = EncryptedOffset::new(
+            G2Point::from(G2Affine::generator()),
+            XmrScalar::from(0x0123_4567_89ab_cdef_u64),
+        )
+        .expect("non-identity KEM point");
+        let master_pk = master_public_key(&BlsScalar::from(0x1234_5678_90ab_cdef_u64));
+        let statement = Statement::new(channel_id.as_str().as_bytes().to_vec(), INITIAL_UPDATE_COUNT);
+        let params = BindingProofParams::new(8, 4).expect("valid profile");
+        let omega = XmrScalar::from(42u64);
+        let binding_proof =
+            prove_encrypted_offset(&omega, &statement, &master_pk, SecondBase::grease_default(), params)
+                .expect("proof");
+        (channel_id, encrypted_offset, binding_proof)
+    }
+
+    /// Pins the canonical `BindingProof` encoding that the payload transcript absorbs, so a failure of the vector
+    /// below is attributable. Crosses `ic_bls12_381`'s G2 compression and `dalek-ff-group`'s scalar encoding.
+    #[test]
+    fn binding_proof_encoding_is_frozen() {
+        let (_, _, proof) = fixed_inputs();
+        assert_eq!(hex::encode(blake2::Blake2b512::digest(proof.to_bytes())), PROOF_DIGEST);
+        assert_eq!(hex::encode(proof.q().to_bytes()), "ce1a32994e835c193e2bf33909f44373ae2cf94ddef0fd922035c483670637c2");
+    }
+
+    /// Freezes the establish payload transcript under the live `"Grease PayloadSig v2"` domain tag. Crosses
+    /// `flexible-transcript`'s `DigestTranscript` and `blake2 0.10`, both replaced by the serai migration; a
+    /// drift here means an init package built on the old pin no longer verifies against one built on the new.
+    #[test]
+    fn payload_signature_message_is_frozen() {
+        let (channel_id, encrypted_offset, binding_proof) = fixed_inputs();
+        let q = *binding_proof.q();
+        let message =
+            payload_signature_message(&channel_id, &encrypted_offset, &binding_proof, Duration::from_secs(86_400), &q);
+        assert_eq!(hex::encode(&message), PAYLOAD_SIG_V2);
+    }
+
+    /// The dispute window is absorbed, so two otherwise identical packages under different windows differ.
+    #[test]
+    fn payload_signature_message_binds_the_dispute_window() {
+        let (channel_id, encrypted_offset, binding_proof) = fixed_inputs();
+        let q = *binding_proof.q();
+        let day =
+            payload_signature_message(&channel_id, &encrypted_offset, &binding_proof, Duration::from_secs(86_400), &q);
+        let hour =
+            payload_signature_message(&channel_id, &encrypted_offset, &binding_proof, Duration::from_secs(3_600), &q);
+        assert_ne!(day, hour);
+    }
 }

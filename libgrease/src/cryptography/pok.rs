@@ -3,6 +3,7 @@ use crate::grease_protocol::utils::{write_field_element, write_group_element};
 use ciphersuite::group::ff::Field;
 use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
+use crate::cryptography::ciphersuite_ext::hash_to_F;
 use crate::io::Writable;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -18,7 +19,7 @@ pub struct SchnorrPoK<C: Ciphersuite> {
 impl<C: Ciphersuite> SchnorrPoK<C> {
     fn challenge(pub_nonce: &C::G, pub_key: &C::G, binding: &[u8]) -> C::F {
         let msg = [pub_nonce.to_bytes().as_ref(), pub_key.to_bytes().as_ref(), binding].concat();
-        C::hash_to_F(b"SchnorrPoK", &msg)
+        hash_to_F::<C>(b"SchnorrPoK", &msg)
     }
 
     /// Prove knowledge of `secret` with optional binding data included in the challenge.
@@ -97,12 +98,13 @@ impl<'de, C: Ciphersuite> Deserialize<'de> for SchnorrPoK<C> {
 mod tests {
     use super::*;
     use ciphersuite::group::Group;
-    use ciphersuite::Ed25519;
+    use crate::Ed25519;
+    use ciphersuite::WrappedGroup;
 
     #[test]
     fn schnorr_pok_on_ed25519() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let public_key = Ed25519::generator() * secret;
         let binding = b"test-context";
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding);
@@ -114,16 +116,16 @@ mod tests {
     #[test]
     fn schnorr_pok_rejects_identity_public_key() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
-        let identity = <Ed25519 as Ciphersuite>::G::identity();
+        let identity = <Ed25519 as WrappedGroup>::G::identity();
         assert!(!pok.verify(&identity, &[]), "verification must reject identity public key");
     }
 
     #[test]
     fn schnorr_pok_with_zero_secret() {
         let mut rng = rand_core::OsRng;
-        let zero = <Ed25519 as Ciphersuite>::F::ZERO;
+        let zero = <Ed25519 as WrappedGroup>::F::ZERO;
         let public_key = Ed25519::generator() * zero; // identity
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &zero, &[]);
         // Zero secret produces identity public key, which should be rejected
@@ -136,7 +138,7 @@ mod tests {
     #[test]
     fn schnorr_pok_serialization_roundtrip() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let public_key = Ed25519::generator() * secret;
         let binding = b"roundtrip-test";
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, binding);
@@ -148,7 +150,7 @@ mod tests {
     #[test]
     fn schnorr_pok_proofs_are_non_deterministic() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let public_key = Ed25519::generator() * secret;
         let pok1 = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
         let pok2 = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
@@ -164,8 +166,8 @@ mod tests {
     #[test]
     fn schnorr_pok_read_rejects_identity_nonce() {
         // Manually construct a proof with identity nonce
-        let identity = <Ed25519 as Ciphersuite>::G::identity();
-        let s = <Ed25519 as Ciphersuite>::F::random(&mut rand_core::OsRng);
+        let identity = <Ed25519 as WrappedGroup>::G::identity();
+        let s = <Ed25519 as WrappedGroup>::F::random(&mut rand_core::OsRng);
         let mut data = Vec::new();
         write_group_element::<Ed25519, _>(&mut data, &identity).unwrap();
         write_field_element::<Ed25519, _>(&mut data, &s).unwrap();
@@ -181,7 +183,7 @@ mod tests {
     #[test]
     fn schnorr_pok_read_rejects_truncated_data() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let pok = SchnorrPoK::<Ed25519>::prove(&mut rng, &secret, &[]);
         let data = Writable::serialize(&pok);
         // Truncate the data
@@ -193,7 +195,7 @@ mod tests {
     #[test]
     fn schnorr_pok_binding_mismatch_fails() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let public_key = Ed25519::generator() * secret;
         let binding_a = b"context-a";
         let binding_b = b"context-b";
@@ -209,7 +211,7 @@ mod tests {
     #[test]
     fn schnorr_pok_different_bindings_produce_different_proofs() {
         let mut rng = rand_core::OsRng;
-        let secret = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let secret = <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let binding_a = b"context-a";
         let binding_b = b"context-b";
         // Use a deterministic "rng" by capturing state - actually we can't easily do this,
@@ -229,10 +231,10 @@ mod tests {
     fn challenge_differs_for_different_inputs() {
         let mut rng = rand_core::OsRng;
         let g = Ed25519::generator();
-        let nonce1 = g * <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let nonce2 = g * <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let pk1 = g * <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let pk2 = g * <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let nonce1 = g * <Ed25519 as WrappedGroup>::F::random(&mut rng);
+        let nonce2 = g * <Ed25519 as WrappedGroup>::F::random(&mut rng);
+        let pk1 = g * <Ed25519 as WrappedGroup>::F::random(&mut rng);
+        let pk2 = g * <Ed25519 as WrappedGroup>::F::random(&mut rng);
         let binding = b"test";
 
         let c1 = SchnorrPoK::<Ed25519>::challenge(&nonce1, &pk1, binding);
@@ -253,8 +255,8 @@ mod tests {
     fn challenge_differs_for_different_bindings() {
         let mut rng = rand_core::OsRng;
         let g = Ed25519::generator();
-        let nonce = g * <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let pk = g * <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let nonce = g * <Ed25519 as WrappedGroup>::F::random(&mut rng);
+        let pk = g * <Ed25519 as WrappedGroup>::F::random(&mut rng);
 
         let c1 = SchnorrPoK::<Ed25519>::challenge(&nonce, &pk, b"binding-1");
         let c2 = SchnorrPoK::<Ed25519>::challenge(&nonce, &pk, b"binding-2");

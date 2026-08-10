@@ -1,6 +1,6 @@
 use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::GroupEncoding;
-use ciphersuite::Ciphersuite;
+use ciphersuite::{Ciphersuite, WrappedGroup};
 pub use crate::io::Readable;
 pub use dalek_ff_group::{EdwardsPoint as XmrPoint, Scalar as XmrScalar};
 use monero::consensus::encode::Error as MoneroError;
@@ -21,7 +21,7 @@ pub fn write_field_element<C: Ciphersuite, W: Write>(w: &mut W, element: &C::F) 
 
 pub fn read_group_element<C: Ciphersuite, R: Read + ?Sized>(reader: &mut R) -> Result<C::G, MoneroError> {
     let len = reader.read_u64()? as usize;
-    let mut buf = <<C as Ciphersuite>::G as GroupEncoding>::Repr::default();
+    let mut buf = <<C as WrappedGroup>::G as GroupEncoding>::Repr::default();
     if buf.as_ref().len() < len {
         return Err(MoneroError::ParseFailed("Insufficient data left to read a group element"));
     }
@@ -32,7 +32,7 @@ pub fn read_group_element<C: Ciphersuite, R: Read + ?Sized>(reader: &mut R) -> R
 
 pub fn read_field_element<C: Ciphersuite, R: Read + ?Sized>(reader: &mut R) -> Result<C::F, MoneroError> {
     let len = reader.read_u64()? as usize;
-    let mut buf = <<C as Ciphersuite>::F as PrimeField>::Repr::default();
+    let mut buf = <<C as WrappedGroup>::F as PrimeField>::Repr::default();
     if buf.as_ref().len() < len {
         return Err(MoneroError::ParseFailed("Insufficient data left to read a field element"));
     }

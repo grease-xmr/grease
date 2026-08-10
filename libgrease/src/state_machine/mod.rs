@@ -24,7 +24,7 @@ pub use establishing_channel::{
 pub use events::LifeCycleEvent;
 pub use lifecycle::{DefaultChannelState, LifecycleStage};
 pub use multisig_setup::{CustomerSetup, CustomerStage, MerchantSetup, MerchantStage, MultisigSetupError, SetupState};
-pub use open_channel::{AppliedUpdate, EstablishedChannelState};
+pub use open_channel::{AppliedUpdate, EstablishedChannelState, UpdateHistory, DEFAULT_PROOF_HISTORY_DEPTH};
 pub use proposing_channel::{
     AwaitProposal, AwaitingConfirmation, AwaitingProposalResponse, ChannelProposer, MerchantSeedInfo,
     NewChannelProposal, ProposalConfirmed, ProposalResponse, ProposeProtocolError, RejectProposalReason,
@@ -35,4 +35,4 @@ pub use commitment_tx::CommitmentTransaction;
 
 // Re-export MerchantSeedBuilder and provide a backwards-compatible alias
 pub use crate::grease_protocol::propose_channel::MerchantSeedBuilder;
-pub type ChannelSeedBuilder = MerchantSeedBuilder<ciphersuite::Ed25519>;
+pub type ChannelSeedBuilder = MerchantSeedBuilder<crate::Ed25519>;

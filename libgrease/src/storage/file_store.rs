@@ -58,7 +58,6 @@ mod test {
         establish_wallet, finalize_channel_ids, fund_both, test_params,
     };
     use crate::tests::propose_channel_tests::propose_channel;
-    use crate::XmrScalar;
     use rand_core::OsRng;
     use std::sync::Arc;
 
@@ -94,7 +93,7 @@ mod test {
     /// flow; here we re-derive it from the spend key as the test helpers do.
     fn re_inject_signing_share(state: &mut EstablishingState) {
         if let Some(wallet) = state.multisig_wallet.as_mut() {
-            let share = XmrScalar(*wallet.my_spend_key().to_dalek_scalar());
+            let share = *wallet.my_spend_key().to_dalek_scalar();
             wallet.inject_test_signing_share(&share);
         }
     }

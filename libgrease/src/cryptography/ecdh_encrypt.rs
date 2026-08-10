@@ -6,6 +6,7 @@ use crate::error::ReadError;
 use crate::grease_protocol::utils::{read_field_element, read_group_element, write_field_element, write_group_element};
 use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
+use crate::cryptography::ciphersuite_ext::{hash_to_F, random_nonzero_F};
 use crate::io::Writable;
 use rand_core::{CryptoRng, RngCore};
 use std::io::Read;
@@ -43,10 +44,10 @@ impl<C: Ciphersuite> EncryptedScalar<C> {
         R: RngCore + CryptoRng,
         D: AsRef<[u8]>,
     {
-        let mut r = C::random_nonzero_F(rng);
+        let mut r = random_nonzero_F::<C, _>(rng);
         let nonce = C::generator() * r;
         let shared_point = *recipient_pubkey * r;
-        let shared_secret = C::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
+        let shared_secret = hash_to_F::<C>(domain.as_ref(), shared_point.to_bytes().as_ref());
         let chi = *message + shared_secret;
         r.zeroize();
         Self { nonce, chi }
@@ -61,7 +62,7 @@ impl<C: Ciphersuite> EncryptedScalar<C> {
     /// 4. Return `m`
     pub fn decrypt<D: AsRef<[u8]>>(&self, recipient_private_key: &C::F, domain: D) -> C::F {
         let shared_point = self.nonce * *recipient_private_key;
-        let shared_secret = C::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
+        let shared_secret = hash_to_F::<C>(domain.as_ref(), shared_point.to_bytes().as_ref());
         self.chi - shared_secret
     }
 
@@ -95,15 +96,16 @@ impl<C: Ciphersuite> Writable for EncryptedScalar<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ciphersuite::group::ff::Field;
-    use ciphersuite::{Ed25519, Secp256k1};
+    use crate::Ed25519;
+    use dalek_ff_group::Ristretto;
+    use ciphersuite::WrappedGroup;
 
     #[test]
     fn encrypt_decrypt_roundtrip_ed25519() {
         let mut rng = rand_core::OsRng;
-        let private_key = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let private_key = random_nonzero_F::<Ed25519, _>(&mut rng);
         let public_key = Ed25519::generator() * private_key;
-        let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let message = <Ed25519 as WrappedGroup>::F::random(&mut rng);
 
         let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
         let decrypted = encrypted.decrypt(&private_key, DEFAULT_ENCRYPT_DOMAIN);
@@ -111,14 +113,18 @@ mod tests {
         assert_eq!(message, decrypted);
     }
 
+    /// The second curve keeps `EncryptedScalar` honest about being generic over the ciphersuite rather than
+    /// quietly Ed25519-only. It was `Secp256k1` until the serai swap: `ciphersuite` 0.4.2 moved that impl behind
+    /// `modular-frost`'s `secp256k1` feature, which pulls `k256` back in, and `Ristretto` is a second curve
+    /// already in the graph with a different preferred hash (Blake2b512 rather than Sha512).
     #[test]
-    fn encrypt_decrypt_roundtrip_secp256k1() {
+    fn encrypt_decrypt_roundtrip_ristretto() {
         let mut rng = rand_core::OsRng;
-        let private_key = <Secp256k1 as Ciphersuite>::random_nonzero_F(&mut rng);
-        let public_key = Secp256k1::generator() * private_key;
-        let message = <Secp256k1 as Ciphersuite>::F::random(&mut rng);
+        let private_key = random_nonzero_F::<Ristretto, _>(&mut rng);
+        let public_key = Ristretto::generator() * private_key;
+        let message = <Ristretto as WrappedGroup>::F::random(&mut rng);
 
-        let encrypted = EncryptedScalar::<Secp256k1>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
+        let encrypted = EncryptedScalar::<Ristretto>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
         let decrypted = encrypted.decrypt(&private_key, DEFAULT_ENCRYPT_DOMAIN);
 
         assert_eq!(message, decrypted);
@@ -127,10 +133,10 @@ mod tests {
     #[test]
     fn decrypt_with_wrong_key_produces_wrong_result() {
         let mut rng = rand_core::OsRng;
-        let private_key = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
-        let wrong_key = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let private_key = random_nonzero_F::<Ed25519, _>(&mut rng);
+        let wrong_key = random_nonzero_F::<Ed25519, _>(&mut rng);
         let public_key = Ed25519::generator() * private_key;
-        let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let message = <Ed25519 as WrappedGroup>::F::random(&mut rng);
 
         let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
         let decrypted = encrypted.decrypt(&wrong_key, DEFAULT_ENCRYPT_DOMAIN);
@@ -141,9 +147,9 @@ mod tests {
     #[test]
     fn decrypt_with_wrong_domain_produces_wrong_result() {
         let mut rng = rand_core::OsRng;
-        let private_key = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let private_key = random_nonzero_F::<Ed25519, _>(&mut rng);
         let public_key = Ed25519::generator() * private_key;
-        let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let message = <Ed25519 as WrappedGroup>::F::random(&mut rng);
 
         let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, b"domain_a");
         let decrypted = encrypted.decrypt(&private_key, b"domain_b");
@@ -154,9 +160,9 @@ mod tests {
     #[test]
     fn serialization_roundtrip() {
         let mut rng = rand_core::OsRng;
-        let private_key = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let private_key = random_nonzero_F::<Ed25519, _>(&mut rng);
         let public_key = Ed25519::generator() * private_key;
-        let message = <Ed25519 as Ciphersuite>::F::random(&mut rng);
+        let message = <Ed25519 as WrappedGroup>::F::random(&mut rng);
 
         let encrypted = EncryptedScalar::<Ed25519>::encrypt(&message, &public_key, &mut rng, DEFAULT_ENCRYPT_DOMAIN);
         let serialized = encrypted.serialize();
@@ -168,12 +174,11 @@ mod tests {
 
     #[test]
     fn reject_identity_nonce_on_deserialization() {
-        use ciphersuite::group::Group;
 
         let mut rng = rand_core::OsRng;
         // Create an encrypted scalar with identity nonce manually
-        let chi = <Ed25519 as Ciphersuite>::F::random(&mut rng);
-        let identity_nonce = <Ed25519 as Ciphersuite>::G::identity();
+        let chi = <Ed25519 as WrappedGroup>::F::random(&mut rng);
+        let identity_nonce = <Ed25519 as WrappedGroup>::G::identity();
         let malformed = EncryptedScalar::<Ed25519> { nonce: identity_nonce, chi };
 
         let serialized = malformed.serialize();

@@ -318,13 +318,13 @@ impl ArbiterClient for MockArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ciphersuite::WrappedGroup;
     use crate::arbiter::client::TransportKeyPair;
     use crate::cryptography::attestation::verify_attestation;
     use crate::grease_protocol::update_record::{CloseHash, HalfSignedUpdateRecord, CLOSE_HASH_LEN};
     use crate::payment_channel::ChannelRole;
     use crate::XmrScalar;
-    use ciphersuite::group::ff::Field;
-    use ciphersuite::{Ciphersuite, Ed25519};
+    use crate::Ed25519;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{OsRng, SeedableRng};
     use std::str::FromStr;

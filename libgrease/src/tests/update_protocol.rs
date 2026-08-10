@@ -11,8 +11,8 @@
 //! production but exercises exactly the same code paths as `(104, 53)` at a fraction of the cost. The production
 //! profile is pinned by `cryptography::binding_proof`'s own tests.
 
-use ciphersuite::group::ff::Field;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use sha2::{Digest, Sha512};
 use std::future::Future;

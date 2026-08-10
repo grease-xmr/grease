@@ -4,7 +4,7 @@ use crate::cryptography::keys::Curve25519Secret;
 use crate::grease_protocol::update_record::CloseHash;
 use crate::payment_channel::HasRole;
 use crate::XmrScalar;
-use ciphersuite::Ed25519;
+use crate::Ed25519;
 use rand_core::{CryptoRng, RngCore};
 use thiserror::Error;
 
@@ -65,4 +65,50 @@ pub trait AdapterSignatureHandler: HasRole {
 pub enum AdapterSignatureError {
     #[error("Could not provide result because the following information is missing: {0}")]
     MissingInformation(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grease_protocol::update_record::CloseHash;
+    use std::str::FromStr;
+
+    /// The frozen channel id from `channel_id.rs`'s own known-answer vector, so this vector depends on no
+    /// derivation but the one under test.
+    const CHANNEL_ID: &str = "XGC0845ec076e64984475627c8c1a154defceaeea2ce3cd39c55b02823b4f70a4";
+
+    fn fixed_message() -> Vec<u8> {
+        let id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
+        adapter_signature_message(&id, 7, &CloseHash::new([0xaa; 64]))
+    }
+
+    /// Freezes the adapter-signature message under the live `"Grease AdapterSig v2"` domain tag.
+    ///
+    /// This was the one `flexible-transcript` site in the crate without a known-answer vector. It crosses
+    /// `DigestTranscript`'s member tagging and little-endian length prefixes and `blake2`'s `Blake2b512`, so a
+    /// drift here means a pre-signature produced on one revision no longer verifies against one produced on
+    /// another.
+    /// The value is stated over the pre-swap `DigestTranscript` framing: it was cross-checked against an
+    /// independent model of that framing, which reproduces the `commitment_tx_message` vector K-24 froze on the
+    /// old pin. So this pins the old behaviour rather than rubber-stamping the new.
+    #[test]
+    fn adapter_signature_message_is_frozen() {
+        const ADAPTER_SIG_V2: &str = concat!(
+            "a07115834d098c18bc2e9a97c9cdff81a17bba27c97346dcef32bee47d953624",
+            "e2c5b78f01e8b62416cd9a3eb930a23b955442bf6c813dc7915d1fa03d283233",
+        );
+        assert_eq!(hex::encode(fixed_message()), ADAPTER_SIG_V2);
+    }
+
+    /// All three absorbed fields separate the message, so a pre-signature cannot be replayed at another state
+    /// or against another closing transaction.
+    #[test]
+    fn adapter_signature_message_binds_each_absorbed_field() {
+        let id = ChannelId::from_str(CHANNEL_ID).expect("valid channel id");
+        let other_id = ChannelId::from_str(&CHANNEL_ID.replace("XGC0", "XGC1")).expect("valid channel id");
+        let base = fixed_message();
+        assert_ne!(adapter_signature_message(&other_id, 7, &CloseHash::new([0xaa; 64])), base);
+        assert_ne!(adapter_signature_message(&id, 8, &CloseHash::new([0xaa; 64])), base);
+        assert_ne!(adapter_signature_message(&id, 7, &CloseHash::new([0xab; 64])), base);
+    }
 }

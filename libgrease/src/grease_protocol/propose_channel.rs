@@ -1,6 +1,7 @@
 use crate::arbiter::ArbiterConfiguration;
 use crate::balance::Balances;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::Ciphersuite;
 use monero::{Address, Network};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -12,7 +13,7 @@ use thiserror::Error;
 /// closing address, the requested initial balances, the merchant's public key, and — as the protocol-specific
 /// initialization data — the arbiters the merchant is willing to be judged by, each carrying its own dispute-window
 /// duration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
     /// The Monero network this channel will run on
@@ -37,6 +38,22 @@ pub struct MerchantSeedInfo<KC: Ciphersuite = Ed25519> {
     /// The merchant nonce, which blinds the channel-id hash and lets the merchant recognise this proposal.
     pub merchant_nonce: u64,
 }
+
+// Hand-written rather than derived: a derived `PartialEq` would demand `KC: PartialEq`, and the ciphersuite
+// marker types are unit structs that do not implement it. Equality is over the fields, none of which involve `KC`
+// itself.
+impl<KC: Ciphersuite> PartialEq for MerchantSeedInfo<KC> {
+    fn eq(&self, other: &Self) -> bool {
+        self.network == other.network
+            && self.accepted_arbiters == other.accepted_arbiters
+            && self.initial_balances == other.initial_balances
+            && self.merchant_closing_address == other.merchant_closing_address
+            && self.merchant_public_key == other.merchant_public_key
+            && self.merchant_nonce == other.merchant_nonce
+    }
+}
+
+impl<KC: Ciphersuite> Eq for MerchantSeedInfo<KC> {}
 
 impl<KC: Ciphersuite> MerchantSeedInfo<KC> {
     /// Whether `arbiter` is one of the arbiters this seed offers.

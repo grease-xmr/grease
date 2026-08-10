@@ -93,7 +93,7 @@ impl MultisigWalletKeyNegotiation {
         sort_pubkeys(&mut pubkeys);
         let musig_keys =
             musig_2_of_2(&self.partial_spend_key, &pubkeys).map_err(|_| MultisigWalletError::IncorrectPublicKey)?;
-        self.joint_private_view_key = Some(Curve25519Secret::from(jprv_vk.0));
+        self.joint_private_view_key = Some(Curve25519Secret::from(*jprv_vk));
         self.joint_public_view_key = Some(Curve25519PublicKey::from(j_pub_vk));
         self.joint_public_spend_key = Some(Curve25519PublicKey::from(musig_keys.group_key()));
         Ok(())

@@ -5,6 +5,7 @@
 
 use ciphersuite::group::GroupEncoding;
 use ciphersuite::Ciphersuite;
+use crate::cryptography::ciphersuite_ext::hash_to_F;
 use zeroize::Zeroizing;
 
 /// Default domain separator for ECDH shared secret derivation.
@@ -19,23 +20,25 @@ pub const DEFAULT_ECDH_DOMAIN: &[u8] = b"ECDHSharedSecret";
 /// The result is wrapped in `Zeroizing` to ensure it is securely erased from memory when dropped.
 pub fn ecdh<C: Ciphersuite, D: AsRef<[u8]>>(secret: &C::F, peer_pubkey: &C::G, domain: D) -> Zeroizing<C::F> {
     let shared_point = *peer_pubkey * *secret;
-    let shared_secret = C::hash_to_F(domain.as_ref(), shared_point.to_bytes().as_ref());
+    let shared_secret = hash_to_F::<C>(domain.as_ref(), shared_point.to_bytes().as_ref());
     Zeroizing::new(shared_secret)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ciphersuite::Ed25519;
+    use ciphersuite::WrappedGroup;
+    use crate::cryptography::ciphersuite_ext::random_nonzero_F;
+    use crate::Ed25519;
 
     #[test]
     fn ecdh_symmetric() {
         let mut rng = rand_core::OsRng;
 
-        let alice_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let alice_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
         let alice_pubkey = Ed25519::generator() * alice_secret;
 
-        let bob_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let bob_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
         let bob_pubkey = Ed25519::generator() * bob_secret;
 
         // Alice computes shared secret with Bob's public key
@@ -51,8 +54,8 @@ mod tests {
     fn different_domains_produce_different_secrets() {
         let mut rng = rand_core::OsRng;
 
-        let alice_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
-        let bob_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let alice_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
+        let bob_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
         let bob_pubkey = Ed25519::generator() * bob_secret;
 
         let secret_a = ecdh::<Ed25519, _>(&alice_secret, &bob_pubkey, b"domain_a");
@@ -65,12 +68,12 @@ mod tests {
     fn different_peers_produce_different_secrets() {
         let mut rng = rand_core::OsRng;
 
-        let alice_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let alice_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
 
-        let bob_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let bob_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
         let bob_pubkey = Ed25519::generator() * bob_secret;
 
-        let charlie_secret = <Ed25519 as Ciphersuite>::random_nonzero_F(&mut rng);
+        let charlie_secret = random_nonzero_F::<Ed25519, _>(&mut rng);
         let charlie_pubkey = Ed25519::generator() * charlie_secret;
 
         let shared_with_bob = ecdh::<Ed25519, _>(&alice_secret, &bob_pubkey, DEFAULT_ECDH_DOMAIN);

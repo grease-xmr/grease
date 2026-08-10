@@ -12,8 +12,8 @@
 //!
 //! The binding proof runs at a cheap `(n, t) = (12, 5)` profile — useless in production, identical code path.
 
-use ciphersuite::group::ff::Field;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use std::str::FromStr;

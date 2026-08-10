@@ -91,8 +91,10 @@
 //! - Offsets are fresh and independent per state and per party; nothing is derived from a previous offset
 
 mod commit;
+pub mod ciphersuite_ext;
 pub mod encryption_context;
 pub mod secret_bytes;
+mod secure_digest;
 pub mod serializable_secret;
 
 pub mod adapter_signature;
@@ -105,3 +107,4 @@ pub mod pok;
 pub mod pvss;
 pub mod verifiable_encryption;
 pub use commit::{Commit, HashCommitment256};
+pub use secure_digest::SecureDigest;

@@ -5,8 +5,7 @@ use libgrease::wallet::errors::WalletError;
 use libgrease::wallet::multisig_wallet::MultisigWallet;
 use libgrease::wallet::watch_only::WatchOnlyWallet;
 use log::*;
-use monero_rpc::RpcError;
-use monero_simple_request_rpc::SimpleRequestRpc;
+use libgrease::wallet::connect_to_rpc;
 use monero_wallet::address::{MoneroAddress, Network};
 
 /// To run this example, you need a Regtest Monero node running on localhost:25070.
@@ -87,7 +86,7 @@ async fn main() -> Result<(), WalletError> {
         if must_scan {
             let outputs = wallet.scan(None).await?;
             println!("{outputs} outputs found in scan");
-            let saved = wallet.save("demo_wallet.bin").map_err(|e| RpcError::InternalError(e.to_string()))?;
+            let saved = wallet.save("demo_wallet.bin").map_err(|e| WalletError::InternalError(e.to_string()))?;
             println!("Saved {saved} outputs to disk");
         }
     }
@@ -173,7 +172,7 @@ async fn main() -> Result<(), WalletError> {
 }
 
 async fn test_watch_only(private_view_key: &Curve25519Secret, public_spend_key: &Curve25519PublicKey, birthday: u64) {
-    let rpc = SimpleRequestRpc::new("http://localhost:25070".into()).await.expect("Failed to start rpc");
+    let rpc = connect_to_rpc("http://localhost:25070").await.expect("Failed to start rpc");
     let mut watch_only = WatchOnlyWallet::new(rpc, private_view_key.clone(), public_spend_key.clone(), Some(birthday))
         .expect("Unable to create wallet");
     let result = watch_only.scan(None, None).await.expect("Failed to scan wallet");

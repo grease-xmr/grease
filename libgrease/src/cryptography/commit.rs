@@ -1,6 +1,7 @@
 use crate::error::ReadError;
 use crate::grease_protocol::utils::Readable;
-use flexible_transcript::{SecureDigest, Transcript};
+use crate::cryptography::SecureDigest;
+use flexible_transcript::Transcript;
 use hex::{FromHex, FromHexError, ToHex};
 use crate::io::Writable;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

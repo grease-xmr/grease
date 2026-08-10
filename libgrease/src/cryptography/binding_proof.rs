@@ -68,7 +68,8 @@
 
 use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::GroupEncoding;
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
 use dalek_ff_group::{EdwardsPoint, Scalar};
 use flexible_transcript::{RecommendedTranscript, Transcript};
 use hex::ToHex;

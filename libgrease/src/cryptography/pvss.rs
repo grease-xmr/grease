@@ -44,7 +44,9 @@
 use blake2::{Blake2b512, Digest};
 use ciphersuite::group::ff::{Field, PrimeField};
 use ciphersuite::group::{Group, GroupEncoding};
-use ciphersuite::{Ciphersuite, Ed25519};
+use crate::Ed25519;
+use ciphersuite::WrappedGroup;
+use crate::cryptography::ciphersuite_ext::hash_to_F;
 use dalek_ff_group::{EdwardsPoint, Scalar};
 use flexible_transcript::{RecommendedTranscript, Transcript};
 use rand_core::{CryptoRng, RngCore};
@@ -156,7 +158,7 @@ fn candidate_base_point(domain_tag: &[u8], counter: u64) -> Option<EdwardsPoint>
     // `from_bytes` already rejects non-canonical encodings and torsion; the cofactor multiplication is defence in
     // depth and keeps the derivation safe even under a laxer decoder.
     Option::<EdwardsPoint>::from(EdwardsPoint::from_bytes(&repr))
-        .map(|p| p.mul_by_cofactor())
+        .map(|p| EdwardsPoint(p.mul_by_cofactor()))
         .filter(|p| !bool::from(p.is_identity()))
 }
 
@@ -333,7 +335,9 @@ fn lagrange_coefficient_at_zero(index: u32, shares: &[Share]) -> Scalar {
         .filter(|s| s.index != index)
         .map(|s| Scalar::from(s.index as u64))
         .fold(Scalar::ONE, |acc, x_m| {
-            let inv = (x_m - x_k).invert().expect("distinct share indices give a non-zero denominator");
+            // Spelled through `Field` because `curve25519_dalek::Scalar`'s inherent `invert` returns the
+            // scalar directly and silently maps zero to zero.
+            let inv = Field::invert(&(x_m - x_k)).expect("distinct share indices give a non-zero denominator");
             acc * x_m * inv
         })
 }
@@ -371,7 +375,7 @@ fn prf_scalar(seed: &[u8; 32], label: &[u8], counter: u64, bound: &[u8]) -> Scal
     data.extend_from_slice(&counter.to_le_bytes());
     data.extend_from_slice(&(bound.len() as u64).to_le_bytes());
     data.extend_from_slice(bound);
-    <Ed25519 as Ciphersuite>::hash_to_F(PRF_DOMAIN_TAG, &data)
+    hash_to_F::<Ed25519>(PRF_DOMAIN_TAG, &data)
 }
 
 // ============================================================================
@@ -421,7 +425,7 @@ fn dleq_challenge(
     t.append_message(b"commitment_b", f_b.to_bytes());
     t.append_message(b"nonce_g", r_g.to_bytes());
     t.append_message(b"nonce_b", r_b.to_bytes());
-    <Ed25519 as Ciphersuite>::hash_to_F(DLEQ_CHALLENGE_TAG, &t.challenge(b"challenge"))
+    hash_to_F::<Ed25519>(DLEQ_CHALLENGE_TAG, &t.challenge(b"challenge"))
 }
 
 #[cfg(test)]
@@ -430,7 +434,7 @@ mod test {
     use rand_core::OsRng;
 
     fn test_secret() -> Scalar {
-        <Ed25519 as Ciphersuite>::hash_to_F(b"GREASE-PVSS-TEST", b"secret")
+        hash_to_F::<Ed25519>(b"GREASE-PVSS-TEST", b"secret")
     }
 
     fn seeded_dealing(shares: u32, threshold: u32) -> (PvssDealing, Vec<Share>) {
