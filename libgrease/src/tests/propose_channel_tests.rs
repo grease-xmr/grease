@@ -19,7 +19,7 @@ use crate::{XmrPoint, XmrScalar};
 use ciphersuite::group::Group;
 use monero::Network;
 use rand_chacha::ChaCha20Rng;
-use rand_core::{OsRng, SeedableRng};
+use rand_core::{OsRng, RngCore, SeedableRng};
 use std::str::FromStr;
 use std::time::Duration;
 use zeroize::Zeroizing;
@@ -55,7 +55,7 @@ fn build_merchant_seed_with_balances(balances: Balances) -> (MerchantSeedInfo, Z
         .with_arbiter(default_arbiter())
         .with_initial_balances(balances)
         .with_merchant_public_key(XmrPoint::generator() * *merchant_secret)
-        .with_channel_nonce(100)
+        .with_channel_nonce(OsRng.next_u64())
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap())
         .build()
         .expect("to build merchant seed info");
@@ -71,9 +71,15 @@ fn customer_creates_proposal(seed: MerchantSeedInfo) -> ChannelProposer {
     let customer_secret = Zeroizing::new(XmrScalar::random(&mut OsRng));
     let partial_spend_key = Curve25519Secret::random(&mut OsRng);
     let customer_addr = CUSTOMER_ADDRESS.parse().unwrap();
-    let proposer =
-        ChannelProposer::new(seed, default_arbiter(), customer_secret, partial_spend_key, customer_addr, 200)
-            .expect("should create proposer");
+    let proposer = ChannelProposer::new(
+        seed,
+        default_arbiter(),
+        customer_secret,
+        partial_spend_key,
+        customer_addr,
+        OsRng.next_u64(),
+    )
+    .expect("should create proposer");
     assert_eq!(proposer.role(), ChannelRole::Customer);
     proposer
 }
@@ -142,7 +148,7 @@ fn seed_builder_reports_missing_fields() {
             .with_arbiter(default_arbiter())
             .with_initial_balances(test_balances())
             .with_merchant_public_key(XmrPoint::generator())
-            .with_channel_nonce(100)
+            .with_channel_nonce(OsRng.next_u64())
             .with_closing_address(MERCHANT_ADDRESS.parse().unwrap())
     };
     assert!(complete().build().is_ok());
@@ -150,21 +156,21 @@ fn seed_builder_reports_missing_fields() {
     let no_arbiter = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_initial_balances(test_balances())
         .with_merchant_public_key(XmrPoint::generator())
-        .with_channel_nonce(100)
+        .with_channel_nonce(OsRng.next_u64())
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_arbiter.build(), Err(MissingSeedInfo::AcceptedArbiters)));
 
     let no_balances = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_arbiter(default_arbiter())
         .with_merchant_public_key(XmrPoint::generator())
-        .with_channel_nonce(100)
+        .with_channel_nonce(OsRng.next_u64())
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_balances.build(), Err(MissingSeedInfo::InitialBalances)));
 
     let no_key = MerchantSeedBuilder::<crate::Ed25519>::new(Network::Mainnet)
         .with_arbiter(default_arbiter())
         .with_initial_balances(test_balances())
-        .with_channel_nonce(100)
+        .with_channel_nonce(OsRng.next_u64())
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap());
     assert!(matches!(no_key.build(), Err(MissingSeedInfo::MerchantPublicKey)));
 
@@ -179,7 +185,7 @@ fn seed_builder_reports_missing_fields() {
         .with_arbiter(default_arbiter())
         .with_initial_balances(test_balances())
         .with_merchant_public_key(XmrPoint::generator())
-        .with_channel_nonce(100);
+        .with_channel_nonce(OsRng.next_u64());
     assert!(matches!(no_address.build(), Err(MissingSeedInfo::ClosingAddress)));
 }
 
@@ -191,7 +197,7 @@ fn customer_may_pick_any_offered_arbiter() {
         .with_arbiters([arbiter(1), arbiter(2)])
         .with_initial_balances(test_balances())
         .with_merchant_public_key(XmrPoint::generator() * *merchant_secret)
-        .with_channel_nonce(100)
+        .with_channel_nonce(OsRng.next_u64())
         .with_closing_address(MERCHANT_ADDRESS.parse().unwrap())
         .build()
         .expect("to build merchant seed info");
@@ -203,7 +209,7 @@ fn customer_may_pick_any_offered_arbiter() {
         customer_secret,
         Curve25519Secret::random(&mut OsRng),
         CUSTOMER_ADDRESS.parse().unwrap(),
-        200,
+        OsRng.next_u64(),
     )
     .expect("the second offered arbiter is acceptable");
     assert_eq!(proposer.metadata.arbiter_configuration(), &arbiter(2));
@@ -220,7 +226,7 @@ fn customer_rejects_unoffered_arbiter() {
         customer_secret,
         Curve25519Secret::random(&mut OsRng),
         CUSTOMER_ADDRESS.parse().unwrap(),
-        200,
+        OsRng.next_u64(),
     )
     .expect_err("an arbiter outside the seed's offer must be refused");
     assert!(matches!(err, ProposeProtocolError::ArbiterNotAccepted(id) if id == "arbiter-99"));
@@ -271,7 +277,7 @@ fn merchant_rejects_tampered_seed() {
     let customer = customer_creates_proposal(seed);
     let (_customer, mut proposal) = customer.into_proposal();
     // Tamper with the echoed seed's merchant nonce
-    proposal.seed.merchant_nonce = 999;
+    proposal.seed.merchant_nonce = proposal.seed.merchant_nonce.wrapping_add(1);
     let err = merchant.receive_proposal(proposal).unwrap_err();
     assert!(matches!(err, InvalidProposal::SeedMismatch));
 }

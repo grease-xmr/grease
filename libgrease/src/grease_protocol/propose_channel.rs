@@ -113,6 +113,8 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
         self
     }
 
+    /// The merchant's contribution to the channel nonce. Draw it from a CSPRNG: the two nonces are the
+    /// only thing blinding the channel-id hash, so a predictable one lets an observer confirm a guessed `L_F`.
     pub fn with_channel_nonce(mut self, nonce: u64) -> Self {
         self.channel_nonce = Some(nonce);
         self
