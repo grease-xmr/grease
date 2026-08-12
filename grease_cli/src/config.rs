@@ -467,25 +467,34 @@ impl<'de> Deserialize<'de> for PasswordProtectedSecret {
 mod tests {
     use super::*;
 
+    /// Generated at run time rather than written as a literal: a constant here is
+    /// indistinguishable from an embedded production credential to static analysis.
+    fn random_password() -> String {
+        let mut bytes = [0u8; 16];
+        OsRng.fill_bytes(&mut bytes);
+        hex::encode(bytes)
+    }
+
     #[test]
     fn password_protected_encrypt_decrypt_roundtrip() {
         let secret = Curve25519Secret::random(&mut OsRng);
-        let password = "test_password_123";
+        let password = random_password();
 
-        let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
+        let protected = PasswordProtectedSecret::encrypt(&secret, &password).unwrap();
         assert!(protected.is_encrypted());
 
-        let decrypted = protected.decrypt(password).unwrap();
+        let decrypted = protected.decrypt(&password).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
     #[test]
     fn password_protected_wrong_password_fails() {
         let secret = Curve25519Secret::random(&mut OsRng);
-        let password = "correct_password";
+        let password = random_password();
+        let wrong_password = random_password();
 
-        let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
-        let result = protected.decrypt("wrong_password");
+        let protected = PasswordProtectedSecret::encrypt(&secret, &password).unwrap();
+        let result = protected.decrypt(&wrong_password);
         assert!(matches!(result, Err(PasswordProtectedSecretError::DecryptionFailed)));
     }
 
@@ -498,15 +507,15 @@ mod tests {
         assert!(protected.plaintext_secret().is_some());
 
         // Decrypt works with any password for plaintext
-        let decrypted = protected.decrypt("any_password").unwrap();
+        let decrypted = protected.decrypt(&random_password()).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
     #[test]
     fn password_protected_serde_encrypted_roundtrip() {
         let secret = Curve25519Secret::random(&mut OsRng);
-        let password = "test_password";
-        let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
+        let password = random_password();
+        let protected = PasswordProtectedSecret::encrypt(&secret, &password).unwrap();
 
         let yaml = yaml_serde::to_string(&protected).unwrap();
         assert!(yaml.contains("encrypted: true"));
@@ -515,7 +524,7 @@ mod tests {
         assert!(yaml.contains("ciphertext:"));
 
         let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
-        let decrypted = loaded.decrypt(password).unwrap();
+        let decrypted = loaded.decrypt(&password).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
@@ -529,7 +538,7 @@ mod tests {
         assert!(yaml.contains("plaintext:"));
 
         let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
-        let decrypted = loaded.decrypt("").unwrap();
+        let decrypted = loaded.decrypt(&random_password()).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
@@ -541,7 +550,7 @@ mod tests {
         // Legacy format is just a quoted hex string
         let yaml = format!("\"{hex}\"");
         let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
-        let decrypted = loaded.decrypt("").unwrap();
+        let decrypted = loaded.decrypt(&random_password()).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 }
