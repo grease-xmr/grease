@@ -113,6 +113,8 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
         self
     }
 
+    /// The merchant's channel nonce. Draw it from a CSPRNG: together with the customer's nonce it blinds the
+    /// channel-id hash, which is what stops a published id from revealing the funding output's linking tag.
     pub fn with_channel_nonce(mut self, nonce: u64) -> Self {
         self.channel_nonce = Some(nonce);
         self

@@ -96,7 +96,8 @@ where
     ///
     /// The customer provides their channel secret, closing address, nonce, and the arbiter they pick from the
     /// ones the seed offers. The `ChannelIdMetadata` is constructed internally from the combined merchant +
-    /// customer data.
+    /// customer data. Like the merchant's, `customer_nonce` must be drawn from a CSPRNG: the two nonces together
+    /// blind the channel-id hash so a published id reveals neither party's funding-output linking tag.
     pub fn new(
         seed: MerchantSeedInfo<KC>,
         arbiter: ArbiterConfiguration,
