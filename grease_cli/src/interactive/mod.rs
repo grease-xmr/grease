@@ -61,7 +61,7 @@ fn initialize_key_manager(config: &mut GlobalOptions) -> Result<MoneroKeyManager
                 .interact()
                 .map_err(|e| anyhow::anyhow!("Failed to read password: {e}"))?;
             config
-                .initial_secret(&password)
+                .initial_secret(Some(&password))
                 .map_err(|e| anyhow::anyhow!("Failed to decrypt initial secret: {e}"))?
                 .ok_or_else(|| anyhow::anyhow!("Initial secret is missing"))?
         } else {

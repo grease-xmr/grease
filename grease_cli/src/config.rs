@@ -176,15 +176,20 @@ impl GlobalOptions {
     /// Returns the initial secret, decrypting it if necessary.
     ///
     /// # Arguments
-    /// * `password` - The password to decrypt the secret. If the secret is stored in plaintext,
-    ///   this parameter is ignored but a warning is logged.
+    /// * `password` - The password to decrypt the secret, or `None` when no password is available.
+    ///   If the secret is stored in plaintext, this parameter is ignored but a warning is logged.
+    ///   If the secret is encrypted and `password` is `None`, decryption fails with
+    ///   [`PasswordProtectedSecretError::PasswordRequired`].
     ///
     /// # Returns
     /// The decrypted secret key, or `None` if no secret is configured.
     ///
     /// # Errors
-    /// Returns an error if the password is incorrect or decryption fails.
-    pub fn initial_secret(&self, password: &str) -> Result<Option<Curve25519Secret>, PasswordProtectedSecretError> {
+    /// Returns an error if the password is incorrect, missing, or decryption fails.
+    pub fn initial_secret(
+        &self,
+        password: Option<&str>,
+    ) -> Result<Option<Curve25519Secret>, PasswordProtectedSecretError> {
         match &self.initial_secret {
             Some(protected) => Ok(Some(protected.decrypt(password)?)),
             None => Ok(None),
@@ -225,6 +230,8 @@ pub fn default_config_path() -> PathBuf {
 pub enum PasswordProtectedSecretError {
     #[error("Decryption failed: incorrect password or corrupted data")]
     DecryptionFailed,
+    #[error("A password is required to decrypt this secret")]
+    PasswordRequired,
     #[error("Invalid hex encoding: {0}")]
     HexError(#[from] hex::FromHexError),
     #[error("Invalid key format: {0}")]
@@ -324,14 +331,17 @@ impl PasswordProtectedSecret {
 
     /// Decrypt the secret with a password.
     ///
-    /// For plaintext secrets, the password is ignored but a warning is logged.
-    pub fn decrypt(&self, password: &str) -> Result<Curve25519Secret, PasswordProtectedSecretError> {
+    /// `password` is `None` when no password is available. A `Plaintext` secret ignores the
+    /// argument entirely (whether `Some` or `None`) and logs a warning. An `Encrypted` secret
+    /// requires a password: passing `None` returns [`PasswordProtectedSecretError::PasswordRequired`].
+    pub fn decrypt(&self, password: Option<&str>) -> Result<Curve25519Secret, PasswordProtectedSecretError> {
         match self {
             Self::Plaintext(secret) => {
                 log::warn!("Loading plaintext secret from config. Consider using password protection.");
                 Ok(secret.clone())
             }
             Self::Encrypted { salt, nonce, ciphertext } => {
+                let password = password.ok_or(PasswordProtectedSecretError::PasswordRequired)?;
                 // Parse salt and derive key
                 let salt = SaltString::from_b64(salt)
                     .map_err(|e| PasswordProtectedSecretError::Argon2Error(format!("Invalid salt: {e}")))?;
@@ -467,25 +477,33 @@ impl<'de> Deserialize<'de> for PasswordProtectedSecret {
 mod tests {
     use super::*;
 
+    /// Generate a random password so tests never embed a hard-coded credential literal.
+    fn random_password() -> String {
+        let mut bytes = [0u8; 16];
+        OsRng.fill_bytes(&mut bytes);
+        hex::encode(bytes)
+    }
+
     #[test]
     fn password_protected_encrypt_decrypt_roundtrip() {
         let secret = Curve25519Secret::random(&mut OsRng);
-        let password = "test_password_123";
+        let password = random_password();
 
-        let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
+        let protected = PasswordProtectedSecret::encrypt(&secret, &password).unwrap();
         assert!(protected.is_encrypted());
 
-        let decrypted = protected.decrypt(password).unwrap();
+        let decrypted = protected.decrypt(Some(&password)).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
     #[test]
     fn password_protected_wrong_password_fails() {
         let secret = Curve25519Secret::random(&mut OsRng);
-        let password = "correct_password";
+        let password = random_password();
+        let wrong = random_password();
 
-        let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
-        let result = protected.decrypt("wrong_password");
+        let protected = PasswordProtectedSecret::encrypt(&secret, &password).unwrap();
+        let result = protected.decrypt(Some(&wrong));
         assert!(matches!(result, Err(PasswordProtectedSecretError::DecryptionFailed)));
     }
 
@@ -497,16 +515,24 @@ mod tests {
         assert!(!protected.is_encrypted());
         assert!(protected.plaintext_secret().is_some());
 
-        // Decrypt works with any password for plaintext
-        let decrypted = protected.decrypt("any_password").unwrap();
+        // Plaintext secrets need no password to decrypt.
+        let decrypted = protected.decrypt(None).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
+    }
+
+    #[test]
+    fn encrypted_secret_without_password_errors() {
+        let secret = Curve25519Secret::random(&mut OsRng);
+        let protected = PasswordProtectedSecret::encrypt(&secret, &random_password()).unwrap();
+        let result = protected.decrypt(None);
+        assert!(matches!(result, Err(PasswordProtectedSecretError::PasswordRequired)));
     }
 
     #[test]
     fn password_protected_serde_encrypted_roundtrip() {
         let secret = Curve25519Secret::random(&mut OsRng);
-        let password = "test_password";
-        let protected = PasswordProtectedSecret::encrypt(&secret, password).unwrap();
+        let password = random_password();
+        let protected = PasswordProtectedSecret::encrypt(&secret, &password).unwrap();
 
         let yaml = yaml_serde::to_string(&protected).unwrap();
         assert!(yaml.contains("encrypted: true"));
@@ -515,7 +541,7 @@ mod tests {
         assert!(yaml.contains("ciphertext:"));
 
         let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
-        let decrypted = loaded.decrypt(password).unwrap();
+        let decrypted = loaded.decrypt(Some(&password)).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
@@ -529,7 +555,7 @@ mod tests {
         assert!(yaml.contains("plaintext:"));
 
         let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
-        let decrypted = loaded.decrypt("").unwrap();
+        let decrypted = loaded.decrypt(None).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
@@ -541,7 +567,19 @@ mod tests {
         // Legacy format is just a quoted hex string
         let yaml = format!("\"{hex}\"");
         let loaded: PasswordProtectedSecret = yaml_serde::from_str(&yaml).unwrap();
-        let decrypted = loaded.decrypt("").unwrap();
+        let decrypted = loaded.decrypt(None).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
+    }
+
+    #[test]
+    fn global_options_initial_secret_plaintext_without_password() {
+        let secret = Curve25519Secret::random(&mut OsRng);
+        let config = GlobalOptions {
+            initial_secret: Some(PasswordProtectedSecret::plaintext(secret.clone())),
+            ..Default::default()
+        };
+        let loaded = config.initial_secret(None).unwrap().unwrap();
+        assert_eq!(secret.as_hex(), loaded.as_hex());
+        assert!(!config.initial_secret_needs_password());
     }
 }
