@@ -3,6 +3,7 @@ use crate::balance::Balances;
 use crate::Ed25519;
 use ciphersuite::Ciphersuite;
 use monero::{Address, Network};
+use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -113,9 +114,23 @@ impl<KC: Ciphersuite> MerchantSeedBuilder<KC> {
         self
     }
 
+    /// Set the merchant's channel nonce directly.
+    ///
+    /// The nonce must be drawn from a CSPRNG; use [`Self::with_random_channel_nonce`] unless you are
+    /// reconstructing a seed whose nonce already exists.
     pub fn with_channel_nonce(mut self, nonce: u64) -> Self {
         self.channel_nonce = Some(nonce);
         self
+    }
+
+    /// Draw the merchant's channel nonce from `rng`.
+    ///
+    /// The nonce blinds the channel-id hash, which is what hides the funding linking tag `L_F`
+    /// (see [`crate::channel_id::ChannelIdMetadata`]), so it must come from a CSPRNG. Prefer this
+    /// over [`Self::with_channel_nonce`], which exists for rebuilding a seed whose nonce is
+    /// already fixed.
+    pub fn with_random_channel_nonce<R: RngCore + CryptoRng>(self, rng: &mut R) -> Self {
+        self.with_channel_nonce(rng.next_u64())
     }
 
     pub fn build(self) -> Result<MerchantSeedInfo<KC>, MissingSeedInfo> {
