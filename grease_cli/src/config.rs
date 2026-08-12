@@ -467,6 +467,8 @@ impl<'de> Deserialize<'de> for PasswordProtectedSecret {
 mod tests {
     use super::*;
 
+    /// Generated per run so that no cryptographic input is a source literal — a constant here trips
+    /// CodeQL `rust/hard-coded-cryptographic-value`.
     fn random_password() -> String {
         let mut bytes = [0u8; 16];
         OsRng.fill_bytes(&mut bytes);
