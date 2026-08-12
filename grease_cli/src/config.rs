@@ -498,7 +498,8 @@ mod tests {
         assert!(protected.plaintext_secret().is_some());
 
         // Decrypt works with any password for plaintext
-        let decrypted = protected.decrypt("any_password").unwrap();
+        let password = OsRng.next_u64().to_string();
+        let decrypted = protected.decrypt(&password).unwrap();
         assert_eq!(secret.as_hex(), decrypted.as_hex());
     }
 
