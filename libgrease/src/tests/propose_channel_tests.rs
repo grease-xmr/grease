@@ -77,9 +77,15 @@ fn customer_creates_proposal(seed: MerchantSeedInfo) -> ChannelProposer {
     let customer_secret = Zeroizing::new(XmrScalar::random(&mut OsRng));
     let partial_spend_key = Curve25519Secret::random(&mut OsRng);
     let customer_addr = CUSTOMER_ADDRESS.parse().unwrap();
-    let proposer =
-        ChannelProposer::new(seed, default_arbiter(), customer_secret, partial_spend_key, customer_addr, channel_nonce())
-            .expect("should create proposer");
+    let proposer = ChannelProposer::new(
+        seed,
+        default_arbiter(),
+        customer_secret,
+        partial_spend_key,
+        customer_addr,
+        channel_nonce(),
+    )
+    .expect("should create proposer");
     assert_eq!(proposer.role(), ChannelRole::Customer);
     proposer
 }
