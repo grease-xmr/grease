@@ -17,6 +17,12 @@ that can be implemented in production, but as of now, consider this a proof-of-c
 
 # Using the Grease CLI
 
+> **Archived.** The walkthrough below describes the v1 CLI, which spoke to peers over the v1 `grease-p2p` stack.
+> Neither survived the move to monero-oxide / fcmp++, so both were archived out of the workspace: the sources are in
+> `grease-cli.tar.gz`, `grease-p2p.tar.gz` and `e2e.tar.gz` at the repository root, as of commit `8d43503`. Nothing
+> here runs against `main` today — the workspace builds `libgrease` only. The section is kept as a record of the
+> protocol flow the v2 client will need to reproduce.
+
 (You can run Grease in a local testnet. If you need help setting that up, 
 follow the [testnet setup instructions](scripts/testnet/README.md).)
 

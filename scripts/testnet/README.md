@@ -1,5 +1,9 @@
 # How to run a local testnet
 
+> **Note:** the `monerod` half of this setup still works and is what libgrease's node-backed tests want. The
+> `grease-cli` steps do not: that binary was archived out of the workspace along with the v1 p2p stack (sources in
+> `grease-cli.tar.gz` at the repository root). Skip them until a v2 client exists.
+
 These instructions will help you set up a local Monero testnet environment using `monerod` and `monero-wallet-cli`.
 It runs in "regtest" mode, which is a special mode for testing purposes, and which (somewhat confusingly) 
 uses _`Mainnet`_ as the network type - and so all configuration files will need to point to mainnet.
